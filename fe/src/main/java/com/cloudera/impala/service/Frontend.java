@@ -57,6 +57,7 @@ import com.cloudera.impala.analysis.ResetMetadataStmt;
 import com.cloudera.impala.analysis.ShowFunctionsStmt;
 import com.cloudera.impala.analysis.ShowGrantRoleStmt;
 import com.cloudera.impala.analysis.ShowRolesStmt;
+import com.cloudera.impala.analysis.PrintStmt;
 import com.cloudera.impala.analysis.TableName;
 import com.cloudera.impala.authorization.AuthorizationChecker;
 import com.cloudera.impala.authorization.AuthorizationConfig;
@@ -821,6 +822,10 @@ public class Frontend {
           new TColumn("option", Type.STRING.toThrift()),
           new TColumn("value", Type.STRING.toThrift()))));
       result.setSet_query_option_request(analysisResult.getSetStmt().toThrift());
+      return result;
+    } else if (analysisResult.isPrintStmt()) {
+      PrintStmt printStmt = analysisResult.getPrintStmt();
+      createExplainRequest(printStmt.getDataToPrint(), result);
       return result;
     }
 

@@ -159,6 +159,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("partitions", new Integer(SqlParserSymbols.KW_PARTITIONS));
     keywordMap.put("preceding", new Integer(SqlParserSymbols.KW_PRECEDING));
     keywordMap.put("prepare_fn", new Integer(SqlParserSymbols.KW_PREPARE_FN));
+    keywordMap.put("print", new Integer(SqlParserSymbols.KW_PRINT));
     keywordMap.put("produced", new Integer(SqlParserSymbols.KW_PRODUCED));
     keywordMap.put("range", new Integer(SqlParserSymbols.KW_RANGE));
     keywordMap.put("rcfile", new Integer(SqlParserSymbols.KW_RCFILE));

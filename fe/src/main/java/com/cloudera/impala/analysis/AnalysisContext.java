@@ -102,6 +102,10 @@ public class AnalysisContext {
     public boolean isCatalogOp() {
       return isUseStmt() || isViewMetadataStmt() || isDdlStmt();
     }
+    
+    public boolean isPrintStmt() {
+    	return stmt_ instanceof PrintStmt;
+    }
 
     private boolean isDdlStmt() {
       return isCreateTableLikeStmt() || isCreateTableStmt() ||
@@ -254,6 +258,11 @@ public class AnalysisContext {
       Preconditions.checkState(isDescribeStmt());
       return (DescribeStmt) stmt_;
     }
+    
+    public PrintStmt getPrintStmt() {
+      Preconditions.checkState(isPrintStmt());
+      return (PrintStmt) stmt_;	
+    }
 
     public ShowCreateTableStmt getShowCreateTableStmt() {
       Preconditions.checkState(isShowCreateTableStmt());
@@ -297,7 +306,12 @@ public class AnalysisContext {
       }
       analysisResult_.stmt_ = (StatementBase) parser.parse().value;
       if (analysisResult_.stmt_ == null) return;
-
+	  
+      if (analysisResult_.stmt_ instanceof PrintStmt) {
+        LOG.debug("analysis result is a print statement with sql stmt: "
+            + analysisResult_.stmt_.toSql());
+      }
+      
       // For CTAS, we copy the create statement in case we have to create a new CTAS
       // statement after a query rewrite.
       if (analysisResult_.stmt_ instanceof CreateTableAsSelectStmt) {
