@@ -27,6 +27,8 @@ import com.cloudera.impala.thrift.TAccessEvent;
 import com.cloudera.impala.thrift.TQueryCtx;
 import com.google.common.base.Preconditions;
 
+import org.gistic.spatialImpala.analysis.PrintStmt;
+
 /**
  * Wrapper class for parser and analyzer.
  */

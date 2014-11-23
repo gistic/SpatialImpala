@@ -14,6 +14,8 @@
 
 package com.cloudera.impala.analysis;
 
+import org.gistic.spatialImpala.analysis.PrintStmt;
+
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.catalog.ScalarType;
 import com.cloudera.impala.catalog.ArrayType;
