@@ -19,7 +19,7 @@ import com.cloudera.impala.common.AnalysisException;
 /**
  * Base class for all Impala SQL statements.
  */
-abstract class StatementBase implements ParseNode {
+public abstract class StatementBase implements ParseNode {
   // True if this Stmt is the top level of an explain stmt.
   protected boolean isExplain_ = false;
 

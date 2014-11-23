@@ -57,7 +57,6 @@ import com.cloudera.impala.analysis.ResetMetadataStmt;
 import com.cloudera.impala.analysis.ShowFunctionsStmt;
 import com.cloudera.impala.analysis.ShowGrantRoleStmt;
 import com.cloudera.impala.analysis.ShowRolesStmt;
-import com.cloudera.impala.analysis.PrintStmt;
 import com.cloudera.impala.analysis.TableName;
 import com.cloudera.impala.authorization.AuthorizationChecker;
 import com.cloudera.impala.authorization.AuthorizationConfig;
@@ -131,6 +130,8 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+
+import org.gistic.spatialImpala.analysis.PrintStmt;
 
 /**
  * Frontend API for the impalad process.
