@@ -32,6 +32,7 @@ enum TCatalogObjectType {
   TABLE,
   VIEW,
   FUNCTION,
+  GLOBAL_INDEX,
   DATA_SOURCE,
   ROLE,
   PRIVILEGE,
