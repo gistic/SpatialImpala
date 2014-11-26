@@ -2,6 +2,9 @@
 
 package org.gistic.spatialImpala.catalog;
 
+import com.cloudera.impala.thrift.TGlobalIndexRecord;
+import com.cloudera.impala.thrift.TRectangle;
+
 /*
  * Global Index Record class responsible for holding a single
  * global index partition.
@@ -27,5 +30,14 @@ public class GlobalIndexRecord {
 
 	public Rectangle getMBR() {
 		return mbr;
+	}
+	
+	public TGlobalIndexRecord toThrift() {
+		return new TGlobalIndexRecord(this.id, this.tag, this.mbr.toThrift());
+	}
+	
+	public static GlobalIndexRecord fromThrift(TGlobalIndexRecord gIRecord) {
+		TRectangle rect = gIRecord.getMbr();
+		return new GlobalIndexRecord(gIRecord.getId(), gIRecord.getTag(), Rectangle.fromThrift(rect));
 	}
 }

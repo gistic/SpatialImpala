@@ -2,6 +2,8 @@
 
 package org.gistic.spatialImpala.catalog;
 
+import com.cloudera.impala.thrift.TRectangle;
+
 public class Rectangle {
 	private double x1;
 	private double y1;
@@ -17,5 +19,13 @@ public class Rectangle {
 
 	public boolean includesPoint(int x, int y) {
 		return (x >= x1) && (x <= x2) && (y >= y1) && (y <= y2);
+	}
+	
+	public TRectangle toThrift() {
+		return new TRectangle(this.x1, this.y1, this.x2, this.y2);
+	}
+	
+	public static Rectangle fromThrift(TRectangle rect) {
+		return new Rectangle(rect.getX1(), rect.getY1(), rect.getX2(), rect.getY2());
 	}
 }

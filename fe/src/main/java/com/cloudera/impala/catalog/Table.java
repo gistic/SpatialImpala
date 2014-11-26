@@ -35,6 +35,7 @@ import com.cloudera.impala.thrift.TColumn;
 import com.cloudera.impala.thrift.TTable;
 import com.cloudera.impala.thrift.TTableDescriptor;
 import com.cloudera.impala.thrift.TTableStats;
+import com.cloudera.impala.thrift.TGlobalIndex;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
@@ -262,6 +263,8 @@ public abstract class Table implements CatalogObject {
     // Default to READ_WRITE access if the field is not set.
     accessLevel_ = thriftTable.isSetAccess_level() ? thriftTable.getAccess_level() :
         TAccessLevel.READ_WRITE;
+    
+    global_index_ = GlobalIndex.fromThrift(thriftTable.getGlobalIndex());
   }
 
   /**
@@ -300,6 +303,10 @@ public abstract class Table implements CatalogObject {
       table.setTable_stats(new TTableStats());
       table.getTable_stats().setNum_rows(numRows_);
     }
+    
+    if (global_index_ != null)
+      table.setGlobalIndex(global_index_.toThrift());
+    
     return table;
   }
 
