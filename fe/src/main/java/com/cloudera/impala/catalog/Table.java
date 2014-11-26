@@ -124,8 +124,7 @@ public abstract class Table implements CatalogObject {
     
     Map<String, String> params = msTbl.getParameters();
     String globalIndexPath = params.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
-    // TODO: Pass the global index path.
-    return GlobalIndex.loadAndCreateGlobalIndex(tableName);
+    return GlobalIndex.loadAndCreateGlobalIndex(tableName, globalIndexPath);
   }
   
   public void addColumn(Column col) {
