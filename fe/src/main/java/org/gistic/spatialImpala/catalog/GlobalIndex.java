@@ -16,6 +16,7 @@ import java.util.HashMap;
  */
 public class GlobalIndex implements CatalogObject {
 	private static String GLOBAL_INDEX_SUFFIX = "_global_index";
+	public static String GLOBAL_INDEX_TABLE_PARAM = "globalIndex";
 	private HashMap<String, GlobalIndexRecord> globalIndexMap = new HashMap<String, GlobalIndexRecord>();
 	private final String tableName_;
 	private long catalogVersion_ = Catalog.INITIAL_CATALOG_VERSION;

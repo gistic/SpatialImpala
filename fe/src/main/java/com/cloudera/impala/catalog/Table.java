@@ -38,6 +38,8 @@ import com.cloudera.impala.thrift.TTableStats;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
+import org.gistic.spatialImpala.catalog.GlobalIndex;
+
 /**
  * Base class for table metadata.
  *
@@ -60,6 +62,7 @@ public abstract class Table implements CatalogObject {
   protected final Db db_;
   protected final String name_;
   protected final String owner_;
+  protected GlobalIndex global_index_;
   protected TTableDescriptor tableDesc_;
   protected List<FieldSchema> fields_;
   protected TAccessLevel accessLevel_ = TAccessLevel.READ_WRITE;
@@ -93,6 +96,7 @@ public abstract class Table implements CatalogObject {
     owner_ = owner;
     colsByPos_ = Lists.newArrayList();
     colsByName_ = Maps.newHashMap();
+    global_index_ = initializeGlobalIndex(name_, msTable);
     lastDdlTime_ = (msTable_ != null) ?
         CatalogServiceCatalog.getLastDdlTime(msTable_) : -1;
   }
@@ -109,6 +113,20 @@ public abstract class Table implements CatalogObject {
   public abstract void load(Table oldValue, HiveMetaStoreClient client,
       org.apache.hadoop.hive.metastore.api.Table msTbl) throws TableLoadingException;
 
+  public GlobalIndex getGlobalIndexIfAny() {
+    return global_index_;
+  }
+  
+  private GlobalIndex initializeGlobalIndex(String tableName, org.apache.hadoop.hive.metastore.api.Table msTbl) {
+    if (msTbl == null)
+        return null;
+    
+    Map<String, String> params = msTbl.getParameters();
+    String globalIndexPath = params.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
+    // TODO: Pass the global index path.
+    return GlobalIndex.loadAndCreateGlobalIndex(tableName);
+  }
+  
   public void addColumn(Column col) {
     colsByPos_.add(col);
     colsByName_.put(col.getName().toLowerCase(), col);
