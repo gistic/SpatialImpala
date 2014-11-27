@@ -123,7 +123,13 @@ public abstract class Table implements CatalogObject {
         return null;
     
     Map<String, String> params = msTbl.getParameters();
+    if (params == null)
+    	return null;
+    
     String globalIndexPath = params.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
+    if (globalIndexPath == null)
+    	return null;
+    
     return GlobalIndex.loadAndCreateGlobalIndex(tableName, globalIndexPath);
   }
   

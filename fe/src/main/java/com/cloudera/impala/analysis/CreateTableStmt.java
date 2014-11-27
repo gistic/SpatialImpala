@@ -210,10 +210,12 @@ public class CreateTableStmt extends StatementBase {
     
     // If the table is Spatial, ensure that the global index path exists
     // and is valid.
-    String globalIndexPathIfAny = tblProperties_.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
-    if (globalIndexPathIfAny != null)
-    	(new HdfsUri(globalIndexPathIfAny)).analyze(analyzer, Privilege.ALL);
-
+    if (tblProperties_ != null) {
+      String globalIndexPathIfAny = tblProperties_.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
+      if (globalIndexPathIfAny != null)
+        (new HdfsUri(globalIndexPathIfAny)).analyze(analyzer, Privilege.ALL);
+    }
+    
     analyzeRowFormatValue(rowFormat_.getFieldDelimiter());
     analyzeRowFormatValue(rowFormat_.getLineDelimiter());
     analyzeRowFormatValue(rowFormat_.getEscapeChar());
