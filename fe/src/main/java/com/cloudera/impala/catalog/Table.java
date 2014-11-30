@@ -35,11 +35,10 @@ import com.cloudera.impala.thrift.TColumn;
 import com.cloudera.impala.thrift.TTable;
 import com.cloudera.impala.thrift.TTableDescriptor;
 import com.cloudera.impala.thrift.TTableStats;
-import com.cloudera.impala.thrift.TGlobalIndex;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
-import org.gistic.spatialImpala.catalog.GlobalIndex;
+import org.gistic.spatialImpala.catalog.SpatialHdfsTable;
 
 /**
  * Base class for table metadata.
@@ -63,7 +62,6 @@ public abstract class Table implements CatalogObject {
   protected final Db db_;
   protected final String name_;
   protected final String owner_;
-  protected GlobalIndex global_index_;
   protected TTableDescriptor tableDesc_;
   protected List<FieldSchema> fields_;
   protected TAccessLevel accessLevel_ = TAccessLevel.READ_WRITE;
@@ -97,7 +95,6 @@ public abstract class Table implements CatalogObject {
     owner_ = owner;
     colsByPos_ = Lists.newArrayList();
     colsByName_ = Maps.newHashMap();
-    global_index_ = initializeGlobalIndex(name_, msTable);
     lastDdlTime_ = (msTable_ != null) ?
         CatalogServiceCatalog.getLastDdlTime(msTable_) : -1;
   }
@@ -113,25 +110,6 @@ public abstract class Table implements CatalogObject {
    */
   public abstract void load(Table oldValue, HiveMetaStoreClient client,
       org.apache.hadoop.hive.metastore.api.Table msTbl) throws TableLoadingException;
-
-  public GlobalIndex getGlobalIndexIfAny() {
-    return global_index_;
-  }
-  
-  private GlobalIndex initializeGlobalIndex(String tableName, org.apache.hadoop.hive.metastore.api.Table msTbl) {
-    if (msTbl == null)
-        return null;
-    
-    Map<String, String> params = msTbl.getParameters();
-    if (params == null)
-    	return null;
-    
-    String globalIndexPath = params.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
-    if (globalIndexPath == null)
-    	return null;
-    
-    return GlobalIndex.loadAndCreateGlobalIndex(tableName, globalIndexPath);
-  }
   
   public void addColumn(Column col) {
     colsByPos_.add(col);
@@ -219,7 +197,11 @@ public abstract class Table implements CatalogObject {
       // data source.
       table = new DataSourceTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
     } else if (HdfsFileFormat.isHdfsFormatClass(msTbl.getSd().getInputFormat())) {
-      table = new HdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
+    	// Checking if the table is Spatial or not.
+    	if (SpatialHdfsTable.isSpatial(msTbl))
+    		table = new SpatialHdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
+    	else
+    		table = new HdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
     }
     return table;
   }
@@ -268,8 +250,6 @@ public abstract class Table implements CatalogObject {
     // Default to READ_WRITE access if the field is not set.
     accessLevel_ = thriftTable.isSetAccess_level() ? thriftTable.getAccess_level() :
         TAccessLevel.READ_WRITE;
-    
-    global_index_ = GlobalIndex.fromThrift(thriftTable.getGlobalIndex());
   }
 
   /**
@@ -308,10 +288,6 @@ public abstract class Table implements CatalogObject {
       table.setTable_stats(new TTableStats());
       table.getTable_stats().setNum_rows(numRows_);
     }
-    
-    if (global_index_ != null)
-      table.setGlobalIndex(global_index_.toThrift());
-    
     return table;
   }
 
