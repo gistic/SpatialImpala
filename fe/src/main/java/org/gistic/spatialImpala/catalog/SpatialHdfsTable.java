@@ -57,12 +57,14 @@ public class SpatialHdfsTable extends HdfsTable {
 			throws TableLoadingException {
 
 		super.loadFromThrift(thriftTable);
-		global_index_ = GlobalIndex.fromThrift(thriftTable.getGlobalIndex());
+		if (thriftTable.getGlobalIndex() != null)
+			global_index_ = GlobalIndex
+					.fromThrift(thriftTable.getGlobalIndex());
 	}
 
 	public static boolean isSpatial(
 			org.apache.hadoop.hive.metastore.api.Table msTbl) {
-		
+
 		return msTbl != null
 				&& msTbl.getParameters() != null
 				&& msTbl.getParameters().get(

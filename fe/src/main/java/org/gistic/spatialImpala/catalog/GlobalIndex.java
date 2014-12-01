@@ -82,6 +82,7 @@ public class GlobalIndex implements CatalogObject {
 	}
 
 	private static HashMap<String, GlobalIndexRecord> loadGlobalIndex(String globalIndexPath) {
+		LOG.info("Loading global index file.");
 		Path gIPath = new Path(globalIndexPath.trim());
 		gIPath = FileSystemUtil.createFullyQualifiedPath(gIPath);
 		String data = null;
@@ -124,7 +125,7 @@ public class GlobalIndex implements CatalogObject {
 				scanner.close();
 				return null;
 			}
-			
+			LOG.info("Reading Record: [" + id + ", " + separatedRecord[5] + ", " + x1 + ", " + y1 + ", " + x2 + ", " + y2 + "]");
 			GlobalIndexRecord gIRecord = new GlobalIndexRecord(id, separatedRecord[5], new Rectangle(x1, y1, x2, y2));
 			gIMap.put(separatedRecord[5], gIRecord);
 		}
