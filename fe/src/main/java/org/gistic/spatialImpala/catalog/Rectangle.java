@@ -28,4 +28,10 @@ public class Rectangle {
 	public static Rectangle fromThrift(TRectangle rect) {
 		return new Rectangle(rect.getX1(), rect.getY1(), rect.getX2(), rect.getY2());
 	}
+	
+	@Override
+	public String toString() {
+		return "(" + x1 + ", " + y1 + ", "
+				+ x2 + ", " + y2 + ")";
+	}
 }
