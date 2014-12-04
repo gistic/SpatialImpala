@@ -21,6 +21,16 @@ public class Rectangle {
 		return (x >= x1) && (x <= x2) && (y >= y1) && (y <= y2);
 	}
 	
+	public boolean overlaps(Rectangle rect) {
+		if (this.x1 > rect.x2 || this.x2 < rect.x1)
+			return false;
+		
+		if (this.y1 < rect.y2 || this.y2 > rect.y1)
+			return false;
+		
+		return true;
+	}
+	
 	public TRectangle toThrift() {
 		return new TRectangle(this.x1, this.y1, this.x2, this.y2);
 	}

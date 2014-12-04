@@ -48,6 +48,15 @@ public class GlobalIndex implements CatalogObject {
 		}
 		return globalIndexes;
 	}
+	
+	public List<GlobalIndexRecord> getGIsforRectangle(Rectangle rect) {
+		List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
+		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+			if (gIRecord.getMBR().overlaps(rect))
+				globalIndexes.add(gIRecord);
+		}
+		return globalIndexes;
+	} 
 
 	public GlobalIndexRecord getGIRecordforTag(String tag) {
 		return globalIndexMap.get(tag);
