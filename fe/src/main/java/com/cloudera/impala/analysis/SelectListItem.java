@@ -16,7 +16,7 @@ package com.cloudera.impala.analysis;
 
 import com.google.common.base.Preconditions;
 
-class SelectListItem {
+public class SelectListItem {
   private final Expr expr_;
   private String alias_;
 

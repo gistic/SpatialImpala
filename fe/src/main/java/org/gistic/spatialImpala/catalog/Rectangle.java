@@ -39,6 +39,22 @@ public class Rectangle {
 		return new Rectangle(rect.getX1(), rect.getY1(), rect.getX2(), rect.getY2());
 	}
 	
+	public double getX1() {
+		return x1;
+	}
+	
+	public double getY1() {
+		return y1;
+	}
+	
+	public double getX2() {
+		return x2;
+	}
+	
+	public double getY2() {
+		return y2;
+	}
+	
 	@Override
 	public String toString() {
 		return "(" + x1 + ", " + y1 + ", "

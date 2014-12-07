@@ -65,7 +65,7 @@ public class SelectStmt extends QueryStmt {
   // directly
   private ExprSubstitutionMap baseTblSmap_ = new ExprSubstitutionMap();
 
-  SelectStmt(SelectList selectList,
+  public SelectStmt(SelectList selectList,
              List<TableRef> tableRefList,
              Expr wherePredicate, ArrayList<Expr> groupingExprs,
              Expr havingPredicate, ArrayList<OrderByElement> orderByElements,
