@@ -52,8 +52,15 @@ public class GlobalIndex implements CatalogObject {
 	public List<GlobalIndexRecord> getGIsforRectangle(Rectangle rect) {
 		List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
 		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-			if (gIRecord.getMBR().overlaps(rect))
+			if (gIRecord.getMBR().overlaps(rect)) {
+				LOG.info("GI record: " + gIRecord.getMBR()
+						+ " overlaps with: " + rect);
 				globalIndexes.add(gIRecord);
+			}
+			else {
+				LOG.info("GI record: " + gIRecord.getMBR()
+						+ " does not overlap with: " + rect);
+			}
 		}
 		return globalIndexes;
 	} 

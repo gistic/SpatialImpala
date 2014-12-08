@@ -27,6 +27,8 @@ import com.cloudera.impala.thrift.TAccessEvent;
 import com.cloudera.impala.thrift.TQueryCtx;
 import com.google.common.base.Preconditions;
 
+import org.gistic.spatialImpala.analysis.*;
+
 /**
  * Wrapper class for parser and analyzer.
  */
@@ -54,7 +56,10 @@ public class AnalysisContext {
     public boolean isAlterTableStmt() { return stmt_ instanceof AlterTableStmt; }
     public boolean isAlterViewStmt() { return stmt_ instanceof AlterViewStmt; }
     public boolean isComputeStatsStmt() { return stmt_ instanceof ComputeStatsStmt; }
-    public boolean isQueryStmt() { return stmt_ instanceof QueryStmt; }
+    public boolean isQueryStmt() {
+      return (stmt_ instanceof QueryStmt
+        || stmt_ instanceof SpatialPointInclusionStmt);
+    }
     public boolean isInsertStmt() { return stmt_ instanceof InsertStmt; }
     public boolean isDropDbStmt() { return stmt_ instanceof DropDbStmt; }
     public boolean isDropTableOrViewStmt() {
@@ -203,7 +208,12 @@ public class AnalysisContext {
 
     public QueryStmt getQueryStmt() {
       Preconditions.checkState(isQueryStmt());
-      return (QueryStmt) stmt_;
+      if (stmt_ instanceof QueryStmt)
+    	  return (QueryStmt) stmt_;
+      else if (stmt_ instanceof SpatialPointInclusionStmt)
+    	  return ((SpatialPointInclusionStmt) stmt_).getSelectStmtIfAny();
+      else
+    	  return null;
     }
 
     public InsertStmt getInsertStmt() {

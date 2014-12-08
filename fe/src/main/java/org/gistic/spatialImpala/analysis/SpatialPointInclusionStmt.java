@@ -132,22 +132,22 @@ public class SpatialPointInclusionStmt extends StatementBase {
 
 		wherePredicate = new CompoundPredicate(CompoundPredicate.Operator.AND,
 				wherePredicate, new BinaryPredicate(
-						BinaryPredicate.Operator.LE, xSlotRef,
+						BinaryPredicate.Operator.GE, xSlotRef,
 						new NumericLiteral(new BigDecimal(rect_.getX1()))));
 		
 		wherePredicate = new CompoundPredicate(CompoundPredicate.Operator.AND,
 				wherePredicate, new BinaryPredicate(
-						BinaryPredicate.Operator.GE, xSlotRef,
+						BinaryPredicate.Operator.LE, xSlotRef,
 						new NumericLiteral(new BigDecimal(rect_.getX2()))));
 		
 		wherePredicate = new CompoundPredicate(CompoundPredicate.Operator.AND,
 				wherePredicate, new BinaryPredicate(
-						BinaryPredicate.Operator.LE, ySlotRef,
+						BinaryPredicate.Operator.GE, ySlotRef,
 						new NumericLiteral(new BigDecimal(rect_.getY1()))));
 		
 		wherePredicate = new CompoundPredicate(CompoundPredicate.Operator.AND,
 				wherePredicate, new BinaryPredicate(
-						BinaryPredicate.Operator.GE, ySlotRef,
+						BinaryPredicate.Operator.LE, ySlotRef,
 						new NumericLiteral(new BigDecimal(rect_.getY2()))));
 
 		return wherePredicate;
