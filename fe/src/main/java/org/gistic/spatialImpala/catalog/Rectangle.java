@@ -20,6 +20,18 @@ public class Rectangle {
 	public boolean includesPoint(int x, int y) {
 		return (x >= x1) && (x <= x2) && (y >= y1) && (y <= y2);
 	}
+
+  public double getMaxDist(int x, int y) {
+    return Math.max(Math.max(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.max(dist(x,y,x1,y2),dist(x,y,x2,y2)));
+  }
+
+  public double getMinDist(int x, int y) {
+     return Math.min(Math.min(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.min(dist(x,y,x1,y2),dist(x,y,x2,y2)));
+  }
+
+  private double dist(int x1, int y1, int X2, int y2) {
+    return Math.sqrt( (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) );
+  }
 	
 	public boolean overlaps(Rectangle rect) {
 		if (this.x1 > rect.x2 || this.x2 < rect.x1)

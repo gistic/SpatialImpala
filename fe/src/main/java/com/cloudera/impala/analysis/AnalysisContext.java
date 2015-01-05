@@ -58,7 +58,8 @@ public class AnalysisContext {
     public boolean isComputeStatsStmt() { return stmt_ instanceof ComputeStatsStmt; }
     public boolean isQueryStmt() {
       return (stmt_ instanceof QueryStmt
-        || stmt_ instanceof SpatialPointInclusionStmt);
+        || stmt_ instanceof SpatialPointInclusionStmt
+        || stmt_ instanceof SpatialKnnStmt);
     }
     public boolean isInsertStmt() { return stmt_ instanceof InsertStmt; }
     public boolean isDropDbStmt() { return stmt_ instanceof DropDbStmt; }
@@ -212,6 +213,8 @@ public class AnalysisContext {
     	  return (QueryStmt) stmt_;
       else if (stmt_ instanceof SpatialPointInclusionStmt)
     	  return ((SpatialPointInclusionStmt) stmt_).getSelectStmtIfAny();
+      else if (stmt_ instanceof SpatialKnnStmt)
+        return ((SpatialKnnStmt) stmt_).getSelectStmtIfAny();
       else
     	  return null;
     }
