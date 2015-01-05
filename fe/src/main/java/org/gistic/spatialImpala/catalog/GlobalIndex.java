@@ -57,7 +57,7 @@ public class GlobalIndex implements CatalogObject {
     }
     List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
     for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-      if (gIRecord.getMBR().getMinDist(p.getX(), p.getY()))
+      if (gIRecord.getMBR().getMinDist(p.getX(), p.getY()) < maxdist )
         globalIndexes.add(gIRecord);
     }
     return globalIndexes;
