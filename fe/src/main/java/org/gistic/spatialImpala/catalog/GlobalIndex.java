@@ -48,7 +48,21 @@ public class GlobalIndex implements CatalogObject {
 		}
 		return globalIndexes;
 	}
-	
+
+  public List<GlobalIndexRecord> getGIsforKnn(Point pt) {
+    double maxdist = 0;
+    for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+      if (gIRecord.getMBR().includesPoint(pt.getX(), pt.getY()))
+        maxdist = Math.max(maxdist, gIRecord.getMBR().getMaxDist(pt.getX(), pt.getY()));
+    }
+    List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
+    for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+      if (gIRecord.getMBR().getMinDist(pt.getX(), pt.getY()) < maxdist )
+        globalIndexes.add(gIRecord);
+    }
+    return globalIndexes;
+  }
+
 	public List<GlobalIndexRecord> getGIsforRectangle(Rectangle rect) {
 		List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
 		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {

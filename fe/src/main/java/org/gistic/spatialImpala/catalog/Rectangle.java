@@ -17,9 +17,21 @@ public class Rectangle {
 		this.y2 = y2;
 	}
 
-	public boolean includesPoint(int x, int y) {
+	public boolean includesPoint(double x, double y) {
 		return (x >= x1) && (x <= x2) && (y >= y1) && (y <= y2);
 	}
+
+  public double getMaxDist(double x, double y) {
+    return Math.max(Math.max(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.max(dist(x,y,x1,y2),dist(x,y,x2,y2)));
+  }
+
+  public double getMinDist(double x, double y) {
+     return Math.min(Math.min(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.min(dist(x,y,x1,y2),dist(x,y,x2,y2)));
+  }
+
+  private double dist(double x1, double y1, double X2, double y2) {
+    return Math.sqrt( (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) );
+  }
 	
 	public boolean overlaps(Rectangle rect) {
 		if (this.x1 > rect.x2 || this.x2 < rect.x1)

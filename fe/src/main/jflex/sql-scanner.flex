@@ -131,6 +131,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("invalidate", new Integer(SqlParserSymbols.KW_INVALIDATE));
     keywordMap.put("is", new Integer(SqlParserSymbols.KW_IS));
     keywordMap.put("join", new Integer(SqlParserSymbols.KW_JOIN));
+    keywordMap.put("knn", new Integer(SqlParserSymbols.KW_KNN));
     keywordMap.put("last", new Integer(SqlParserSymbols.KW_LAST));
     keywordMap.put("left", new Integer(SqlParserSymbols.KW_LEFT));
     keywordMap.put("like", new Integer(SqlParserSymbols.KW_LIKE));
@@ -158,6 +159,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("partition", new Integer(SqlParserSymbols.KW_PARTITION));
     keywordMap.put("partitioned", new Integer(SqlParserSymbols.KW_PARTITIONED));
     keywordMap.put("partitions", new Integer(SqlParserSymbols.KW_PARTITIONS));
+    keywordMap.put("point", new Integer(SqlParserSymbols.KW_POINT));
     keywordMap.put("points", new Integer(SqlParserSymbols.KW_POINTS));    
     keywordMap.put("preceding", new Integer(SqlParserSymbols.KW_PRECEDING));
     keywordMap.put("prepare_fn", new Integer(SqlParserSymbols.KW_PREPARE_FN));
@@ -216,6 +218,8 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("when", new Integer(SqlParserSymbols.KW_WHEN));
     keywordMap.put("where", new Integer(SqlParserSymbols.KW_WHERE));
     keywordMap.put("with", new Integer(SqlParserSymbols.KW_WITH));
+    keywordMap.put("with_dist", new Integer(SqlParserSymbols.KW_WITHDIST));
+    keywordMap.put("with_k", new Integer(SqlParserSymbols.KW_WITHK));
   }
 
   // map from token id to token description

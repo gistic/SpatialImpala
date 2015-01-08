@@ -14,8 +14,10 @@
 
 package com.cloudera.impala.analysis;
 
+import org.gistic.spatialImpala.catalog.Point;
 import org.gistic.spatialImpala.catalog.Rectangle;
 import org.gistic.spatialImpala.analysis.SpatialPointInclusionStmt;
+import org.gistic.spatialImpala.analysis.SpatialKnnStmt;
 
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.catalog.ScalarType;
@@ -242,10 +244,10 @@ terminal
   KW_FIRST, KW_FLOAT, KW_FOLLOWING, KW_FOR, KW_FORMAT, KW_FORMATTED, KW_FROM, KW_FULL,
   KW_FUNCTION, KW_FUNCTIONS, KW_GRANT, KW_GROUP, KW_HAVING, KW_IF, KW_IN, KW_INIT_FN,
   KW_INNER, KW_INPATH, KW_INSERT, KW_INT, KW_INTERMEDIATE, KW_INTERVAL, KW_INTO,
-  KW_INVALIDATE, KW_IS, KW_JOIN, KW_LAST, KW_LEFT, KW_LIKE, KW_LIMIT, KW_LINES, KW_LOAD,
+  KW_INVALIDATE, KW_IS, KW_JOIN, KW_KNN, KW_LAST, KW_LEFT, KW_LIKE, KW_LIMIT, KW_LINES, KW_LOAD,
   KW_LOCATION, KW_MAP, KW_MERGE_FN, KW_METADATA, KW_NOT, KW_NULL, KW_NULLS, KW_OFFSET,
   KW_ON, KW_OR, KW_ORDER, KW_OUTER, KW_OVER, KW_OVERLAPS, KW_OVERWRITE, KW_PARQUET, KW_PARQUETFILE,
-  KW_PARTITION, KW_PARTITIONED, KW_PARTITIONS, KW_POINTS, KW_PRECEDING,
+  KW_PARTITION, KW_PARTITIONED, KW_PARTITIONS, KW_POINT, KW_POINTS, KW_PRECEDING,
   KW_PREPARE_FN, KW_PRODUCED, KW_RANGE, KW_RCFILE, KW_RECTANGLE, KW_REFRESH, KW_REGEXP, KW_RENAME,
   KW_REPLACE, KW_RETURNS, KW_REVOKE, KW_RIGHT, KW_RLIKE, KW_ROLE, KW_ROLES, KW_ROW,
   KW_ROWS, KW_SCHEMA, KW_SCHEMAS, KW_SELECT, KW_SEMI, KW_SEQUENCEFILE, KW_SERDEPROPERTIES,
@@ -254,7 +256,7 @@ terminal
   KW_TEXTFILE, KW_THEN,
   KW_TIMESTAMP, KW_TINYINT, KW_STATS, KW_TO, KW_TRUE, KW_UNBOUNDED, KW_UNCACHED,
   KW_UNION, KW_UPDATE_FN, KW_USE, KW_USING,
-  KW_VALUES, KW_VARCHAR, KW_VIEW, KW_WHEN, KW_WHERE, KW_WITH;
+  KW_VALUES, KW_VARCHAR, KW_VIEW, KW_WHEN, KW_WHERE, KW_WITH, KW_WITHDIST, KW_WITHK;
 
 terminal COLON, COMMA, DOT, DOTDOTDOT, STAR, LPAREN, RPAREN, LBRACKET, RBRACKET,
   DIVIDE, MOD, ADD, SUBTRACT;
@@ -445,6 +447,9 @@ nonterminal CreateFunctionStmtBase.OptArg create_function_arg_key;
 nonterminal SpatialPointInclusionStmt spatial_point_inclusion_stmt;
 nonterminal Rectangle rectangle; 
 nonterminal NumericLiteral rectangle_arg;
+nonterminal SpatialKnnStmt spatial_knn_stmt;
+nonterminal Point point;
+nonterminal NumericLiteral point_arg;
 
 precedence left KW_OR;
 precedence left KW_AND;
@@ -559,6 +564,8 @@ stmt ::=
   {: RESULT = revoke_privilege; :}
   | spatial_point_inclusion_stmt:spatial_point_inclusion
   {: RESULT = spatial_point_inclusion; :}
+  | spatial_knn_stmt:spatial_knn
+  {: RESULT = spatial_knn; :}
   ;
 
 spatial_point_inclusion_stmt ::=
@@ -566,11 +573,21 @@ spatial_point_inclusion_stmt ::=
   {: RESULT = new SpatialPointInclusionStmt(tbl, rect); :}
   ;
   
+spatial_knn_stmt ::=
+  KW_LOAD KW_POINTS KW_FROM KW_TABLE table_name:tbl KW_KNN point:p KW_WITHK expr:k KW_WITHDIST order_by_elements:dist
+  {: RESULT = new SpatialKnnStmt(tbl,p,new LimitElement(k, null), dist); :}
+  ;
+
 rectangle ::=
   KW_RECTANGLE LPAREN rectangle_arg:x1 COMMA rectangle_arg:y1 COMMA
   rectangle_arg:x2 COMMA rectangle_arg:y2 RPAREN
   {: RESULT = new Rectangle(x1.getDoubleValue(), y1.getDoubleValue(),
    x2.getDoubleValue(), y2.getDoubleValue()); :}
+  ;
+
+point ::=
+  KW_POINT LPAREN point_arg:x COMMA point_arg:y RPAREN
+  {: RESULT = new Point(x.getDoubleValue(), y.getDoubleValue()); :}
   ;
 
 rectangle_arg ::=
@@ -580,6 +597,13 @@ rectangle_arg ::=
   {: RESULT = new NumericLiteral(l); :}
   ;
   
+point_arg ::=
+  INTEGER_LITERAL:l
+  {: RESULT = new NumericLiteral(l); :}
+  | DECIMAL_LITERAL:l
+  {: RESULT = new NumericLiteral(l); :}
+  ;
+
 load_stmt ::=
   KW_LOAD KW_DATA KW_INPATH STRING_LITERAL:path overwrite_val:overwrite KW_INTO KW_TABLE
   table_name:table opt_partition_spec:partition

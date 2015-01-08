@@ -266,6 +266,12 @@ struct TDataSourceTable {
   2: required string init_string
 }
 
+// Represents a point
+struct TPoint {
+  1: required double x
+  2: required double y
+}
+
 // Represents a rectangle used in a global index record for spatial tables.
 struct TRectangle {
   1: required double x1
