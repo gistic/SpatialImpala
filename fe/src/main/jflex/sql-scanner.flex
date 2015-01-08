@@ -218,6 +218,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("when", new Integer(SqlParserSymbols.KW_WHEN));
     keywordMap.put("where", new Integer(SqlParserSymbols.KW_WHERE));
     keywordMap.put("with", new Integer(SqlParserSymbols.KW_WITH));
+    keywordMap.put("with_dist", new Integer(SqlParserSymbols.KW_WITHDIST));
     keywordMap.put("with_k", new Integer(SqlParserSymbols.KW_WITHK));
   }
 

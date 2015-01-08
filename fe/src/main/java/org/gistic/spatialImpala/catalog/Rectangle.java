@@ -17,19 +17,19 @@ public class Rectangle {
 		this.y2 = y2;
 	}
 
-	public boolean includesPoint(int x, int y) {
+	public boolean includesPoint(double x, double y) {
 		return (x >= x1) && (x <= x2) && (y >= y1) && (y <= y2);
 	}
 
-  public double getMaxDist(int x, int y) {
+  public double getMaxDist(double x, double y) {
     return Math.max(Math.max(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.max(dist(x,y,x1,y2),dist(x,y,x2,y2)));
   }
 
-  public double getMinDist(int x, int y) {
+  public double getMinDist(double x, double y) {
      return Math.min(Math.min(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.min(dist(x,y,x1,y2),dist(x,y,x2,y2)));
   }
 
-  private double dist(int x1, int y1, int X2, int y2) {
+  private double dist(double x1, double y1, double X2, double y2) {
     return Math.sqrt( (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) );
   }
 	

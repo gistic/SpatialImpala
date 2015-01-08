@@ -49,15 +49,15 @@ public class GlobalIndex implements CatalogObject {
 		return globalIndexes;
 	}
 
-  public List<GlobalIndexRecord> getGIsforKnn(Point p) {
-    int maxdist = 0;
+  public List<GlobalIndexRecord> getGIsforKnn(Point pt) {
+    double maxdist = 0;
     for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-      if (gIRecord.getMBR().includesPoint(p.getX(), p.getY()))
-        maxdist = Math.max(maxdist, gIRecord.getMaxDist(p.getX(), p.getY()));
+      if (gIRecord.getMBR().includesPoint(pt.getX(), pt.getY()))
+        maxdist = Math.max(maxdist, gIRecord.getMBR().getMaxDist(pt.getX(), pt.getY()));
     }
     List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
     for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-      if (gIRecord.getMBR().getMinDist(p.getX(), p.getY()) < maxdist )
+      if (gIRecord.getMBR().getMinDist(pt.getX(), pt.getY()) < maxdist )
         globalIndexes.add(gIRecord);
     }
     return globalIndexes;

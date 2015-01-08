@@ -14,18 +14,18 @@ public class Point {
 	}
 	
 	public TPoint toThrift() {
-		return new TRectangle(this.x, this.y);
+		return new TPoint(this.x, this.y);
 	}
 	
 	public static Point fromThrift(TPoint p) {
 		return new Point(p.getX(), p.getY());
 	}
 	
-	public double getX1() {
+	public double getX() {
 		return x;
 	}
 	
-	public double getY1() {
+	public double getY() {
 		return y;
 	}
 	

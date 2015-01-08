@@ -22,6 +22,8 @@ import com.cloudera.impala.analysis.BinaryPredicate;
 import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.NumericLiteral;
+import com.cloudera.impala.analysis.LimitElement;
+import com.cloudera.impala.analysis.OrderByElement;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -37,15 +39,17 @@ public class SpatialKnnStmt extends StatementBase {
 	private static final String Y = "y";
 	private TableName tableName_;
 	private final Point p_;
-  private final int k_;
+  private final LimitElement k_;
+  private final ArrayList<OrderByElement> dist_;
 
 	// Initialized during analysis.
 	private SelectStmt selectStmt_;
 
-	public SpatialKnnStmt(TableName tblName, Point p, int k) {
+	public SpatialKnnStmt(TableName tblName, Point p,  LimitElement k, ArrayList<OrderByElement> dist) {
 		this.tableName_ = tblName;
 		this.p_ = p;
     this.k_ = k;
+    this.dist_=dist;
 		this.selectStmt_ = null;
 	}
 
@@ -89,7 +93,7 @@ public class SpatialKnnStmt extends StatementBase {
 		items.add(new SelectListItem(new SlotRef(tableName_, Y), null));
 
 		selectStmt_ = new SelectStmt(new SelectList(items), tableRefs,
-				createWherePredicate(globalIndexes), null, null, null, new LimitElement(new NumericLiteral(BigDecimal.valueOf(this.k_)), null));
+				createWherePredicate(globalIndexes), null, null, dist_, k_);
 
 		selectStmt_.analyze(analyzer);
 	}

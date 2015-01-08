@@ -14,7 +14,7 @@
 
 package com.cloudera.impala.analysis;
 
-import org.gistoc.spatialImpala.catalog.Point;
+import org.gistic.spatialImpala.catalog.Point;
 import org.gistic.spatialImpala.catalog.Rectangle;
 import org.gistic.spatialImpala.analysis.SpatialPointInclusionStmt;
 import org.gistic.spatialImpala.analysis.SpatialKnnStmt;
@@ -256,7 +256,7 @@ terminal
   KW_TEXTFILE, KW_THEN,
   KW_TIMESTAMP, KW_TINYINT, KW_STATS, KW_TO, KW_TRUE, KW_UNBOUNDED, KW_UNCACHED,
   KW_UNION, KW_UPDATE_FN, KW_USE, KW_USING,
-  KW_VALUES, KW_VARCHAR, KW_VIEW, KW_WHEN, KW_WHERE, KW_WITH, KW_WITHK;
+  KW_VALUES, KW_VARCHAR, KW_VIEW, KW_WHEN, KW_WHERE, KW_WITH, KW_WITHDIST, KW_WITHK;
 
 terminal COLON, COMMA, DOT, DOTDOTDOT, STAR, LPAREN, RPAREN, LBRACKET, RBRACKET,
   DIVIDE, MOD, ADD, SUBTRACT;
@@ -574,8 +574,8 @@ spatial_point_inclusion_stmt ::=
   ;
   
 spatial_knn_stmt ::=
-  LW_LOAD KW_POINTS KW_FROM KW_TABLE table_name:tbl KW_KNN point:p KW_WITHK expr:k
-  {: RESULT = new SpatialKnnStmt(tbl,p,k) :}
+  KW_LOAD KW_POINTS KW_FROM KW_TABLE table_name:tbl KW_KNN point:p KW_WITHK expr:k KW_WITHDIST order_by_elements:dist
+  {: RESULT = new SpatialKnnStmt(tbl,p,new LimitElement(k, null), dist); :}
   ;
 
 rectangle ::=
@@ -587,7 +587,7 @@ rectangle ::=
 
 point ::=
   KW_POINT LPAREN point_arg:x COMMA point_arg:y RPAREN
-  {: RESULT = new Point(X.getDoubleValue(), y1.getDoubleValue()); :}
+  {: RESULT = new Point(x.getDoubleValue(), y.getDoubleValue()); :}
   ;
 
 rectangle_arg ::=
