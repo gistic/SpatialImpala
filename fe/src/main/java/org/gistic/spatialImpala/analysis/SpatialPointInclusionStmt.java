@@ -104,7 +104,7 @@ public class SpatialPointInclusionStmt extends StatementBase {
 
 	private Expr createWherePredicate(List<GlobalIndexRecord> globalIndexes) {
 		SlotRef globalIndexSlotRef = new SlotRef(tableName_, TAG);
-		if (globalIndexes == null || globalIndexes.size() == 0) {
+		if (globalIndexes == null) {
 			return new IsNullPredicate(globalIndexSlotRef, false);
 		}
 
