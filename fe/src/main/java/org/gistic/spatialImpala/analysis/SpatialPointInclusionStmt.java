@@ -113,10 +113,9 @@ public class SpatialPointInclusionStmt extends StatementBase {
 
 		// Create Global Index predicate.
 		wherePredicate = new BinaryPredicate(BinaryPredicate.Operator.EQ,
-				globalIndexSlotRef, new StringLiteral(globalIndexes.get(0)
-						.getTag()));
+				globalIndexSlotRef, new StringLiteral("0"));
 
-		for (int i = 1; i < globalIndexes.size(); i++) {
+		for (int i = 0; i < globalIndexes.size(); i++) {
 			Expr globalIndexPredicate = new BinaryPredicate(
 					BinaryPredicate.Operator.EQ, globalIndexSlotRef,
 					new StringLiteral(globalIndexes.get(i).getTag()));
