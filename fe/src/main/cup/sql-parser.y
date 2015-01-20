@@ -18,6 +18,7 @@ import org.gistic.spatialImpala.catalog.Point;
 import org.gistic.spatialImpala.catalog.Rectangle;
 import org.gistic.spatialImpala.analysis.SpatialPointInclusionStmt;
 import org.gistic.spatialImpala.analysis.SpatialKnnStmt;
+import org.gistic.spatialImpala.analysis.SpatialJoinStmt;
 
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.catalog.ScalarType;
@@ -450,6 +451,7 @@ nonterminal NumericLiteral rectangle_arg;
 nonterminal SpatialKnnStmt spatial_knn_stmt;
 nonterminal Point point;
 nonterminal NumericLiteral point_arg;
+nonterminal SpatialJoinStmt spatial_join_stmt;
 
 precedence left KW_OR;
 precedence left KW_AND;
@@ -566,6 +568,8 @@ stmt ::=
   {: RESULT = spatial_point_inclusion; :}
   | spatial_knn_stmt:spatial_knn
   {: RESULT = spatial_knn; :}
+  | spatial_join_stmt:spatial_join
+  {: RESULT = spatial_join; :}
   ;
 
 spatial_point_inclusion_stmt ::=
@@ -577,6 +581,11 @@ spatial_knn_stmt ::=
   KW_LOAD KW_POINTS KW_FROM KW_TABLE table_name:tbl KW_KNN point:p KW_WITHK expr:k KW_WITHDIST order_by_elements:dist
   {: RESULT = new SpatialKnnStmt(tbl,p,new LimitElement(k, null), dist); :}
   ;
+
+spatial_join_stmt ::=
+ KW_JOIN table_name:tbl1 KW_WITH table_name:tbl2
+ {: RESULT = new SpatialJoinStmt(tbl1,tbl2); :}
+ ;
 
 rectangle ::=
   KW_RECTANGLE LPAREN rectangle_arg:x1 COMMA rectangle_arg:y1 COMMA
