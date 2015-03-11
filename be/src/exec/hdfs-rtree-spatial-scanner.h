@@ -8,6 +8,13 @@
 #include "exec/delimited-text-parser.h"
 #include "runtime/string-buffer.h"
 
+// The size of the header of the r-tree (4 bytes for the tree size +
+// 4 bytes for the height of the r-tree + 4 bytes for the degree of
+// the tree)
+
+#define HEADER_SIZE 12
+#define NODE_SIZE 36
+
 using namespace impala;
 
 namespace spatialimpala {
@@ -72,6 +79,10 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
   // beyond the end of the scan range and this function should stop after
   // finding one tuple.
   Status ProcessRange(int* num_tuples, bool past_scan_range);
+
+  // Skip the header of the r-tree and advance the buffer pointer to the 
+  // beginning of the data
+  int SkipHeader(char* offset_array, int prev_read_size_offset);
 
   // Reads past the end of the scan range for the next tuple end.
   Status FinishScanRange();

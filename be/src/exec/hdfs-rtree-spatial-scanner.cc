@@ -445,7 +445,7 @@ Status HdfsRTreeSpatialScanner::FillByteBuffer(bool* eosr, int num_bytes) {
 }
 
 Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
-  *tuple_found = true;
+  /**tuple_found = true;
   if (stream_->scan_range()->offset() != 0) {
     *tuple_found = false;
     // Offset may not point to tuple boundary, skip ahead to the first full tuple
@@ -469,8 +469,80 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
       break;
     }
   }
+  */
+  
+  *tuple_found = false;
+  char offset_array[HEADER_SIZE];
+  int read_size_offset = 0;
+  int first_tuple_offset = -1;
+  while (true) {
+
+    // Get the next buffer.
+    bool eosr = false;
+    RETURN_IF_ERROR(FillByteBuffer(&eosr));
+    
+    // For storing the previous read size offset while filling offset_array.
+    int prev_read_size_offset = 0;
+    
+    // If offset equals -1, fill offset_array.
+    if (first_tuple_offset == -1) {
+      const char* buffer_start = byte_buffer_ptr_;
+      int i = 0;
+      while (read_size_offset < HEADER_SIZE && i < byte_buffer_read_size_) {
+        offset_array[read_size_offset] = *buffer_start;
+        ++read_size_offset;
+        ++buffer_start;
+        ++i;
+      }
+
+      if (i == byte_buffer_read_size_)
+        prev_read_size_offset += byte_buffer_read_size_;
+    }
+
+    // offset_array is filled
+    if (read_size_offset >= HEADER_SIZE) {
+      // Calculate header offset, if it isn't set.
+      if (first_tuple_offset == -1)
+        first_tuple_offset = SkipHeader(offset_array, prev_read_size_offset);
+      
+      // If the offset is within the current buffer, advance the buffer pointer.
+      if (first_tuple_offset < byte_buffer_read_size_) {
+        byte_buffer_ptr_ += first_tuple_offset;
+        *tuple_found = true;
+        break;
+      }
+      // Offset is larger than the current buffer size.
+      else
+        first_tuple_offset -= byte_buffer_read_size_;
+    }
+  }
   DCHECK(delimited_text_parser_->AtTupleStart());
   return Status::OK;
+}
+
+int HdfsRTreeSpatialScanner::SkipHeader(char* offset_array, int prev_read_size_offset) {
+  // Tree size is the first 4 bytes and not needed in offset calculation.
+  // Height of the rtree is the second 4 bytes.
+  int height = (int) *(offset_array + 4);
+  height = (height << 8) | (int) *(offset_array + 5);
+  height = (height << 8) | (int) *(offset_array + 6);
+  height = (height << 8) | (int) *(offset_array + 7);
+
+  // Degree of each node in the rtree.
+  int degree = (int) *(offset_array + 8);
+  degree = (degree << 8) | (int) *(offset_array + 9);
+  degree = (degree << 8) | (int) *(offset_array + 10);
+  degree = (degree << 8) | (int) *(offset_array + 11);
+
+  // Number of nodes in the rtree.
+  int node_count = (int) ((pow(degree, height) - 1) / (degree - 1));
+  
+  // Calculating number of bytes in the previous read buffers.
+  int offset = HEADER_SIZE - prev_read_size_offset;
+  offset += 4; // Skipping 4 bytes (elemen_count).
+  // Skipping the structure of the rtree.
+  offset += node_count * NODE_SIZE;
+  return offset;
 }
 
 // Codegen for materializing parsed data into tuples.  The function WriteCompleteTuple is
