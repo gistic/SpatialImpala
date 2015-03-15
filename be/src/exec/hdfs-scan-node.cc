@@ -31,6 +31,7 @@
 #include "codegen/llvm-codegen.h"
 #include "common/logging.h"
 #include "common/object-pool.h"
+#include "exec/hdfs-rtree-spatial-scanner.h"
 #include "exprs/expr-context.h"
 #include "runtime/descriptors.h"
 #include "runtime/hdfs-fs-cache.h"
@@ -58,6 +59,7 @@ using namespace boost;
 using namespace impala;
 using namespace llvm;
 using namespace std;
+using namespace spatialimpala;
 
 const string HdfsScanNode::HDFS_SPLIT_STATS_DESC =
     "Hdfs split stats (<volume id>:<# splits>/<split lengths>)";
@@ -115,6 +117,8 @@ Status HdfsScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos
     // Issue initial ranges for all file types.
     RETURN_IF_ERROR(HdfsTextScanner::IssueInitialRanges(this,
         per_type_files_[THdfsFileFormat::TEXT]));
+    RETURN_IF_ERROR(HdfsRTreeSpatialScanner::IssueInitialRanges(this,
+        per_type_files_[THdfsFileFormat::RTREE]));
     RETURN_IF_ERROR(BaseSequenceScanner::IssueInitialRanges(this,
         per_type_files_[THdfsFileFormat::SEQUENCE_FILE]));
     RETURN_IF_ERROR(BaseSequenceScanner::IssueInitialRanges(this,
@@ -237,6 +241,9 @@ HdfsScanner* HdfsScanNode::CreateAndPrepareScanner(HdfsPartitionDescriptor* part
       } else {
         scanner = new HdfsTextScanner(this, runtime_state_);
       }
+      break;
+    case THdfsFileFormat::RTREE:
+      scanner = new HdfsRTreeSpatialScanner(this, runtime_state_);
       break;
     case THdfsFileFormat::SEQUENCE_FILE:
       scanner = new HdfsSequenceScanner(this, runtime_state_);
@@ -487,6 +494,9 @@ Status HdfsScanNode::Prepare(RuntimeState* state) {
     switch (format) {
       case THdfsFileFormat::TEXT:
         fn = HdfsTextScanner::Codegen(this, conjunct_ctxs_);
+        break;
+      case THdfsFileFormat::RTREE:
+        fn = HdfsRTreeSpatialScanner::Codegen(this, conjunct_ctxs_);
         break;
       case THdfsFileFormat::SEQUENCE_FILE:
         fn = HdfsSequenceScanner::Codegen(this, conjunct_ctxs_);

@@ -8,12 +8,17 @@
 #include "exec/delimited-text-parser.h"
 #include "runtime/string-buffer.h"
 
+// The size of the header of the block file (8 bytes for the rtree marker +
+// the size of the r-tree header:
 // The size of the header of the r-tree (4 bytes for the tree size +
 // 4 bytes for the height of the r-tree + 4 bytes for the degree of
-// the tree)
+// the tree))
 
-#define HEADER_SIZE 12
+#define HEADER_SIZE 20
 #define NODE_SIZE 36
+#define HEIGHT_POS 12
+#define DEGREE_POS 16
+#define RTREE_MARKER -0x00012345678910L
 
 using namespace impala;
 

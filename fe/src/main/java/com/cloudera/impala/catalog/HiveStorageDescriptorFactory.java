@@ -38,6 +38,7 @@ public class HiveStorageDescriptorFactory {
       case RC_FILE: sd = createRcFileSd(); break;
       case SEQUENCE_FILE: sd = createSequenceFileSd(); break;
       case TEXT: sd = createTextSd(); break;
+      case RTREE: sd = createRTreeSd(); break;
       case AVRO: sd = createAvroSd(); break;
       default: throw new UnsupportedOperationException(
           "Unsupported file format: " + fileFormat);
@@ -92,6 +93,15 @@ public class HiveStorageDescriptorFactory {
     sd.setOutputFormat(org.apache.hadoop.hive.ql.io.RCFileOutputFormat.class.getName());
     sd.getSerdeInfo().setSerializationLib(
         org.apache.hadoop.hive.serde2.columnar.ColumnarSerDe.class.getName());
+    return sd;
+  }
+
+  private static StorageDescriptor createRTreeSd() {
+    StorageDescriptor sd = createGenericSd();
+    sd.setInputFormat("RTREE");
+    sd.setOutputFormat("RTREE");
+    sd.getSerdeInfo().setSerializationLib(
+        org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe.class.getName());
     return sd;
   }
 

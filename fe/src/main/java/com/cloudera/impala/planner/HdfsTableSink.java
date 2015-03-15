@@ -87,7 +87,7 @@ public class HdfsTableSink extends TableSink {
       // Writing to a Parquet table requires up to 1GB of buffer per partition.
       // TODO: The per-partition memory requirement is configurable in the QueryOptions.
       case PARQUET: return 1024L * 1024L * 1024L;
-      case TEXT: return 100L * 1024L;
+      case TEXT: case RTREE: return 100L * 1024L;
       default:
         Preconditions.checkState(false, "Unsupported TableSink format " +
             format.toString());

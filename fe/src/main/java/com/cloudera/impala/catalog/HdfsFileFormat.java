@@ -28,11 +28,16 @@ public enum HdfsFileFormat {
   TEXT,
   SEQUENCE_FILE,
   AVRO,
+  RTREE,
   PARQUET;
 
   // Input format class for RCFile tables read by Hive.
   private static final String RCFILE_INPUT_FORMAT =
       "org.apache.hadoop.hive.ql.io.RCFileInputFormat";
+
+  // Input format class for RCFile tables read by Hive.
+  private static final String RTREE_INPUT_FORMAT =
+      "RTREE";
 
   // Input format class for Text tables read by Hive.
   private static final String TEXT_INPUT_FORMAT =
@@ -76,6 +81,7 @@ public enum HdfsFileFormat {
           .put(PARQUET_INPUT_FORMATS[1], PARQUET)
           .put(PARQUET_INPUT_FORMATS[2], PARQUET)
           .put(PARQUET_INPUT_FORMATS[3], PARQUET)
+          .put(RTREE_INPUT_FORMAT, RTREE)
           .build();
   /**
    * Returns true if the string describes an input format class that we support.
@@ -111,6 +117,7 @@ public enum HdfsFileFormat {
       case TEXT: return HdfsFileFormat.TEXT;
       case SEQUENCE_FILE: return HdfsFileFormat.SEQUENCE_FILE;
       case AVRO: return HdfsFileFormat.AVRO;
+      case RTREE: return HdfsFileFormat.RTREE;
       case PARQUET: return HdfsFileFormat.PARQUET;
       default:
         throw new RuntimeException("Unknown THdfsFileFormat: "
@@ -124,6 +131,7 @@ public enum HdfsFileFormat {
       case TEXT: return THdfsFileFormat.TEXT;
       case SEQUENCE_FILE: return THdfsFileFormat.SEQUENCE_FILE;
       case AVRO: return THdfsFileFormat.AVRO;
+      case RTREE: return THdfsFileFormat.RTREE;
       case PARQUET: return THdfsFileFormat.PARQUET;
       default:
         throw new RuntimeException("Unknown HdfsFormat: "
@@ -147,6 +155,7 @@ public enum HdfsFileFormat {
         return "TEXTFILE";
       case SEQUENCE_FILE: return "SEQUENCEFILE";
       case AVRO: return "AVRO";
+      case RTREE: return "RTREE";
       case PARQUET: return "PARQUET";
       default:
         throw new RuntimeException("Unknown HdfsFormat: "

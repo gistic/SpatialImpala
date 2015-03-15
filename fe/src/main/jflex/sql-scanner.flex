@@ -180,6 +180,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("roles", new Integer(SqlParserSymbols.KW_ROLES));
     keywordMap.put("row", new Integer(SqlParserSymbols.KW_ROW));
     keywordMap.put("rows", new Integer(SqlParserSymbols.KW_ROWS));
+    keywordMap.put("rtree", new Integer(SqlParserSymbols.KW_RTREE));
     keywordMap.put("schema", new Integer(SqlParserSymbols.KW_SCHEMA));
     keywordMap.put("schemas", new Integer(SqlParserSymbols.KW_SCHEMAS));
     keywordMap.put("select", new Integer(SqlParserSymbols.KW_SELECT));

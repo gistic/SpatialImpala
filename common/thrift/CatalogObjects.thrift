@@ -51,6 +51,7 @@ enum THdfsFileFormat {
   RC_FILE,
   SEQUENCE_FILE,
   AVRO,
+  RTREE,
   PARQUET
 }
 
