@@ -39,7 +39,9 @@ enum TPlanNodeType {
   SELECT_NODE,
   CROSS_JOIN_NODE,
   DATA_SOURCE_NODE,
-  ANALYTIC_EVAL_NODE
+  ANALYTIC_EVAL_NODE,
+  SPATIAL_HDFS_SCAN_NODE,
+  SPATIAL_SELECT_NODE
 }
 
 // phases of an execution node
@@ -103,6 +105,10 @@ struct TScanRange {
   // one of these must be set for every TScanRange2
   1: optional THdfsFileSplit hdfs_file_split
   2: optional THBaseKeyRange hbase_key_range
+}
+
+struct TSpatialSelectNode {
+  1: required CatalogObjects.TRectangle rectangle
 }
 
 struct THdfsScanNode {
@@ -357,6 +363,7 @@ struct TPlanNode {
   14: optional TUnionNode union_node
   15: optional TExchangeNode exchange_node
   20: optional TAnalyticNode analytic_node
+  21: optional TSpatialSelectNode spatial_select_node
 
   // Label that should be used to print this node to the user.
   17: optional string label
