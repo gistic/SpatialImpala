@@ -444,39 +444,20 @@ Status HdfsRTreeSpatialScanner::FillByteBuffer(bool* eosr, int num_bytes) {
   return status;
 }
 
-Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
-  /**tuple_found = true;
-  if (stream_->scan_range()->offset() != 0) {
-    *tuple_found = false;
-    // Offset may not point to tuple boundary, skip ahead to the first full tuple
-    // start.
-    while (true) {
-      bool eosr = false;
-      RETURN_IF_ERROR(FillByteBuffer(&eosr));
+RTree* HdfsRTreeSpatialScanner::GetRTree() {
+  return rtree_;
+}
 
-      delimited_text_parser_->ParserReset();
-      SCOPED_TIMER(parse_delimiter_timer_);
-      int first_tuple_offset = delimited_text_parser_->FindFirstInstance(
-          byte_buffer_ptr_, byte_buffer_read_size_);
-
-      if (first_tuple_offset == -1) {
-        // Didn't find tuple in this buffer, keep going with this scan range
-        if (!eosr) continue;
-      } else {
-        byte_buffer_ptr_ += first_tuple_offset;
-        *tuple_found = true;
-      }
-      break;
-    }
-  }
-  */
-  
+Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {  
   *tuple_found = false;
   char offset_array[HEADER_SIZE];
+  char node_array[NODE_SIZE];
+  int node_array_offset = 0;
   int read_size_offset = 0;
   int first_tuple_offset = -1;
-  while (true) {
+  int rtree_current_index = 0;
 
+  while (true) {
     // Get the next buffer.
     bool eosr = false;
     RETURN_IF_ERROR(FillByteBuffer(&eosr));
@@ -496,14 +477,20 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
 
       if (i == byte_buffer_read_size_)
         prev_read_size_offset += byte_buffer_read_size_;
+      else
+        rtree_current_index = i;
     }
 
     // offset_array is filled
     if (read_size_offset >= HEADER_SIZE) {
       // Calculate header offset, if it isn't set.
       if (first_tuple_offset == -1) {
-        first_tuple_offset = SkipHeader(offset_array, prev_read_size_offset);
-
+        first_tuple_offset = SkipHeaderAndInitializeRTree(offset_array, prev_read_size_offset);
+        
+        // Advancing byte_buffer_ptr to point at the start of the r-tree structure.
+        byte_buffer_ptr_ += rtree_current_index;
+        first_tuple_offset -= rtree_current_index;
+        
         if (first_tuple_offset == -1) {
           // Couldn't parse file.
           stringstream ss;
@@ -512,24 +499,46 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
           return Status(ss.str());
         }
       }
-      // If the offset is within the current buffer, advance the buffer pointer.
-      if (first_tuple_offset < byte_buffer_read_size_) {
-        byte_buffer_ptr_ += first_tuple_offset;
+
+      // Parsing the r-tree structure and constructing the tree.
+      while (first_tuple_offset > 0 && rtree_current_index < byte_buffer_read_size_) {
+        node_array[node_array_offset] = *byte_buffer_ptr_;
+        byte_buffer_ptr_++;
+        first_tuple_offset--;
+        node_array_offset++;
+        rtree_current_index++;
+        // r-tree node data array was filled, add a new node.
+        if (node_array_offset >= NODE_SIZE) {
+          node_array_offset = 0;
+          rtree_->AddNode(node_array);
+        }
+      }
+
+      // to start reading from the new buffer.
+      rtree_current_index = 0;
+      
+      // r-tree structure has been read completely.
+      if (first_tuple_offset == 0) {
+
+        // r-tree is not a valid structure.
+        if (node_array_offset != 0) {
+          stringstream ss_tree;
+          ss_tree << "Encountered incomplete data for RTree structure" << endl;
+          return Status(ss_tree.str());
+        }
+
         *tuple_found = true;
         break;
       }
-      // Offset is larger than the current buffer size.
-      else
-        first_tuple_offset -= byte_buffer_read_size_;
     }
   }
   DCHECK(delimited_text_parser_->AtTupleStart());
   return Status::OK;
 }
 
-int HdfsRTreeSpatialScanner::SkipHeader(char* offset_array, int prev_read_size_offset) {
+int HdfsRTreeSpatialScanner::SkipHeaderAndInitializeRTree(char* offset_array, int prev_read_size_offset) {
   // R-Tree marker is the first 8 bytes and not needed in offset calculation.
-  long rtree_marker = 0;
+  long long rtree_marker = 0;
   for (int i = 0; i < 8; i++)
     rtree_marker = (rtree_marker << 8) | (*(offset_array + i) & 0xff);
 
@@ -537,7 +546,7 @@ int HdfsRTreeSpatialScanner::SkipHeader(char* offset_array, int prev_read_size_o
   // then the file is not r-tree data file.
   if (rtree_marker != RTREE_MARKER)
     return -1;
-  
+
   // Tree size is the next 4 bytes and not needed in offset calculation.
   // Height of the rtree is the second 4 bytes.
   int height = 0;
@@ -556,9 +565,12 @@ int HdfsRTreeSpatialScanner::SkipHeader(char* offset_array, int prev_read_size_o
   // Number of nodes in the rtree.
   int node_count = (int) ((pow(degree, height) - 1) / (degree - 1));
   
+  // Initializing the r-tree.
+  rtree_ = new RTree(degree, height);
+  
   // Calculating number of bytes in the previous read buffers.
   int offset = HEADER_SIZE - prev_read_size_offset;
-  offset += 4; // Skipping 4 bytes (elemen_count).
+
   // Skipping the structure of the rtree.
   offset += node_count * NODE_SIZE;
   return offset;
