@@ -66,6 +66,8 @@ add_library(Exec
   partitioned-hash-join-node.cc
   partitioned-hash-join-node-ir.cc
   read-write-util.cc
+  rectangle.cc
+  r-tree.cc
   scan-node.cc
   scanner-context.cc
   select-node.cc

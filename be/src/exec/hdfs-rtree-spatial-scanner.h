@@ -5,6 +5,7 @@
 #define IMPALA_EXEC_HDFS_RTREE_SPATIAL_SCANNER_H
 
 #include "exec/hdfs-scanner.h"
+#include "exec/r-tree.h"
 #include "exec/delimited-text-parser.h"
 #include "runtime/string-buffer.h"
 
@@ -12,9 +13,9 @@
 // the size of the r-tree header:
 // The size of the header of the r-tree (4 bytes for the tree size +
 // 4 bytes for the height of the r-tree + 4 bytes for the degree of
-// the tree))
+// the tree + 4 bytes for the element_count)
 
-#define HEADER_SIZE 20
+#define HEADER_SIZE 24
 #define NODE_SIZE 36
 #define HEIGHT_POS 12
 #define DEGREE_POS 16
@@ -44,7 +45,9 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
   static llvm::Function* Codegen(HdfsScanNode*,
                                  const std::vector<ExprContext*>& conjunct_ctxs);
 
-
+  // Used to retreive r-tree instance, returns NULL if the r-tree wasn't parsed.
+  RTree* GetRTree();
+ 
   // Suffix for lzo index files.
   const static std::string LZO_INDEX_SUFFIX;
 
@@ -87,7 +90,7 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
 
   // Skip the header of the r-tree and advance the buffer pointer to the 
   // beginning of the data
-  int SkipHeader(char* offset_array, int prev_read_size_offset);
+  int SkipHeaderAndInitializeRTree(char* offset_array, int prev_read_size_offset);
 
   // Reads past the end of the scan range for the next tuple end.
   Status FinishScanRange();
@@ -168,6 +171,9 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
 
   // Time parsing text files
   RuntimeProfile::Counter* parse_delimiter_timer_;
+
+  // RTree instance, It won't be NULL iff the r-tree was parsed successfully.
+  RTree* rtree_;
 };
 
 }
