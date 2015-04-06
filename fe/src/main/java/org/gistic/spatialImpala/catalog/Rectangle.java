@@ -21,19 +21,20 @@ public class Rectangle {
 		return (x >= x1) && (x <= x2) && (y >= y1) && (y <= y2);
 	}
 
-  public double getMaxDist(double x, double y) {
-    return Math.max(Math.max(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.max(dist(x,y,x1,y2),dist(x,y,x2,y2)));
-  }
+	public double getMaxDist(double x, double y) {
+		return Math.max(Math.max(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.max(dist(x,y,x1,y2),dist(x,y,x2,y2)));
+	}
 
-  public double getMinDist(double x, double y) {
-     return Math.min(Math.min(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.min(dist(x,y,x1,y2),dist(x,y,x2,y2)));
-  }
+	public double getMinDist(double x, double y) {
+		return Math.min(Math.min(dist(x,y,x1,y1),dist(x,y,x2,y1)),Math.min(dist(x,y,x1,y2),dist(x,y,x2,y2)));
+	}
 
-  private double dist(double x1, double y1, double X2, double y2) {
-    return Math.sqrt( (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) );
-  }
+	private double dist(double x1, double y1, double X2, double y2) {
+		return Math.sqrt( (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) );
+	}
 	
-	public boolean overlaps(Rectangle rect) {
+	//Check if a rectangle intersects with this rectanlge (not contained in it) 
+	public boolean intersects(Rectangle rect) {
 		if (this.x1 > rect.x2 || this.x2 < rect.x1)
 			return false;
 		
@@ -41,6 +42,13 @@ public class Rectangle {
 			return false;
 		
 		return true;
+	}
+	
+	//Check if this rectangle contains another rectangle or not
+	public boolean contains (Rectangle rect) {
+		if (this.x1 < rect.x1 && this.x2 > rect.x2 && this.y1 < rect.y1 && this.y2 > rect.y2)
+			return true;
+		return false;
 	}
 	
 	public TRectangle toThrift() {
