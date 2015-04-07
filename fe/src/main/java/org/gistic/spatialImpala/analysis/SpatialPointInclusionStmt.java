@@ -22,11 +22,14 @@ import com.cloudera.impala.analysis.BinaryPredicate;
 import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.NumericLiteral;
+import com.cloudera.impala.analysis.AggregateInfo;
+import com.cloudera.impala.analysis.TupleId;
 
 import java.util.List;
 import java.util.ArrayList;
 import java.math.BigDecimal;
 import java.util.ListIterator;
+import java.util.HashMap;
 
 /**
  * Represents a Spatial Point Inclusion statement
@@ -42,6 +45,16 @@ public class SpatialPointInclusionStmt extends StatementBase {
 	//The rectangle provided in the query
 	private final Rectangle rect_;
 	
+	
+	public SpatialPointInclusionStmt (TableName tableName, Rectangle rect) {
+		this.tableName_ = tableName;
+		this.rect_ = rect;
+	}
+	
+	
+	public TupleId getTupleId() {
+		return this.tupleId_;
+	}
 	/*
 	 * If the partitions of the tables ovelap then we will need to
 	 * handle this case by addind DISTINCT to our query statement
@@ -167,7 +180,7 @@ public class SpatialPointInclusionStmt extends StatementBase {
 			if (rect_.contains(gIRecord.getMBR())) {
 				GIsFullyContained.add(gIRecord);
 			}
-			else if (rect_.getMBR().intersects(gIRecord)) {
+			else if (rect_.intersects(gIRecord.getMBR())) {
 				GIsIntersect.add(gIRecord);
 			}
 		}

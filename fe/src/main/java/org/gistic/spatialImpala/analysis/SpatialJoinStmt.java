@@ -101,8 +101,8 @@ public class SpatialJoinStmt extends StatementBase {
       throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
           + " : Table doesn't have the required columns.");
 
-		HashMap<String, List<GlobalIndexRecord>> globalIndexes = globalIndex1
-				.getGIsforJoin(globalIndex2);
+		/*HashMap<String, List<GlobalIndexRecord>> globalIndexes = globalIndex1
+				.getGIsforJoin(globalIndex2);*/
 
 		// Preparing data for SelectStmt.
 		List<TableRef> tableRefs = new ArrayList<TableRef>();

@@ -99,13 +99,13 @@ public class GlobalIndex implements CatalogObject {
 		return globalIndexes;
 	}
 
-	public HashMap<String, List<GlobalIndexRecord>> getGIsforJoin(GlobalIndex secondIndex) {
+	/*public HashMap<String, List<GlobalIndexRecord>> getGIsforJoin(GlobalIndex secondIndex) {
 		HashMap<String, List<GlobalIndexRecord>> ret = new HashMap<String, List<GlobalIndexRecord>>();
 		for (String key: globalIndexMap.keySet()) {
 			ret.put(key,secondIndex.getGIsforRectangle(globalIndexMap.get(key).getMBR()));
 		}
 		return ret;
-	}
+	}*/
 
 	public GlobalIndexRecord getGIRecordforTag(String tag) {
 		return globalIndexMap.get(tag);
