@@ -22,10 +22,14 @@ import com.cloudera.impala.analysis.BinaryPredicate;
 import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.NumericLiteral;
+import com.cloudera.impala.analysis.AggregateInfo;
+import com.cloudera.impala.analysis.TupleId;
 
 import java.util.List;
 import java.util.ArrayList;
 import java.math.BigDecimal;
+import java.util.ListIterator;
+import java.util.HashMap;
 
 /**
  * Represents a Spatial Point Inclusion statement
@@ -35,20 +39,114 @@ public class SpatialPointInclusionStmt extends StatementBase {
 	private static final String TAG = "tag";
 	private static final String X = "x";
 	private static final String Y = "y";
+	
 	private TableName tableName_;
+	
+	//The rectangle provided in the query
 	private final Rectangle rect_;
-
-	// Initialized during analysis.
-	private SelectStmt selectStmt_;
-
-	public SpatialPointInclusionStmt(TableName tblName, Rectangle rect) {
-		this.tableName_ = tblName;
+	
+	
+	public SpatialPointInclusionStmt (TableName tableName, Rectangle rect) {
+		this.tableName_ = tableName;
 		this.rect_ = rect;
-		this.selectStmt_ = null;
 	}
+	
+	
+	public TupleId getTupleId() {
+		return this.tupleId_;
+	}
+	/*
+	 * If the partitions of the tables ovelap then we will need to
+	 * handle this case by addind DISTINCT to our query statement
+	 */
+	/*public static enum Qualifier {
+	   ALL,
+	   DISTINCT
+	}*/
+	
+	/*
+	 * Each operand should handle one partition of the table. Each statement
+	 * in the operand should be easier select statement whith where predicits
+	 * in case if the  partition only intersects with the rectanlge in the original
+	 * query or select statement without where predicits in case if the 
+	 * patition lies inside the rectangle 
+	 * 
+	 */
+	/*public static class SpatialUnionOperand {
+	   private final QueryStmt queryStmt_;
+	   // Null for the first operand.
+	   private Qualifier qualifier_;
+
+	   // Analyzer used for this operand. Set in analyze().
+	   private Analyzer analyzer_;
+
+	   // map from UnionStmts result slots to our resultExprs; useful during plan generation
+	   private final ExprSubstitutionMap smap_ = new ExprSubstitutionMap();
+
+	   // set if this operand is guaranteed to return an empty result set;
+	   // used in planning when assigning conjuncts
+	   private boolean isDropped_ = false;
+
+	   public SpatialUnionOperand(QueryStmt queryStmt, Qualifier qualifier) {
+	      this.queryStmt_ = queryStmt;
+	      this.qualifier_ = qualifier;
+	   }
+
+	   public void analyze(Analyzer parent) throws AnalysisException {
+	      analyzer_ = new Analyzer(parent);
+	      queryStmt_.analyze(analyzer_);
+	   }
+
+	   public QueryStmt getQueryStmt() { return queryStmt_; }
+	   public Qualifier getQualifier() { return qualifier_; }
+	   // Used for propagating DISTINCT.
+	   public void setQualifier(Qualifier qualifier) { this.qualifier_ = qualifier; }
+	   public Analyzer getAnalyzer() { return analyzer_; }
+	   public ExprSubstitutionMap getSmap() { return smap_; }
+	   public void drop() { isDropped_ = true; }
+	   public boolean isDropped() { return isDropped_; }
+
+	   @Override
+	   public SpatialUnionOperand clone() {
+	      return new SpatialUnionOperand(queryStmt_.clone(), qualifier_);
+	   }
+	}*/
+
+	// before analysis, this contains the list of spatial union operands derived verbatim
+	// from the query;
+	// after analysis, this contains all of distinctOperands followed by allOperands
+	//protected final List<SpatialUnionOperand> operands_;
+	
+	//Global indexes of partitions which only intersect with the rectangle
+	List<GlobalIndexRecord> GIsIntersect;
+	
+	//Global indexes of partitions which fully contained in the rectangle
+	List<GlobalIndexRecord> GIsFullyContained;
+
+	// filled during analyze(); contains all operands that need to go through
+	// distinct aggregation
+	//protected final List<SpatialUnionOperand> distinctOperands_ = Lists.newArrayList();
+
+	// filled during analyze(); contains all operands that can be aggregated with
+	// a simple merge without duplicate elimination (also needs to merge the output
+	// of the DISTINCT operands)
+	//protected final List<SpatialUnionOperand> allOperands_ = Lists.newArrayList();
+
+	protected AggregateInfo distinctAggInfo_;  // only set if we have DISTINCT ops
+
+	// Single tuple materialized by the spatial union. Set in analyze().
+	protected TupleId tupleId_;
+
+	// set prior to unnesting
+	protected String toSqlString_ = null;
+
+	/*public SpatialPointInclusionStmt(List<UnionOperand> operands) {
+	   this.operands_ = operands;
+	}*/
 
 	@Override
 	public void analyze(Analyzer analyzer) throws AnalysisException {
+		super.analyze(analyzer);
 		// Getting table and checking for existence.
 		Table table;
 		if (!tableName_.isFullyQualified()) {
@@ -68,28 +166,24 @@ public class SpatialPointInclusionStmt extends StatementBase {
 		if (globalIndex == null)
 			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
 					+ " : Table doesn't have global indexes.");
-
+		
 		List<String> columnNames = spatialTable.getColumnNames();
 		if (!(columnNames.contains(TAG) && columnNames.contains(X) && columnNames
 				.contains(Y)))
 			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
 					+ " : Table doesn't have the required columns.");
 
-		List<GlobalIndexRecord> globalIndexes = globalIndex
-				.getGIsforRectangle(rect_);
-
-		// Preparing data for SelectStmt.
-		List<TableRef> tableRefs = new ArrayList<TableRef>();
-		tableRefs.add(new TableRef(tableName_, null));
-
-		List<SelectListItem> items = new ArrayList<SelectListItem>();
-		items.add(new SelectListItem(new SlotRef(tableName_, X), null));
-		items.add(new SelectListItem(new SlotRef(tableName_, Y), null));
-
-		selectStmt_ = new SelectStmt(new SelectList(items), tableRefs,
-				createWherePredicate(globalIndexes), null, null, null, null);
-
-		selectStmt_.analyze(analyzer);
+		//Now fill the GIsIntersect and GIsFullyContained vectors 
+		HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
+		
+		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+			if (rect_.contains(gIRecord.getMBR())) {
+				GIsFullyContained.add(gIRecord);
+			}
+			else if (rect_.intersects(gIRecord.getMBR())) {
+				GIsIntersect.add(gIRecord);
+			}
+		}
 	}
 
 	@Override
@@ -98,11 +192,11 @@ public class SpatialPointInclusionStmt extends StatementBase {
 				+ " overlaps rectangle" + rect_.toString() + ";";
 	}
 
-	public SelectStmt getSelectStmtIfAny() {
+	/*public SelectStmt getSelectStmtIfAny() {
 		return selectStmt_;
-	}
+	}*/
 
-	private Expr createWherePredicate(List<GlobalIndexRecord> globalIndexes) {
+	/*private Expr createWherePredicate(List<GlobalIndexRecord> globalIndexes) {
 		SlotRef globalIndexSlotRef = new SlotRef(tableName_, TAG);
 		if (globalIndexes == null) {
 			return new IsNullPredicate(globalIndexSlotRef, false);
@@ -150,5 +244,5 @@ public class SpatialPointInclusionStmt extends StatementBase {
 						new NumericLiteral(new BigDecimal(rect_.getY2()))));
 
 		return wherePredicate;
-	}
+	}*/
 }

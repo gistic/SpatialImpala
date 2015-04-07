@@ -39,6 +39,10 @@ public class GlobalIndex implements CatalogObject {
 		this.tableName_ = tableName;
 		this.globalIndexMap = globalIndexMap;
 	}
+	
+	public HashMap<String, GlobalIndexRecord> getGlobalIndexMap() {
+		return globalIndexMap;
+	}
 
 	public List<GlobalIndexRecord> getGIsforPoint(int x, int y) {
 		List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
@@ -49,43 +53,59 @@ public class GlobalIndex implements CatalogObject {
 		return globalIndexes;
 	}
 
-  public List<GlobalIndexRecord> getGIsforKnn(Point pt) {
-    double maxdist = 0;
-    for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-      if (gIRecord.getMBR().includesPoint(pt.getX(), pt.getY()))
-        maxdist = Math.max(maxdist, gIRecord.getMBR().getMaxDist(pt.getX(), pt.getY()));
-    }
-    List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
-    for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-      if (gIRecord.getMBR().getMinDist(pt.getX(), pt.getY()) < maxdist )
-        globalIndexes.add(gIRecord);
-    }
-    return globalIndexes;
-  }
+	public List<GlobalIndexRecord> getGIsforKnn(Point pt) {
+		double maxdist = 0;
+		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+			if (gIRecord.getMBR().includesPoint(pt.getX(), pt.getY()))
+				maxdist = Math.max(maxdist, gIRecord.getMBR().getMaxDist(pt.getX(), pt.getY()));
+		}
+		List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
+    	for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+    		if (gIRecord.getMBR().getMinDist(pt.getX(), pt.getY()) < maxdist )
+    			globalIndexes.add(gIRecord);
+    		}
+    	return globalIndexes;
+  	}
 
-	public List<GlobalIndexRecord> getGIsforRectangle(Rectangle rect) {
+	public List<GlobalIndexRecord> getGIsIntersectRectangle(Rectangle rect) {
 		List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
 		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-			if (gIRecord.getMBR().overlaps(rect)) {
+			if (gIRecord.getMBR().intersects(rect)) {
 				LOG.info("GI record: " + gIRecord.getMBR()
-						+ " overlaps with: " + rect);
+						+ " intersect with: " + rect);
 				globalIndexes.add(gIRecord);
 			}
 			else {
 				LOG.info("GI record: " + gIRecord.getMBR()
-						+ " does not overlap with: " + rect);
+						+ " does not intersect with: " + rect);
+			}
+		}
+		return globalIndexes;
+	}
+	
+	public List<GlobalIndexRecord> getGIsContainedInRectangle(Rectangle rect) {
+		List<GlobalIndexRecord> globalIndexes = new ArrayList<GlobalIndexRecord>();
+		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+			if (rect.contains(gIRecord.getMBR())) {
+				LOG.info("GI record: " + gIRecord.getMBR()
+						+ "is fully contaied in: " + rect);
+				globalIndexes.add(gIRecord);
+			}
+			else {
+				LOG.info("GI record: " + gIRecord.getMBR()
+						+ " is not fully contaied in: " + rect);
 			}
 		}
 		return globalIndexes;
 	}
 
-  public HashMap<String, List<GlobalIndexRecord>> getGIsforJoin(GlobalIndex secondIndex) {
-    HashMap<String, List<GlobalIndexRecord>> ret = new HashMap<String, List<GlobalIndexRecord>>();
-    for (String key: globalIndexMap.keySet()) {
-      ret.put(key,secondIndex.getGIsforRectangle(globalIndexMap.get(key).getMBR()));
-    }
-    return ret;
-  }
+	/*public HashMap<String, List<GlobalIndexRecord>> getGIsforJoin(GlobalIndex secondIndex) {
+		HashMap<String, List<GlobalIndexRecord>> ret = new HashMap<String, List<GlobalIndexRecord>>();
+		for (String key: globalIndexMap.keySet()) {
+			ret.put(key,secondIndex.getGIsforRectangle(globalIndexMap.get(key).getMBR()));
+		}
+		return ret;
+	}*/
 
 	public GlobalIndexRecord getGIRecordforTag(String tag) {
 		return globalIndexMap.get(tag);
