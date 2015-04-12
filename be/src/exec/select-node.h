@@ -38,7 +38,7 @@ class SelectNode : public ExecNode {
   virtual Status GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos);
   virtual void Close(RuntimeState* state);
 
- private:
+ protected:
   // current row batch of child
   boost::scoped_ptr<RowBatch> child_row_batch_;
 

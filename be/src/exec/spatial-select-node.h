@@ -5,17 +5,24 @@
 
 #include "exec/select-node.h"
 #include "exec/r-tree.h"
+#include "exprs/slot-ref.h"
 
 using namespace impala;
 
 namespace spatialimpala {
 
 class SpatialSelectNode : SelectNode {
-  public:
-    bool insideRange(TupleRow* row);
+  private:
+    bool InsideRange(TupleRow* row);
+    bool CopyRows(RowBatch* output_batch);
 
     RTree* rtree_;
     Rectangle* range_;
+    
+    // Used to get values of the Spatial columns in a single row.
+    // TODO: Should be updated to a Spatial Column.
+    SlotRef* x_;
+    SlotRef* y_;
 };
 
 }

@@ -18,6 +18,7 @@ class Rectangle {
 
     bool Intersects(Rectangle* other);
     bool Contains(Rectangle* other);
+    bool Contains(double x, double y);
     void ToThrift(TRectangle* rect);
 
  // private:
