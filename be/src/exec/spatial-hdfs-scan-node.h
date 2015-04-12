@@ -7,14 +7,24 @@
 #include "exec/r-tree.h"
 
 using namespace impala;
+using namespace std;
 
 namespace spatialimpala {
 
 class SpatialHdfsScanNode : HdfsScanNode {
   public:
-    RTree* getRTree();
+    // Uses FileMetadata and casts it to RTree object.
+    RTree* GetRTree(const string& filename);
+    void SetRangeQuery(Rectangle* rect);
 
-    RTree* rtree_;
+  protected:
+    // Updates the number of scan ranges with the new one.
+    // This method is thread safe.
+    void UpdateScanRanges(const THdfsFileFormat::type& file_type,
+      const THdfsCompression::type& compression_type, int num_of_splits,
+      int new_num_of_splits);
+
+    Rectangle* range_;
     bool has_local_index_;
 };
 
