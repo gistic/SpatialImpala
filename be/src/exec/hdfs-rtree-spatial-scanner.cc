@@ -19,6 +19,7 @@
 #include "exec/delimited-text-parser.inline.h"
 #include "exec/hdfs-lzo-text-scanner.h"
 #include "exec/hdfs-scan-node.h"
+#include "exec/spatial-hdfs-scan-node.h"
 #include "exec/scanner-context.inline.h"
 #include "exec/text-converter.h"
 #include "exec/text-converter.inline.h"
@@ -49,6 +50,7 @@ HdfsRTreeSpatialScanner::HdfsRTreeSpatialScanner(HdfsScanNode* scan_node, Runtim
       boundary_column_(data_buffer_pool_.get()),
       slot_idx_(0),
       error_in_row_(false) {
+  only_parsing_header= false;
 }
 
 HdfsRTreeSpatialScanner::~HdfsRTreeSpatialScanner() {
@@ -56,95 +58,63 @@ HdfsRTreeSpatialScanner::~HdfsRTreeSpatialScanner() {
 
 Status HdfsRTreeSpatialScanner::IssueInitialRanges(HdfsScanNode* scan_node,
     const vector<HdfsFileDesc*>& files) {
-  vector<DiskIoMgr::ScanRange*> compressed_text_scan_ranges;
-  vector<HdfsFileDesc*> lzo_text_files;
-  bool warning_written = false;
+  
+  vector<DiskIoMgr::ScanRange*> header_ranges;
+
+  // Issue only the header ranges for all files.
+  // Issue the first split which contains the header of the file.
   for (int i = 0; i < files.size(); ++i) {
-    warning_written = false;
-    THdfsCompression::type compression = files[i]->file_compression;
-    switch (compression) {
-      case THdfsCompression::NONE:
-        // For uncompressed text we just issue all ranges at once.
-        // TODO: Lz4 is splittable, should be treated similarly.
-        RETURN_IF_ERROR(scan_node->AddDiskIoRanges(files[i]));
-        break;
-
-      case THdfsCompression::GZIP:
-      case THdfsCompression::SNAPPY:
-      case THdfsCompression::SNAPPY_BLOCKED:
-      case THdfsCompression::BZIP2:
-        for (int j = 0; j < files[i]->splits.size(); ++j) {
-          // In order to decompress gzip-, snappy- and bzip2-compressed text files, we
-          // need to read entire files. Only read a file if we're assigned the first split
-          // to avoid reading multi-block files with multiple scanners.
-          DiskIoMgr::ScanRange* split = files[i]->splits[j];
-
-          // We only process the split that starts at offset 0.
-          if (split->offset() != 0) {
-            if (!warning_written) {
-              // We are expecting each file to be one hdfs block (so all the scan range
-              // offsets should be 0).  This is not incorrect but we will issue a warning.
-              // We write a single warning per file per impalad to reduce the number of
-              // log warnings.
-              stringstream ss;
-              ss << "For better performance, snappy, gzip and bzip-compressed files "
-                 << "should not be split into multiple hdfs-blocks. file="
-                 << files[i]->filename << " offset " << split->offset();
-              scan_node->runtime_state()->LogError(ss.str());
-              warning_written = true;
-            }
-            // We assign the entire file to one scan range, so mark all but one split
-            // (i.e. the first split) as complete.
-            scan_node->RangeComplete(THdfsFileFormat::RTREE, compression);
-            continue;
-          }
-
-          // Populate the list of compressed text scan ranges.
-          DCHECK_GT(files[i]->file_length, 0);
-          ScanRangeMetadata* metadata =
-              reinterpret_cast<ScanRangeMetadata*>(split->meta_data());
-          DiskIoMgr::ScanRange* file_range = scan_node->AllocateScanRange(
-              files[i]->filename.c_str(), files[i]->file_length, 0,
-              metadata->partition_id, split->disk_id(), split->try_cache());
-          compressed_text_scan_ranges.push_back(file_range);
-          scan_node->max_compressed_text_file_length()->Set(files[i]->file_length);
-        }
-        break;
-
-      case THdfsCompression::LZO:
-        // lzo-compressed text need to be processed by the specialized HdfsLzoTextScanner.
-        // Note that any LZO_INDEX files (no matter what the case of their suffix) will be
-        // filtered by the planner.
-        {
-        #ifndef NDEBUG
-          // No straightforward way to do this in one line inside a DCHECK, so for once
-          // we'll explicitly use NDEBUG to avoid executing debug-only code.
-          string lower_filename = files[i]->filename;
-          to_lower(lower_filename);
-          DCHECK(!ends_with(lower_filename, LZO_INDEX_SUFFIX));
-        #endif
-          lzo_text_files.push_back(files[i]);
-        }
-        break;
-
-      default:
-        DCHECK(false);
-    }
+    header_ranges.push_back(files[i]->splits[0]);
   }
 
-  if (compressed_text_scan_ranges.size() > 0) {
-    RETURN_IF_ERROR(scan_node->AddDiskIoRanges(compressed_text_scan_ranges));
-  }
-  if (lzo_text_files.size() > 0) {
-    // This will dlopen the lzo binary and can fail if the lzo binary is not present.
-    RETURN_IF_ERROR(HdfsLzoTextScanner::IssueInitialRanges(scan_node, lzo_text_files));
-  }
+  RETURN_IF_ERROR(scan_node->AddDiskIoRanges(header_ranges));
   return Status::OK;
 }
 
 Status HdfsRTreeSpatialScanner::ProcessSplit() {
   // Reset state for new scan range
   RETURN_IF_ERROR(InitNewRange());
+
+  // If the scan node is of type Spatial, get the range query assigned to it.
+  SpatialHdfsScanNode* spatial_scan_node = dynamic_cast<SpatialHdfsScanNode*>(scan_node_);
+  if (spatial_scan_node != NULL)
+    range_ = spatial_scan_node->GetRangeQuery();
+
+  if (range_ != NULL) {
+    rtree_ = reinterpret_cast<RTree*>(
+      scan_node_->GetFileMetadata(stream_->filename()));
+    if (rtree_ == NULL) {
+      // Parsing the header only.
+      only_parsing_header = true;
+
+      // Read the RTree file header, and return if any error occurred.
+      RETURN_IF_ERROR(ReadRTreeFileHeader());
+
+      // Header is parsed, set the metadata in the scan node and issue more ranges
+      scan_node_->SetFileMetadata(stream_->filename(), rtree_);
+
+      // Apply the range query on the RTree then issue the new scan ranges.
+      vector<RTreeSplit*> list_of_splits;
+      rtree_->ApplyRangeQuery(range_, &list_of_splits);
+
+      HdfsFileDesc* file = scan_node_->GetFileDesc(stream_->filename());
+      vector<DiskIoMgr::ScanRange*> new_scan_ranges;
+      for (int i = 0; i < list_of_splits.size(); i++) {
+        RTreeSplit* split = list_of_splits[i];
+        ScanRangeMetadata* metadata =
+            reinterpret_cast<ScanRangeMetadata*>(file->splits[0]->meta_data());
+        DiskIoMgr::ScanRange* file_range = scan_node_->AllocateScanRange(
+            file->filename.c_str(), split->end_offset - split->start_offset, split->start_offset,
+            metadata->partition_id, file->splits[0]->disk_id(), file->splits[0]->try_cache());
+        new_scan_ranges.push_back(file_range);
+      }
+
+      // Update Scan node with the new number of (splits/scan ranges) for this file.
+      spatial_scan_node->UpdateScanRanges(THdfsFileFormat::RTREE, file->file_compression,
+          file->splits.size(), list_of_splits.size());
+      return Status::OK;
+    }
+  }
 
   // Find the first tuple.  If tuple_found is false, it means we went through the entire
   // scan range without finding a single tuple.  The bytes will be picked up by the scan
@@ -180,7 +150,8 @@ void HdfsRTreeSpatialScanner::Close() {
   }
   AttachPool(data_buffer_pool_.get(), false);
   AddFinalRowBatch();
-  scan_node_->RangeComplete(THdfsFileFormat::RTREE, stream_->file_desc()->file_compression);
+  if (!only_parsing_header)
+    scan_node_->RangeComplete(THdfsFileFormat::RTREE, stream_->file_desc()->file_compression);
   HdfsScanner::Close();
 }
 
@@ -444,12 +415,83 @@ Status HdfsRTreeSpatialScanner::FillByteBuffer(bool* eosr, int num_bytes) {
   return status;
 }
 
-RTree* HdfsRTreeSpatialScanner::GetRTree() {
-  return rtree_;
+Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {  
+  *tuple_found = true;
+  if (stream_->scan_range()->offset() != 0) {
+    *tuple_found = false;
+    // Offset may not point to tuple boundary, skip ahead to the first full tuple
+    // start.
+    while (true) {
+      bool eosr = false;
+      RETURN_IF_ERROR(FillByteBuffer(&eosr));
+
+      delimited_text_parser_->ParserReset();
+      SCOPED_TIMER(parse_delimiter_timer_);
+      int first_tuple_offset = delimited_text_parser_->FindFirstInstance(
+          byte_buffer_ptr_, byte_buffer_read_size_);
+
+      if (first_tuple_offset == -1) {
+        // Didn't find tuple in this buffer, keep going with this scan range
+        if (!eosr) continue;
+      } else {
+        byte_buffer_ptr_ += first_tuple_offset;
+        *tuple_found = true;
+      }
+      break;
+    }
+  }
+  else {
+    // Processing the first split, skip the RTree header.
+    return SkipHeader(tuple_found);
+  }
+  DCHECK(delimited_text_parser_->AtTupleStart());
+  return Status::OK;
 }
 
-Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {  
-  *tuple_found = false;
+int HdfsRTreeSpatialScanner::ReadRTreeBytes(char* offset_array, int prev_read_size_offset,
+  int* height, int* degree, int* tree_size) {
+
+  // R-Tree marker is the first 8 bytes and not needed in offset calculation.
+  long long rtree_marker = 0;
+  for (int i = 0; i < 8; i++)
+    rtree_marker = (rtree_marker << 8) | (*(offset_array + i) & 0xff);
+
+  // If the first 8 bytes does not represent the RTREE_MARKER,
+  // then the file is not r-tree data file.
+  if (rtree_marker != RTREE_MARKER)
+    return -1;
+
+  // Tree size is the next 4 bytes and not needed in offset calculation.
+  *tree_size = 0;
+  for (int i = 0; i < 4; i++)
+    *tree_size = (*tree_size << 8) | (*(offset_array + TREE_SIZE_POS + i) & 0xff);
+
+  // Height of the rtree is the second 4 bytes.
+  *height = 0;
+  for (int i = 0; i < 4; i++)
+    *height = (*height << 8) | (*(offset_array + HEIGHT_POS + i) & 0xff);
+
+  // Empty tree.
+  if (*height == 0)
+    return HEADER_SIZE - prev_read_size_offset;
+
+  // Degree of each node in the rtree.
+  *degree = 0;
+  for (int i = 0; i < 4; i++)
+    *degree = (*degree << 8) | (*(offset_array + DEGREE_POS + i) & 0xff);
+
+  // Number of nodes in the rtree.
+  int node_count = (int) ((pow(*degree, *height) - 1) / (*degree - 1));
+    
+  // Calculating number of bytes in the previous read buffers.
+  int offset = HEADER_SIZE - prev_read_size_offset;
+
+  // Skipping the structure of the rtree.
+  offset += node_count * NODE_SIZE;
+  return offset;
+}
+
+Status HdfsRTreeSpatialScanner::ReadRTreeFileHeader() {
   char offset_array[HEADER_SIZE];
   char node_array[NODE_SIZE];
   int node_array_offset = 0;
@@ -485,7 +527,10 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
     if (read_size_offset >= HEADER_SIZE) {
       // Calculate header offset, if it isn't set.
       if (first_tuple_offset == -1) {
-        first_tuple_offset = SkipHeaderAndInitializeRTree(offset_array, prev_read_size_offset);
+        int height = 0;
+        int degree = 0;
+        int tree_size = 0;
+        first_tuple_offset = ReadRTreeBytes(offset_array, prev_read_size_offset, &height, &degree, &tree_size);
         
         // Advancing byte_buffer_ptr to point at the start of the r-tree structure.
         byte_buffer_ptr_ += rtree_current_index;
@@ -498,6 +543,9 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
           ss << "The file is not marked as Rtree data file." << endl;
           return Status(ss.str());
         }
+
+        // Initializing RTree header.
+        rtree_ = new RTree(degree, height, tree_size);
       }
 
       // Parsing the r-tree structure and constructing the tree.
@@ -526,54 +574,74 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
           ss_tree << "Encountered incomplete data for RTree structure" << endl;
           return Status(ss_tree.str());
         }
-
-        *tuple_found = true;
         break;
       }
     }
   }
-  DCHECK(delimited_text_parser_->AtTupleStart());
   return Status::OK;
 }
 
-int HdfsRTreeSpatialScanner::SkipHeaderAndInitializeRTree(char* offset_array, int prev_read_size_offset) {
-  // R-Tree marker is the first 8 bytes and not needed in offset calculation.
-  long long rtree_marker = 0;
-  for (int i = 0; i < 8; i++)
-    rtree_marker = (rtree_marker << 8) | (*(offset_array + i) & 0xff);
 
-  // If the first 8 bytes does not represent the RTREE_MARKER,
-  // then the file is not r-tree data file.
-  if (rtree_marker != RTREE_MARKER)
-    return -1;
+Status HdfsRTreeSpatialScanner::SkipHeader(bool* tuple_found) {
+  *tuple_found = false;
+  char offset_array[HEADER_SIZE];
+  int read_size_offset = 0;
+  int first_tuple_offset = -1;
 
-  // Tree size is the next 4 bytes and not needed in offset calculation.
-  // Height of the rtree is the second 4 bytes.
-  int height = 0;
-  for (int i = 0; i < 4; i++)
-    height = (height << 8) | (*(offset_array + HEIGHT_POS + i) & 0xff);
+  while (true) {
+    // Get the next buffer.
+    bool eosr = false;
+    RETURN_IF_ERROR(FillByteBuffer(&eosr));
 
-  // Empty tree.
-  if (height == 0)
-    return HEADER_SIZE - prev_read_size_offset;
+    // For storing the previous read size offset while filling offset_array.
+    int prev_read_size_offset = 0;
+    // If offset equals -1, fill offset_array.
+    if (first_tuple_offset == -1) {
+      const char* buffer_start = byte_buffer_ptr_;
+      int i = 0;
+      while (read_size_offset < HEADER_SIZE && i < byte_buffer_read_size_) {
+        offset_array[read_size_offset] = *buffer_start;
+        ++read_size_offset;
+        ++buffer_start;
+        ++i;
+      }
 
-  // Degree of each node in the rtree.
-  int degree = 0;
-  for (int i = 0; i < 4; i++)
-    degree = (degree << 8) | (*(offset_array + DEGREE_POS + i) & 0xff);
+      if (i == byte_buffer_read_size_)
+        prev_read_size_offset += byte_buffer_read_size_;
+    }
 
-  // Number of nodes in the rtree.
-  int node_count = (int) ((pow(degree, height) - 1) / (degree - 1));
-  
-  // Initializing the r-tree.
-  rtree_ = new RTree(degree, height);
-  
-  // Calculating number of bytes in the previous read buffers.
-  int offset = HEADER_SIZE - prev_read_size_offset;
+    // offset_array is filled
+    if (read_size_offset >= HEADER_SIZE) {
+      // Calculate header offset, if it isn't set.
+      if (first_tuple_offset == -1) {
+        int height = 0;
+        int degree = 0;
+        int tree_size = 0;
+        first_tuple_offset = ReadRTreeBytes(offset_array, prev_read_size_offset, &height, &degree, &tree_size);
 
-  // Skipping the structure of the rtree.
-  offset += node_count * NODE_SIZE;
-  return offset;
+        if (first_tuple_offset == -1) {
+          // Couldn't parse file.
+          stringstream ss;
+          ss << "Couldn't read the file." << endl;
+          ss << "The file is not marked as Rtree data file." << endl;
+          return Status(ss.str());
+        }
+      }
+
+     // If the offset is within the current buffer, advance the buffer pointer.
+     if (first_tuple_offset < byte_buffer_read_size_) {
+       byte_buffer_ptr_ += first_tuple_offset;
+       *tuple_found = true;
+       break;
+     }
+     // Offset is larger than the current buffer size.
+     else
+       first_tuple_offset -= byte_buffer_read_size_;
+    }
+  }
+
+  DCHECK(delimited_text_parser_->AtTupleStart());
+  return Status::OK;
 }
 
 // Codegen for materializing parsed data into tuples.  The function WriteCompleteTuple is

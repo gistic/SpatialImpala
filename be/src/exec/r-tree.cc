@@ -1,12 +1,18 @@
 // Copyright 2015 GISTIC.
 
 #include "exec/r-tree.h"
+#include <queue>
+#include <math.h>
 
 using namespace spatialimpala;
 
-RTree::RTree(int degree, int height) {
+RTree::RTree(int degree, int height, int tree_size) {
   this->degree_ = degree;
   this->height_ = height;
+  this->tree_size_ = tree_size;
+  this->node_count_ = (int) ((pow(degree, height) - 1) / (degree - 1));
+  this->leaf_node_count_ = (int) (pow(degree, height - 1));
+  this->non_leaf_node_count_ = node_count_ - leaf_node_count_;
 }
 
 RTree::~RTree() {
@@ -53,6 +59,56 @@ int RTree::GetFirstChildOfNode(int index){
 
 int RTree::GetDegree() {
   return degree_;
+}
+
+void RTree::ApplyRangeQuery(Rectangle* range_query, vector<RTreeSplit*>* list_of_splits) {
+  // TODO: Apply the range query and create new splits.
+  queue<int> to_be_searched;
+
+  // Adding the first node index to be searched.
+  to_be_searched.push(0);
+
+  while (!to_be_searched.empty()) {
+    int index_to_be_searched = to_be_searched.front();
+    to_be_searched.pop();
+    int num_of_mbrs = index_to_be_searched == 0 ? 1 : degree_;
+    for (int i = 0; i < num_of_mbrs; i++) {
+      if (range_query->Contains(&tree_[index_to_be_searched + i]->mbr_)) {
+        CreateRTreeSplit(index_to_be_searched + i, list_of_splits);
+      }
+      else if(range_query->Intersects(&tree_[index_to_be_searched + i]->mbr_)) {
+        if (index_to_be_searched < non_leaf_node_count_)
+          to_be_searched.push(GetFirstChildOfNode(index_to_be_searched + i));
+        else {
+          CreateRTreeSplit(index_to_be_searched + i, list_of_splits);
+        }
+      }
+    }
+  }
+}
+
+void RTree::CreateRTreeSplit(int node_index, vector<RTreeSplit*>* list_of_splits) {
+  RTreeSplit split;
+  split.start_offset = tree_[node_index]->offset_of_first_element_;
+  split.end_offset = (node_index == tree_.size() - 1) ?
+  tree_size_ : tree_[node_index + 1]-> offset_of_first_element_;
+
+  // The node was the last node in the level
+  if (split.end_offset <= split.start_offset)
+    split.end_offset = tree_size_;
+
+    if (!list_of_splits->empty()) {
+      RTreeSplit old_split = *(list_of_splits->back());
+
+      // The 2 Splits should be merged into one.
+      if (old_split.end_offset >= split.start_offset) {
+        split.start_offset = min(old_split.start_offset, split.start_offset);
+        split.end_offset = max(old_split.end_offset, split.end_offset);
+        list_of_splits->pop_back();
+      }
+  }
+
+  list_of_splits->push_back(&split);
 }
 
 RTreeNode::RTreeNode(int offset_of_first_element, Rectangle mbr) {

@@ -17,6 +17,7 @@
 
 #define HEADER_SIZE 24
 #define NODE_SIZE 36
+#define TREE_SIZE_POS 8
 #define HEIGHT_POS 12
 #define DEGREE_POS 16
 #define RTREE_MARKER -0x00012345678910L
@@ -45,9 +46,6 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
   static llvm::Function* Codegen(HdfsScanNode*,
                                  const std::vector<ExprContext*>& conjunct_ctxs);
 
-  // Used to retreive r-tree instance, returns NULL if the r-tree wasn't parsed.
-  RTree* GetRTree();
- 
   // Suffix for lzo index files.
   const static std::string LZO_INDEX_SUFFIX;
 
@@ -88,9 +86,14 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
   // finding one tuple.
   Status ProcessRange(int* num_tuples, bool past_scan_range);
 
-  // Skip the header of the r-tree and advance the buffer pointer to the 
-  // beginning of the data
-  int SkipHeaderAndInitializeRTree(char* offset_array, int prev_read_size_offset);
+  // Returns the number of bytes of the structure of the r-tree.
+  int ReadRTreeBytes(char* offset_array, int prev_read_size_offset, int* height, int* degree, int* tree_size);
+
+  // Skips the header of the current file.
+  Status SkipHeader(bool* tuple_found);
+
+  // Reads the RTree saved in the header of a specific file.
+  Status ReadRTreeFileHeader();
 
   // Reads past the end of the scan range for the next tuple end.
   Status FinishScanRange();
@@ -172,8 +175,14 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
   // Time parsing text files
   RuntimeProfile::Counter* parse_delimiter_timer_;
 
-  // RTree instance, It won't be NULL iff the r-tree was parsed successfully.
+  // Current File header.
   RTree* rtree_;
+
+  // Spatial range, if exists.
+  Rectangle* range_;
+
+  // Indicator that the scanner is scanning the header.
+  bool only_parsing_header;
 };
 
 }

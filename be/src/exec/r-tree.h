@@ -15,6 +15,11 @@ using namespace std;
 
 namespace spatialimpala {
 
+struct RTreeSplit {
+  int start_offset;
+  int end_offset;
+};
+
 // Rtree-Node implementation that represents a node with its minimum bounding rectangle.
 class RTreeNode {
   public:
@@ -28,16 +33,27 @@ class RTreeNode {
 // Rtree implementation that represents rtree records.
 class RTree {
   public:
-    RTree(int degree, int height);
+    RTree(int degree, int height, int tree_size);
     virtual ~RTree();
+
     Rectangle* GetMBR();
     void AddNode(char* node_data);
     int GetFirstChildOfNode(int index);
     int GetDegree();
 
+    void ApplyRangeQuery(Rectangle* range_query, vector<RTreeSplit*>* list_of_splits);
+
     vector<RTreeNode*> tree_;
+
     int degree_;
     int height_;
+    int tree_size_;
+    int node_count_;
+    int leaf_node_count_;
+    int non_leaf_node_count_;
+
+  private:
+    void CreateRTreeSplit(int node_index, vector<RTreeSplit*>* list_of_splits);
 };
 
 }

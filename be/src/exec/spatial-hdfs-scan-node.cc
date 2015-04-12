@@ -5,11 +5,15 @@
 using namespace spatialimpala;
 
 RTree* SpatialHdfsScanNode::GetRTree(const string& filename) {
-  return this->has_local_index_ ? reinterpret_cast<RTree*>(GetFileMetadata(filename)) : NULL;
+  return reinterpret_cast<RTree*>(GetFileMetadata(filename));
 }
 
 void SpatialHdfsScanNode::SetRangeQuery(Rectangle* rect) {
   range_ = rect;
+}
+
+Rectangle* SpatialHdfsScanNode::GetRangeQuery() {
+  return range_;
 }
 
 void SpatialHdfsScanNode::UpdateScanRanges(const THdfsFileFormat::type& file_type,
