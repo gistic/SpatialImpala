@@ -31,6 +31,11 @@ bool Rectangle::Contains(Rectangle* other) {
     && this->y1_ <= other->y1_ && this->y2_ > other->y2_;
 }
 
+bool Rectangle::Contains(double x, double y) {
+  return this->x1_ <= x && this->x2_ > x
+    && this->y1_ <= y && this->y2_ > y;
+}
+
 void Rectangle::ToThrift(TRectangle* rect) {
   rect->x1 = this->x1_;
   rect->y1 = this->y1_;

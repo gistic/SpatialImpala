@@ -258,7 +258,7 @@ class HdfsScanNode : public ScanNode {
   // Description string for the per volume stats output.
   static const std::string HDFS_SPLIT_STATS_DESC;
 
- private:
+ protected:
   friend class ScannerContext;
 
   // Cache of the plan node.  This is needed to be able to create a copy of
