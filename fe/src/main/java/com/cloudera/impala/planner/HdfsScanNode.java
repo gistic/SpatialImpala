@@ -88,10 +88,10 @@ public class HdfsScanNode extends ScanNode {
   // Partition batch size used during partition pruning
   private final static int PARTITION_PRUNING_BATCH_SIZE = 1024;
 
-  private final HdfsTable tbl_;
+  protected final HdfsTable tbl_;
 
   // Partitions that are filtered in for scanning by the key ranges
-  private final ArrayList<HdfsPartition> partitions_ = Lists.newArrayList();
+  protected final ArrayList<HdfsPartition> partitions_ = Lists.newArrayList();
 
   // Total number of bytes from partitions_
   private long totalBytes_ = 0;
@@ -148,7 +148,7 @@ public class HdfsScanNode extends ScanNode {
    * Computes scan ranges (hdfs splits) plus their storage locations, including volume
    * ids, based on the given maximum number of bytes each scan range should scan.
    */
-  private void computeScanRangeLocations(Analyzer analyzer) {
+  protected void computeScanRangeLocations(Analyzer analyzer) {
     long maxScanRangeLength = analyzer.getQueryCtx().getRequest().getQuery_options()
         .getMax_scan_range_length();
     scanRanges_ = Lists.newArrayList();
