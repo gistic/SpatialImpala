@@ -33,7 +33,9 @@
 #include "exec/hash-join-node.h"
 #include "exec/hdfs-scan-node.h"
 #include "exec/hbase-scan-node.h"
+#include "exec/spatial-hdfs-scan-node.h"
 #include "exec/select-node.h"
+#include "exec/spatial-select-node.h"
 #include "exec/partitioned-aggregation-node.h"
 #include "exec/partitioned-hash-join-node.h"
 #include "exec/sort-node.h"
@@ -50,6 +52,7 @@
 using namespace llvm;
 using namespace std;
 using namespace boost;
+using namespace spatialimpala;
 
 // TODO: remove when we remove hash-join-node.cc and aggregation-node.cc
 DEFINE_bool(enable_partitioned_hash_join, true, "Enable partitioned hash join");
@@ -300,6 +303,12 @@ Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
       break;
     case TPlanNodeType::ANALYTIC_EVAL_NODE:
       *node = pool->Add(new AnalyticEvalNode(pool, tnode, descs));
+      break;
+    case TPlanNodeType::SPATIAL_SELECT_NODE:
+      *node = pool->Add(new SpatialSelectNode(pool, tnode, descs));
+      break;
+    case TPlanNodeType::SPATIAL_HDFS_SCAN_NODE:
+      *node = pool->Add(new SpatialHdfsScanNode(pool, tnode, descs));
       break;
     default:
       map<int, const char*>::const_iterator i =

@@ -11,7 +11,12 @@ using namespace impala;
 
 namespace spatialimpala {
 
-class SpatialSelectNode : SelectNode {
+class SpatialSelectNode : public SelectNode {
+  public:
+    SpatialSelectNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs);
+    virtual Status Open(RuntimeState* state);
+    virtual Status Prepare(RuntimeState* state);
+
   private:
     bool InsideRange(TupleRow* row);
     bool CopyRows(RowBatch* output_batch);

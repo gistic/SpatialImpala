@@ -109,6 +109,9 @@ struct TScanRange {
 
 struct TSpatialSelectNode {
   1: required CatalogObjects.TRectangle rectangle
+  // Holds TSlotRef for Spatial Columns.
+  2: required Exprs.TExprNode x
+  3: required Exprs.TExprNode y
 }
 
 struct THdfsScanNode {

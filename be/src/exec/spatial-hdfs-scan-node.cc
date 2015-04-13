@@ -4,6 +4,14 @@
 
 using namespace spatialimpala;
 
+SpatialHdfsScanNode::SpatialHdfsScanNode(ObjectPool* pool, const TPlanNode& tnode,
+                           const DescriptorTbl& descs)
+    : HdfsScanNode(pool, tnode, descs) {
+}
+
+SpatialHdfsScanNode::~SpatialHdfsScanNode() {
+}
+
 RTree* SpatialHdfsScanNode::GetRTree(const string& filename) {
   return reinterpret_cast<RTree*>(GetFileMetadata(filename));
 }
@@ -18,7 +26,7 @@ Rectangle* SpatialHdfsScanNode::GetRangeQuery() {
 
 void SpatialHdfsScanNode::UpdateScanRanges(const THdfsFileFormat::type& file_type,
   const THdfsCompression::type& compression_type, int num_of_splits, int new_num_of_splits) {
-  // TODO: This should handle updating progress_updater_ either by creating a new one,
+  // handles updating progress_updater_ either by creating a new one,
   // or by updating the number of completed (splits/scan ranges).
   if (num_of_splits >= new_num_of_splits) {
     int scan_ranges_to_complete = num_of_splits - new_num_of_splits;

@@ -1,8 +1,36 @@
 // Copyright 2015 GISTIC.
 
 #include "exec/spatial-select-node.h"
+#include "exec/spatial-hdfs-scan-node.h"
 
 using namespace spatialimpala;
+
+SpatialSelectNode::SpatialSelectNode(
+    ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs)
+    : SelectNode(pool, tnode, descs) {
+  TSpatialSelectNode spatial_select_node = tnode.spatial_select_node;
+  this->range_ = new Rectangle(spatial_select_node.rectangle);
+  this->x_ = new SlotRef(spatial_select_node.x);
+  this->y_ = new SlotRef(spatial_select_node.y);
+}
+
+Status SpatialSelectNode::Open(RuntimeState* state) {
+  RETURN_IF_ERROR(SelectNode::Open(state));
+
+  // If the underlying child is of type SpatialHdfsScanNode, assign the range query to it.
+  SpatialHdfsScanNode* scan_node = dynamic_cast<SpatialHdfsScanNode*>(child(0));
+  if (scan_node != NULL)
+    scan_node->SetRangeQuery(range_);
+  return Status::OK;
+}
+
+Status SpatialSelectNode::Prepare(RuntimeState* state) {
+  RETURN_IF_ERROR(SelectNode::Prepare(state));
+
+  this->x_->Prepare(state, child(0)->row_desc(), NULL);
+  this->y_->Prepare(state, child(0)->row_desc(), NULL);
+  return Status::OK;
+}
 
 bool SpatialSelectNode::InsideRange(TupleRow* row) {
   DoubleVal x = x_->GetDoubleVal(NULL, row);

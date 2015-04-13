@@ -11,8 +11,11 @@ using namespace std;
 
 namespace spatialimpala {
 
-class SpatialHdfsScanNode : HdfsScanNode {
+class SpatialHdfsScanNode : public HdfsScanNode {
   public:
+    SpatialHdfsScanNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs);
+    ~SpatialHdfsScanNode();
+
     // Uses FileMetadata and casts it to RTree object.
     RTree* GetRTree(const string& filename);
     void SetRangeQuery(Rectangle* rect);
