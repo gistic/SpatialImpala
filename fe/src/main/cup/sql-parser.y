@@ -651,6 +651,11 @@ explain_stmt ::=
      ctas_stmt.setIsExplain();
      RESULT = ctas_stmt;
   :}
+  | KW_EXPLAIN spatial_point_inclusion_stmt:spatial_point_inclusion
+  {:
+     spatial_point_inclusion.setIsExplain();
+     RESULT = spatial_point_inclusion;
+  :}
   ;
 
 // Insert statements have two optional clauses: the column permutation (INSERT into
