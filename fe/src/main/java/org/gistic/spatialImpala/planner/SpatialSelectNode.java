@@ -7,8 +7,10 @@ import org.slf4j.LoggerFactory;
 
 import com.cloudera.impala.planner.*;
 import com.cloudera.impala.analysis.Analyzer;
+import com.cloudera.impala.analysis.SlotRef;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TPlanNode;
+import com.cloudera.impala.thrift.TExpr;
 import com.cloudera.impala.thrift.TPlanNodeType;
 import com.cloudera.impala.thrift.TSpatialSelectNode;
 import com.google.common.base.Preconditions;
@@ -21,11 +23,15 @@ public class SpatialSelectNode extends SelectNode {
   private final static Logger LOG = LoggerFactory.getLogger(SelectNode.class);
   
   private Rectangle rect_;
+  SlotRef X_;
+  SlotRef Y_;
 
-  protected SpatialSelectNode(PlanNodeId id, PlanNode child, Rectangle rect) {
+  public SpatialSelectNode(PlanNodeId id, PlanNode child, Rectangle rect, SlotRef X, SlotRef Y) {
     super(id, child);
     this.rect_ = rect;
     this.displayName_ = "SPATIAL_SELECT";
+    X_ = X;
+    Y_ = Y;
   }
   
   public Rectangle getRectangle(){
@@ -34,8 +40,11 @@ public class SpatialSelectNode extends SelectNode {
 
   @Override
   protected void toThrift(TPlanNode msg) {
+	TExpr exprX = X_.treeToThrift();
+	TExpr exprY = Y_.treeToThrift();
     msg.node_type = TPlanNodeType.SPATIAL_SELECT_NODE;
-    msg.spatial_select_node = new TSpatialSelectNode(rect_.toThrift());
+    msg.spatial_select_node = new TSpatialSelectNode(rect_.toThrift(), exprX.nodes.get(0), exprY.nodes.get(0));
+    
   }
 
   /*@Override

@@ -9,7 +9,7 @@ import com.cloudera.impala.authorization.Privilege;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.analysis.Analyzer;
 import com.cloudera.impala.analysis.StatementBase;
-import com.cloudera.impala.analysis.SelectStmt;
+import com.cloudera.impala.analysis.QueryStmt;
 import com.cloudera.impala.analysis.SelectListItem;
 import com.cloudera.impala.analysis.SelectList;
 import com.cloudera.impala.analysis.TableName;
@@ -23,7 +23,14 @@ import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.NumericLiteral;
 import com.cloudera.impala.analysis.AggregateInfo;
+import com.cloudera.impala.analysis.InlineViewRef;
 import com.cloudera.impala.analysis.TupleId;
+import com.cloudera.impala.analysis.ExprSubstitutionMap;
+import com.google.common.base.Preconditions;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 
 import java.util.List;
 import java.util.ArrayList;
@@ -34,7 +41,8 @@ import java.util.HashMap;
 /**
  * Represents a Spatial Point Inclusion statement
  */
-public class SpatialPointInclusionStmt extends StatementBase {
+public class SpatialPointInclusionStmt extends QueryStmt {
+	private final static Logger LOG = LoggerFactory.getLogger(SpatialPointInclusionStmt.class);
 	private static final String TABLE_NOT_SPATIAL_ERROR_MSG = "Table is not a spatial table.";
 	private static final String TAG = "tag";
 	private static final String X = "x";
@@ -42,86 +50,60 @@ public class SpatialPointInclusionStmt extends StatementBase {
 	
 	private TableName tableName_;
 	
+	protected SelectList selectList_;
+	protected List<TableRef> tableRefs_;
+	
+	protected ArrayList<String> colLabels_;
+	
+	private ExprSubstitutionMap baseTblSmap_ = new ExprSubstitutionMap();
+	
 	//The rectangle provided in the query
 	private final Rectangle rect_;
 	
 	
 	public SpatialPointInclusionStmt (TableName tableName, Rectangle rect) {
+        super(null, null);
+		TableRef tableRef = new TableRef (tableName, null);
+		tableRefs_ = new ArrayList(1);
+		tableRefs_.add(tableRef);
 		this.tableName_ = tableName;
 		this.rect_ = rect;
+		
+		colLabels_ = new ArrayList();
+		
+		List<SelectListItem> items = new ArrayList<SelectListItem>();
+		items.add(new SelectListItem(new SlotRef(tableName_, X), null));
+		items.add(new SelectListItem(new SlotRef(tableName_, Y), null));
+		
+		selectList_ = new SelectList(items);
+		
 	}
 	
+	public List<TableRef> getTableRefs() {
+		return tableRefs_; 
+	}
 	
 	public TupleId getTupleId() {
 		return this.tupleId_;
 	}
-	/*
-	 * If the partitions of the tables ovelap then we will need to
-	 * handle this case by addind DISTINCT to our query statement
-	 */
-	/*public static enum Qualifier {
-	   ALL,
-	   DISTINCT
-	}*/
 	
-	/*
-	 * Each operand should handle one partition of the table. Each statement
-	 * in the operand should be easier select statement whith where predicits
-	 * in case if the  partition only intersects with the rectanlge in the original
-	 * query or select statement without where predicits in case if the 
-	 * patition lies inside the rectangle 
-	 * 
-	 */
-	/*public static class SpatialUnionOperand {
-	   private final QueryStmt queryStmt_;
-	   // Null for the first operand.
-	   private Qualifier qualifier_;
-
-	   // Analyzer used for this operand. Set in analyze().
-	   private Analyzer analyzer_;
-
-	   // map from UnionStmts result slots to our resultExprs; useful during plan generation
-	   private final ExprSubstitutionMap smap_ = new ExprSubstitutionMap();
-
-	   // set if this operand is guaranteed to return an empty result set;
-	   // used in planning when assigning conjuncts
-	   private boolean isDropped_ = false;
-
-	   public SpatialUnionOperand(QueryStmt queryStmt, Qualifier qualifier) {
-	      this.queryStmt_ = queryStmt;
-	      this.qualifier_ = qualifier;
-	   }
-
-	   public void analyze(Analyzer parent) throws AnalysisException {
-	      analyzer_ = new Analyzer(parent);
-	      queryStmt_.analyze(analyzer_);
-	   }
-
-	   public QueryStmt getQueryStmt() { return queryStmt_; }
-	   public Qualifier getQualifier() { return qualifier_; }
-	   // Used for propagating DISTINCT.
-	   public void setQualifier(Qualifier qualifier) { this.qualifier_ = qualifier; }
-	   public Analyzer getAnalyzer() { return analyzer_; }
-	   public ExprSubstitutionMap getSmap() { return smap_; }
-	   public void drop() { isDropped_ = true; }
-	   public boolean isDropped() { return isDropped_; }
-
-	   @Override
-	   public SpatialUnionOperand clone() {
-	      return new SpatialUnionOperand(queryStmt_.clone(), qualifier_);
-	   }
-	}*/
-
-	// before analysis, this contains the list of spatial union operands derived verbatim
-	// from the query;
-	// after analysis, this contains all of distinctOperands followed by allOperands
-	//protected final List<SpatialUnionOperand> operands_;
+	public Rectangle getRectangle () { 
+		return rect_;
+	}
 	
+	public SlotRef getXSlotRef() {
+		return (SlotRef)selectList_.getItems().get(0).getExpr();
+	}
+	
+	public SlotRef getYSlotRef() {
+		return (SlotRef)selectList_.getItems().get(1).getExpr();
+	}
+		
 	//Global indexes of partitions which only intersect with the rectangle
-	List<GlobalIndexRecord> GIsIntersect;
+	private List<GlobalIndexRecord> GIsIntersect;
 	
 	//Global indexes of partitions which fully contained in the rectangle
-	List<GlobalIndexRecord> GIsFullyContained;
+	private List<GlobalIndexRecord> GIsFullyContained;
 
 	// filled during analyze(); contains all operands that need to go through
 	// distinct aggregation
@@ -132,7 +114,6 @@ public class SpatialPointInclusionStmt extends StatementBase {
 	// of the DISTINCT operands)
 	//protected final List<SpatialUnionOperand> allOperands_ = Lists.newArrayList();
 
-	protected AggregateInfo distinctAggInfo_;  // only set if we have DISTINCT ops
 
 	// Single tuple materialized by the spatial union. Set in analyze().
 	protected TupleId tupleId_;
@@ -143,13 +124,102 @@ public class SpatialPointInclusionStmt extends StatementBase {
 	/*public SpatialPointInclusionStmt(List<UnionOperand> operands) {
 	   this.operands_ = operands;
 	}*/
+	
+	
+	
+	public List<GlobalIndexRecord> getIntersectedGIs ()  {
+		return GIsIntersect;
+	}
+	
+	public List<GlobalIndexRecord> getFullyContainedGIs ()  {
+		return GIsFullyContained;
+	}
+	
+	protected void resolveInlineViewRefs(Analyzer analyzer)
+	  throws AnalysisException {
+	  // Gather the inline view substitution maps from the enclosed inline views
+	  for (TableRef tblRef: tableRefs_) {
+	    if (tblRef instanceof InlineViewRef) {
+	      InlineViewRef inlineViewRef = (InlineViewRef) tblRef;
+	      baseTblSmap_ =
+	          ExprSubstitutionMap.combine(baseTblSmap_, inlineViewRef.getBaseTblSmap());
+	    }
+	  }
+	  baseTblResultExprs_ = Expr.trySubstituteList(resultExprs_, baseTblSmap_, analyzer);
+	  LOG.trace("baseTblSmap_: " + baseTblSmap_.debugString());
+	  LOG.trace("resultExprs: " + Expr.debugString(resultExprs_));
+	  LOG.trace("baseTblResultExprs: " + Expr.debugString(baseTblResultExprs_));
+	}
 
 	@Override
 	public void analyze(Analyzer analyzer) throws AnalysisException {
 		super.analyze(analyzer);
 		// Getting table and checking for existence.
-		Table table;
-		if (!tableName_.isFullyQualified()) {
+		
+		// Start out with table refs to establish aliases.
+	    TableRef leftTblRef = null;  // the one to the left of tblRef
+	    for (int i = 0; i < tableRefs_.size(); ++i) {
+	      // Resolve and replace non-InlineViewRef table refs with a BaseTableRef or ViewRef.
+	      TableRef tblRef = tableRefs_.get(i);
+	      tblRef = analyzer.resolveTableRef(tblRef);
+	      Preconditions.checkNotNull(tblRef);
+	      tableRefs_.set(i, tblRef);
+	      tblRef.setLeftTblRef(leftTblRef);
+	      try {
+	        tblRef.analyze(analyzer);
+	      } catch (AnalysisException e) {
+	        // Only re-throw the exception if no tables are missing.
+	        if (analyzer.getMissingTbls().isEmpty()) throw e;
+	      }
+	      leftTblRef = tblRef;
+	    }
+
+	    // All tableRefs have been analyzed, but at least one table was found missing.
+	    // There is no reason to proceed with analysis past this point.
+	    if (!analyzer.getMissingTbls().isEmpty()) {
+	      throw new AnalysisException("Found missing tables. Aborting analysis.");
+	    }
+
+	    // analyze plan hints from select list
+	    selectList_.analyzePlanHints(analyzer);
+
+	    // populate resultExprs_, aliasSmap_, and colLabels_
+	    for (int i = 0; i < selectList_.getItems().size(); ++i) {
+	      SelectListItem item = selectList_.getItems().get(i);
+	      // Analyze the resultExpr before generating a label to ensure enforcement
+	      // of expr child and depth limits (toColumn() label may call toSql()).
+	      item.getExpr().analyze(analyzer);
+	      
+	      resultExprs_.add(item.getExpr());
+	      String label = item.toColumnLabel(i, analyzer.useHiveColLabels());
+	      SlotRef aliasRef = new SlotRef(null, label);
+	      Expr existingAliasExpr = aliasSmap_.get(aliasRef);
+	      if (existingAliasExpr != null && !existingAliasExpr.equals(item.getExpr())) {
+	        // If we have already seen this alias, it refers to more than one column and
+	        // therefore is ambiguous.
+	        ambiguousAliasList_.add(aliasRef);
+	      }
+	      aliasSmap_.put(aliasRef, item.getExpr().clone());
+	      colLabels_.add(label);
+	    }
+	    
+	    // The root stmt may not return a complex-typed value directly because we'd need to
+	    // serialize it in a meaningful way. We allow complex types in the select list for
+	    // non-root stmts to support views.
+	    for (Expr expr: resultExprs_) {
+	      if (expr.getType().isComplexType() && analyzer.isRootAnalyzer()) {
+	        throw new AnalysisException(String.format(
+	            "Expr '%s' in select list of root statement returns a complex type '%s'.\n" +
+	            "Only scalar types are allowed in the select list of the root statement.",
+	            expr.toSql(), expr.getType().toSql()));
+	      }
+	    }
+	    
+	    resolveInlineViewRefs(analyzer);
+		
+	    Table table;
+		
+	    if (!tableName_.isFullyQualified()) {
 			tableName_ = new TableName(analyzer.getDefaultDb(),
 					tableName_.getTbl());
 		}
@@ -191,10 +261,33 @@ public class SpatialPointInclusionStmt extends StatementBase {
 		return "load points from table " + tableName_.getTbl()
 				+ " overlaps rectangle" + rect_.toString() + ";";
 	}
-
-	/*public SelectStmt getSelectStmtIfAny() {
-		return selectStmt_;
-	}*/
+	
+	public SelectList getSelectList() { return selectList_; }
+	
+	@Override
+	protected void substituteOrdinals(List<Expr> exprs, String errorPrefix,
+	    Analyzer analyzer) throws AnalysisException {
+	}
+	  
+	@Override
+	public QueryStmt clone() {
+		SpatialPointInclusionStmt stmt = new SpatialPointInclusionStmt(tableName_, rect_);
+		return stmt;
+	}
+	
+	@Override
+	public void materializeRequiredSlots(Analyzer analyzer) {
+	}
+	
+	@Override
+	public void getMaterializedTupleIds(ArrayList<TupleId> tupleIdList) {
+	  for (TableRef tblRef: tableRefs_) {
+	    tupleIdList.addAll(tblRef.getMaterializedTupleIds());
+	  }
+	}
+	
+	@Override
+	public ArrayList<String> getColLabels() { return colLabels_; }
 
 	/*private Expr createWherePredicate(List<GlobalIndexRecord> globalIndexes) {
 		SlotRef globalIndexSlotRef = new SlotRef(tableName_, TAG);

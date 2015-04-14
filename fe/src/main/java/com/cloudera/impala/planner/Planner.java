@@ -71,7 +71,9 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 
-
+import org.gistic.spatialImpala.analysis.SpatialPointInclusionStmt;
+import org.gistic.spatialImpala.catalog.*;
+import org.gistic.spatialImpala.planner.*;
 /**
  * The planner is responsible for turning parse trees into plan fragments that
  * can be shipped off to backends for execution.
@@ -1899,6 +1901,92 @@ public class Planner {
     unionNode.init(analyzer);
     return unionNode;
   }
+  
+  
+  /**
+   * Create a plan tree for the given SpatialPointInclusionStmt.
+   */
+  private UnionNode createSpatialPointInclusionPlan(
+      Analyzer analyzer, SpatialPointInclusionStmt spatialPointInclusionStmt)
+      throws ImpalaException {
+    UnionNode unionNode =
+        new UnionNode(nodeIdGenerator_.getNextId(), spatialPointInclusionStmt.getTupleId());
+    
+    if (!spatialPointInclusionStmt.getFullyContainedGIs().isEmpty()) {
+      PlanNode opPlan = createSpatialScanNode(analyzer, spatialPointInclusionStmt.getTableRefs().get(0), spatialPointInclusionStmt.getFullyContainedGIs());
+      unionNode.addChild(opPlan, spatialPointInclusionStmt.getBaseTblResultExprs());
+    }
+    
+    if (!spatialPointInclusionStmt.getIntersectedGIs().isEmpty()) {
+      PlanNode opPlan = createSpatialSelectPlan(spatialPointInclusionStmt, analyzer, spatialPointInclusionStmt.getIntersectedGIs());
+      unionNode.addChild(opPlan, spatialPointInclusionStmt.getBaseTblResultExprs());
+    }
+    
+    unionNode.init(analyzer);
+    return unionNode;
+  }
+  
+  private PlanNode createSpatialSelectPlan(SpatialPointInclusionStmt spatialPointInclusionStmt, Analyzer analyzer, List<GlobalIndexRecord> GIsIntersect)
+    throws ImpalaException {
+	// no from clause -> materialize the select's exprs with a UnionNode
+	if (spatialPointInclusionStmt.getTableRefs().isEmpty()) {
+	  LOG.error("No tables found in the spatial point inclusion query");
+	  }
+
+	  // collect output tuples of subtrees
+	  ArrayList<TupleId> rowTuples = Lists.newArrayList();
+	  for (TableRef tblRef: spatialPointInclusionStmt.getTableRefs()) {
+	    rowTuples.addAll(tblRef.getMaterializedTupleIds());
+	  }
+	    
+	  spatialPointInclusionStmt.materializeRequiredSlots(analyzer);
+
+
+	  // create plans for our table refs; use a list here instead of a map to
+	  // maintain a deterministic order of traversing the TableRefs during join
+	  // plan generation (helps with tests)
+	  List<Pair<TableRef, PlanNode>> refPlans = Lists.newArrayList();
+	  for (TableRef ref: spatialPointInclusionStmt.getTableRefs()) {
+	    PlanNode plan = createSpatialScanNode(analyzer, ref, GIsIntersect);
+	    Preconditions.checkState(plan != null);
+	    refPlans.add(new Pair(ref, plan));
+	  }
+	  // save state of conjunct assignment; needed for join plan generation
+	  for (Pair<TableRef, PlanNode> entry: refPlans) {
+	    entry.second.setAssignedConjuncts(analyzer.getAssignedConjuncts());
+	  }
+
+	  PlanNode root = null;
+	  root = createCheapestJoinPlan(analyzer, refPlans);
+	  
+	  root = new SpatialSelectNode (nodeIdGenerator_.getNextId(), refPlans.get(0).second, spatialPointInclusionStmt.getRectangle(), spatialPointInclusionStmt.getXSlotRef(), spatialPointInclusionStmt.getYSlotRef());
+
+	  if (root != null) {
+	    // add unassigned conjuncts_ before aggregation
+	    // (scenario: agg input comes from an inline view which wasn't able to
+	    // evaluate all Where clause conjuncts_ from this scope)
+	    root = addUnassignedConjuncts(analyzer, root.getTupleIds(), root);
+	  }
+
+	  // All the conjuncts_ should be assigned at this point.
+	  // TODO: Re-enable this check here and/or elswehere.
+	  //Preconditions.checkState(!analyzer.hasUnassignedConjuncts());
+	  return root;
+  }
+  
+  private PlanNode createSpatialScanNode(Analyzer analyzer, TableRef tblRef, List<GlobalIndexRecord> GIs)
+	      throws InternalException {
+	    ScanNode scanNode = null;
+	    if (tblRef.getTable() instanceof HdfsTable) {
+	      scanNode = new SpatialHdfsScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
+	          (HdfsTable)tblRef.getTable(), GIs);
+	      scanNode.init(analyzer);
+	      return scanNode;
+	    } 
+	    else {
+	      throw new InternalException("Invalid table ref class: " + tblRef.getClass());
+	    }
+	  }
 
   /**
    * Returns plan tree for unionStmt:
