@@ -1022,7 +1022,12 @@ public class Planner {
           aggInfo.setPartitionExprs(inputPartitionExprs);
         }
       }
-    } else {
+    } 
+    else if (stmt instanceof SpatialPointInclusionStmt) {
+	root = createSpatialPointInclusionPlan((SpatialPointInclusionStmt) stmt, analyzer);
+    }
+
+    else {
       Preconditions.checkState(stmt instanceof UnionStmt);
       root = createUnionPlan((UnionStmt) stmt, analyzer);
     }
@@ -1906,8 +1911,8 @@ public class Planner {
   /**
    * Create a plan tree for the given SpatialPointInclusionStmt.
    */
-  private UnionNode createSpatialPointInclusionPlan(
-      Analyzer analyzer, SpatialPointInclusionStmt spatialPointInclusionStmt)
+  private UnionNode createSpatialPointInclusionPlan(SpatialPointInclusionStmt spatialPointInclusionStmt,
+      Analyzer analyzer)
       throws ImpalaException {
     UnionNode unionNode =
         new UnionNode(nodeIdGenerator_.getNextId(), spatialPointInclusionStmt.getTupleId());
@@ -1960,6 +1965,7 @@ public class Planner {
 	  root = createCheapestJoinPlan(analyzer, refPlans);
 	  
 	  root = new SpatialSelectNode (nodeIdGenerator_.getNextId(), refPlans.get(0).second, spatialPointInclusionStmt.getRectangle(), spatialPointInclusionStmt.getXSlotRef(), spatialPointInclusionStmt.getYSlotRef());
+          root.init(analyzer);
 
 	  if (root != null) {
 	    // add unassigned conjuncts_ before aggregation

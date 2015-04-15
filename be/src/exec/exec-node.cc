@@ -360,6 +360,7 @@ void ExecNode::CollectNodes(TPlanNodeType::type node_type, vector<ExecNode*>* no
 
 void ExecNode::CollectScanNodes(vector<ExecNode*>* nodes) {
   CollectNodes(TPlanNodeType::HDFS_SCAN_NODE, nodes);
+  CollectNodes(TPlanNodeType::SPATIAL_HDFS_SCAN_NODE, nodes);
   CollectNodes(TPlanNodeType::HBASE_SCAN_NODE, nodes);
 }
 

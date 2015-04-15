@@ -19,7 +19,7 @@ class SpatialSelectNode : public SelectNode {
 
   private:
     bool InsideRange(TupleRow* row);
-    bool CopyRows(RowBatch* output_batch);
+    virtual bool CopyRows(RowBatch* output_batch);
 
     RTree* rtree_;
     Rectangle* range_;

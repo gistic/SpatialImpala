@@ -985,7 +985,8 @@ void Coordinator::CreateAggregateCounters(
     const vector<TPlanNode>& nodes = fragment.plan.nodes;
     BOOST_FOREACH(const TPlanNode& node, nodes) {
       if (node.node_type != TPlanNodeType::HDFS_SCAN_NODE
-          && node.node_type != TPlanNodeType::HBASE_SCAN_NODE) {
+          && node.node_type != TPlanNodeType::HBASE_SCAN_NODE
+          && node.node_type != TPlanNodeType::SPATIAL_HDFS_SCAN_NODE) {
         continue;
       }
 

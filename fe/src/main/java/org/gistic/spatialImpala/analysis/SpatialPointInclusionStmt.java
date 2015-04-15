@@ -25,6 +25,7 @@ import com.cloudera.impala.analysis.NumericLiteral;
 import com.cloudera.impala.analysis.AggregateInfo;
 import com.cloudera.impala.analysis.InlineViewRef;
 import com.cloudera.impala.analysis.TupleId;
+import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.ExprSubstitutionMap;
 import com.google.common.base.Preconditions;
 
@@ -76,7 +77,8 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 		items.add(new SelectListItem(new SlotRef(tableName_, Y), null));
 		
 		selectList_ = new SelectList(items);
-		
+		GIsIntersect = new ArrayList<GlobalIndexRecord>();
+                GIsFullyContained = new ArrayList<GlobalIndexRecord>();
 	}
 	
 	public List<TableRef> getTableRefs() {
@@ -174,6 +176,8 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 	      leftTblRef = tblRef;
 	    }
 
+	    tupleId_ = leftTblRef.getDesc().getId();
+	    
 	    // All tableRefs have been analyzed, but at least one table was found missing.
 	    // There is no reason to proceed with analysis past this point.
 	    if (!analyzer.getMissingTbls().isEmpty()) {
@@ -216,7 +220,7 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 	    }
 	    
 	    resolveInlineViewRefs(analyzer);
-		
+
 	    Table table;
 		
 	    if (!tableName_.isFullyQualified()) {
@@ -249,9 +253,11 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
 			if (rect_.contains(gIRecord.getMBR())) {
 				GIsFullyContained.add(gIRecord);
+                          LOG.info("GI is Fully Contained: " + gIRecord.getTag());
 			}
 			else if (rect_.intersects(gIRecord.getMBR())) {
 				GIsIntersect.add(gIRecord);
+                          LOG.info("GI is Intersected: " + gIRecord.getTag());
 			}
 		}
 	}

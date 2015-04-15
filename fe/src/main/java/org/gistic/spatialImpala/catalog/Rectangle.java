@@ -46,7 +46,7 @@ public class Rectangle {
 	
 	//Check if this rectangle contains another rectangle or not
 	public boolean contains (Rectangle rect) {
-		if (this.x1 < rect.x1 && this.x2 > rect.x2 && this.y1 < rect.y1 && this.y2 > rect.y2)
+		if (this.x1 <= rect.x1 && this.x2 > rect.x2 && this.y1 <= rect.y1 && this.y2 > rect.y2)
 			return true;
 		return false;
 	}

@@ -651,6 +651,7 @@ void SimpleScheduler::ComputeFragmentHosts(const TQueryExecRequest& exec_request
   DCHECK_EQ(fragment_exec_params->size(), exec_request.fragments.size());
   vector<TPlanNodeType::type> scan_node_types;
   scan_node_types.push_back(TPlanNodeType::HDFS_SCAN_NODE);
+  scan_node_types.push_back(TPlanNodeType::SPATIAL_HDFS_SCAN_NODE);
   scan_node_types.push_back(TPlanNodeType::HBASE_SCAN_NODE);
   scan_node_types.push_back(TPlanNodeType::DATA_SOURCE_NODE);
 

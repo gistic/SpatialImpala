@@ -51,7 +51,7 @@ class SelectNode : public ExecNode {
   // Copy rows from child_row_batch_ for which conjuncts_ evaluate to true to
   // output_batch, up to limit_.
   // Return true if limit was hit or output_batch should be returned, otherwise false.
-  bool CopyRows(RowBatch* output_batch);
+  virtual bool CopyRows(RowBatch* output_batch);
 };
 
 }

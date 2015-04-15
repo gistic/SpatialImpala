@@ -25,6 +25,7 @@ import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.analysis.InPredicate;
 import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.LiteralExpr;
+import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.SlotDescriptor;
 import com.cloudera.impala.analysis.SlotId;
 import com.cloudera.impala.analysis.SlotRef;
@@ -61,7 +62,8 @@ import com.google.common.collect.Sets;
  * TODO: pass in range restrictions.
  */
 public class SpatialHdfsScanNode extends HdfsScanNode {
-	
+
+  private final static Logger LOG = LoggerFactory.getLogger(SpatialHdfsScanNode.class);
   List<GlobalIndexRecord> GIsForPartitions;
   
   /**
@@ -112,14 +114,33 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     DescriptorTable descTbl = analyzer.getDescTbl();	
     // Populate the list of valid, non-empty partitions to process
     List<HdfsPartition> allPartitions = tbl_.getPartitions();
-    for (GlobalIndexRecord record: GIsForPartitions) {
-      for (HdfsPartition partition: allPartitions) {
-    	Preconditions.checkNotNull(partition);
-    	Preconditions.checkNotNull(partition.getFileDescriptors().get(0));
-        if (partition.getFileDescriptors().get(0).getFileName() == record.getTag()) {
-          partitions_.add(partition);
-          descTbl.addReferencedPartition(tbl_, partition.getId());
-        }  
+    for (HdfsPartition partition: allPartitions) {
+      Preconditions.checkNotNull(partition);
+      if (!partition.hasFileDescriptors())
+        continue;
+
+      LOG.info("Partition Info::(Name: " + partition.getPartitionName() + " Id: " + partition.getId() + ")");
+
+      List<LiteralExpr> values = partition.getPartitionValues();
+      for (LiteralExpr value : values) {
+        if (! (value instanceof StringLiteral))
+          continue;
+
+        boolean found = false;
+        StringLiteral string_value = (StringLiteral) value;
+        for (GlobalIndexRecord record: GIsForPartitions) {
+          LOG.info("Literal: " + string_value.getValue() + " Record name: " + record.getTag());
+          if (string_value.getValue().equals(record.getTag())) {
+            LOG.info("Partition to process::(Name: " + record.getTag() + ")");
+            partitions_.add(partition);
+            descTbl.addReferencedPartition(tbl_, partition.getId());
+            found = true;
+            break;
+          }
+        }
+
+        if (found)
+          break;
       }
     }
   }
