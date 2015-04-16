@@ -51,6 +51,8 @@ HdfsRTreeSpatialScanner::HdfsRTreeSpatialScanner(HdfsScanNode* scan_node, Runtim
       slot_idx_(0),
       error_in_row_(false) {
   only_parsing_header= false;
+  range_ = NULL;
+  rtree_ = NULL;
 }
 
 HdfsRTreeSpatialScanner::~HdfsRTreeSpatialScanner() {
@@ -80,9 +82,11 @@ Status HdfsRTreeSpatialScanner::ProcessSplit() {
   if (spatial_scan_node != NULL)
     range_ = spatial_scan_node->GetRangeQuery();
 
+  // Getting RTree. If there is a range query assigned,
+  // this will be initialized after processing the header of the file. 
+  rtree_ = reinterpret_cast<RTree*>(scan_node_->GetFileMetadata(stream_->filename()));
+
   if (range_ != NULL) {
-    rtree_ = reinterpret_cast<RTree*>(
-      scan_node_->GetFileMetadata(stream_->filename()));
     if (rtree_ == NULL) {
       // Parsing the header only.
       only_parsing_header = true;
@@ -94,20 +98,22 @@ Status HdfsRTreeSpatialScanner::ProcessSplit() {
       scan_node_->SetFileMetadata(stream_->filename(), rtree_);
 
       // Apply the range query on the RTree then issue the new scan ranges.
-      vector<RTreeSplit*> list_of_splits;
+      vector<RTreeSplit> list_of_splits;
       rtree_->ApplyRangeQuery(range_, &list_of_splits);
 
       HdfsFileDesc* file = scan_node_->GetFileDesc(stream_->filename());
       vector<DiskIoMgr::ScanRange*> new_scan_ranges;
       for (int i = 0; i < list_of_splits.size(); i++) {
-        RTreeSplit* split = list_of_splits[i];
+        RTreeSplit split = list_of_splits[i];
         ScanRangeMetadata* metadata =
             reinterpret_cast<ScanRangeMetadata*>(file->splits[0]->meta_data());
         DiskIoMgr::ScanRange* file_range = scan_node_->AllocateScanRange(
-            file->filename.c_str(), split->end_offset - split->start_offset, split->start_offset,
+            file->filename.c_str(), split.end_offset - split.start_offset, split.start_offset,
             metadata->partition_id, file->splits[0]->disk_id(), file->splits[0]->try_cache());
         new_scan_ranges.push_back(file_range);
       }
+
+      RETURN_IF_ERROR(scan_node_->AddDiskIoRanges(new_scan_ranges));
 
       // Update Scan node with the new number of (splits/scan ranges) for this file.
       spatial_scan_node->UpdateScanRanges(THdfsFileFormat::RTREE, file->file_compression,
@@ -417,6 +423,13 @@ Status HdfsRTreeSpatialScanner::FillByteBuffer(bool* eosr, int num_bytes) {
 
 Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {  
   *tuple_found = true;
+
+  // If RTree was constructed, this scan range is already at the first tuple.
+  if (rtree_ != NULL) {
+    DCHECK(delimited_text_parser_->AtTupleStart());
+    return Status::OK;
+  }
+
   if (stream_->scan_range()->offset() != 0) {
     *tuple_found = false;
     // Offset may not point to tuple boundary, skip ahead to the first full tuple

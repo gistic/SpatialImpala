@@ -7,6 +7,7 @@ using namespace spatialimpala;
 SpatialHdfsScanNode::SpatialHdfsScanNode(ObjectPool* pool, const TPlanNode& tnode,
                            const DescriptorTbl& descs)
     : HdfsScanNode(pool, tnode, descs) {
+  range_ = NULL;
 }
 
 SpatialHdfsScanNode::~SpatialHdfsScanNode() {

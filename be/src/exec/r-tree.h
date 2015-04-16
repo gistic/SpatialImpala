@@ -4,12 +4,16 @@
 #define IMPALA_EXEC_RTREE_H
 
 #include "exec/rectangle.h"
+#include "common/logging.h"
 #include <vector>
 
 #define X1_POS 4
 #define Y1_POS 12
 #define X2_POS 20
 #define Y2_POS 28
+
+// (RTree Marker bytes + Tree Size bytes)
+#define FILE_OFFSET 12
 
 using namespace std;
 
@@ -36,12 +40,12 @@ class RTree {
     RTree(int degree, int height, int tree_size);
     virtual ~RTree();
 
-    Rectangle* GetMBR();
+    Rectangle GetMBR();
     void AddNode(char* node_data);
     int GetFirstChildOfNode(int index);
     int GetDegree();
 
-    void ApplyRangeQuery(Rectangle* range_query, vector<RTreeSplit*>* list_of_splits);
+    void ApplyRangeQuery(Rectangle* range_query, vector<RTreeSplit>* list_of_splits);
 
     vector<RTreeNode*> tree_;
 
@@ -53,7 +57,7 @@ class RTree {
     int non_leaf_node_count_;
 
   private:
-    void CreateRTreeSplit(int node_index, vector<RTreeSplit*>* list_of_splits);
+    void CreateRTreeSplit(int node_index, vector<RTreeSplit>* list_of_splits);
 };
 
 }
