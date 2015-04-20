@@ -17,7 +17,7 @@ class RangeQuery: public Expr {
 
     virtual Status GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn);
 
-    virtual BooleanVal GetBooleanVal(ExprContext* context, TupleRow*);
+    virtual BooleanVal GetBooleanVal(ExprContext* context, TupleRow* row);
 
   protected:
     Rectangle* range_;
