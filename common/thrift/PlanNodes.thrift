@@ -21,6 +21,7 @@
 namespace cpp impala
 namespace java com.cloudera.impala.thrift
 
+include "Shapes.thrift"
 include "CatalogObjects.thrift"
 include "ExecStats.thrift"
 include "Exprs.thrift"
@@ -108,10 +109,15 @@ struct TScanRange {
 }
 
 struct TSpatialSelectNode {
-  1: required CatalogObjects.TRectangle rectangle
+  1: required Shapes.TRectangle rectangle
   // Holds TSlotRef for Spatial Columns.
   2: required Exprs.TExprNode x
   3: required Exprs.TExprNode y
+}
+
+struct TSpatialHdfsScanNode {
+  1: required Types.TTupleId tuple_id
+  2: required Shapes.TRectangle rectangle
 }
 
 struct THdfsScanNode {
@@ -367,6 +373,7 @@ struct TPlanNode {
   15: optional TExchangeNode exchange_node
   20: optional TAnalyticNode analytic_node
   21: optional TSpatialSelectNode spatial_select_node
+  22: optional TSpatialHdfsScanNode spatial_hdfs_scan_node
 
   // Label that should be used to print this node to the user.
   17: optional string label

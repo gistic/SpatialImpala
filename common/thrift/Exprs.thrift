@@ -16,6 +16,7 @@ namespace cpp impala
 namespace java com.cloudera.impala.thrift
 
 include "Types.thrift"
+include "Shapes.thrift"
 
 enum TExprNodeType {
   BOOL_LITERAL,
@@ -34,6 +35,7 @@ enum TExprNodeType {
   FUNCTION_CALL,
   AGGREGATE_EXPR,
   DECIMAL_LITERAL,
+  RANGE_QUERY
 }
 
 struct TBoolLiteral {
@@ -93,6 +95,10 @@ struct TAggregateExpr {
   1: required bool is_merge_agg
 }
 
+struct TRangeQuery {
+  1: required Shapes.TRectangle rectangle
+}
+
 // This is essentially a union over the subclasses of Expr.
 struct TExprNode {
   1: required TExprNodeType node_type
@@ -118,6 +124,7 @@ struct TExprNode {
   16: optional TTupleIsNullPredicate tuple_is_null_pred
   17: optional TDecimalLiteral decimal_literal
   18: optional TAggregateExpr agg_expr
+  19: optional TRangeQuery range_query
 }
 
 // A flattened representation of a tree of Expr nodes, obtained by depth-first

@@ -3,7 +3,7 @@
 #ifndef IMPALA_EXEC_RECTANGLE_H
 #define IMPALA_EXEC_RECTANGLE_H
 
-#include "gen-cpp/CatalogObjects_types.h"
+#include "gen-cpp/Shapes_types.h"
 
 using namespace impala;
 

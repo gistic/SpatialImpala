@@ -15,6 +15,7 @@
 namespace cpp impala
 namespace java com.cloudera.impala.thrift
 
+include "Shapes.thrift"
 include "Exprs.thrift"
 include "Status.thrift"
 include "Types.thrift"
@@ -267,20 +268,6 @@ struct TDataSourceTable {
   2: required string init_string
 }
 
-// Represents a point
-struct TPoint {
-  1: required double x
-  2: required double y
-}
-
-// Represents a rectangle used in a global index record for spatial tables.
-struct TRectangle {
-  1: required double x1
-  2: required double y1
-  3: required double x2
-  4: required double y2
-}
-
 // Represents a global index record for spatial tables.
 struct TGlobalIndexRecord {
   // Id of the record.
@@ -290,7 +277,7 @@ struct TGlobalIndexRecord {
   2: required string tag
 
   // MBR of the record.
-  3: required TRectangle mbr
+  3: required Shapes.TRectangle mbr
 }
 
 // Represents a global index used for spatial tables.

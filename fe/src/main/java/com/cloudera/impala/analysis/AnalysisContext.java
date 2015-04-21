@@ -212,12 +212,6 @@ public class AnalysisContext {
       Preconditions.checkState(isQueryStmt());
       if (stmt_ instanceof QueryStmt)
     	  return (QueryStmt) stmt_;
-      else if (stmt_ instanceof SpatialPointInclusionStmt)
-    	  return ((SpatialPointInclusionStmt) stmt_).getSelectStmtIfAny();
-      else if (stmt_ instanceof SpatialKnnStmt)
-        return ((SpatialKnnStmt) stmt_).getSelectStmtIfAny();
-      else if (stmt_ instanceof SpatialJoinStmt)
-        return ((SpatialJoinStmt) stmt_).getSelectStmtIfAny();
       else
     	  return null;
     }
