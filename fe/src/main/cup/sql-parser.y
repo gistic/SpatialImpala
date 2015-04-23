@@ -19,6 +19,7 @@ import org.gistic.spatialImpala.catalog.Rectangle;
 import org.gistic.spatialImpala.analysis.SpatialPointInclusionStmt;
 import org.gistic.spatialImpala.analysis.SpatialKnnStmt;
 import org.gistic.spatialImpala.analysis.SpatialJoinStmt;
+import org.gistic.spatialImpala.analysis.RangeQueryPredicate;
 
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.catalog.ScalarType;
@@ -244,7 +245,7 @@ terminal
   KW_EXISTS, KW_EXPLAIN, KW_EXTERNAL, KW_FALSE, KW_FIELDS, KW_FILEFORMAT, KW_FINALIZE_FN,
   KW_FIRST, KW_FLOAT, KW_FOLLOWING, KW_FOR, KW_FORMAT, KW_FORMATTED, KW_FROM, KW_FULL,
   KW_FUNCTION, KW_FUNCTIONS, KW_GRANT, KW_GROUP, KW_HAVING, KW_IF, KW_IN, KW_INIT_FN,
-  KW_INNER, KW_INPATH, KW_INSERT, KW_INT, KW_INTERMEDIATE, KW_INTERVAL, KW_INTO,
+  KW_INNER, KW_INPATH, KW_INSERT, KW_INSIDE, KW_INT, KW_INTERMEDIATE, KW_INTERVAL, KW_INTO,
   KW_INVALIDATE, KW_IS, KW_JOIN, KW_KNN, KW_LAST, KW_LEFT, KW_LIKE, KW_LIMIT, KW_LINES, KW_LOAD,
   KW_LOCATION, KW_MAP, KW_MERGE_FN, KW_METADATA, KW_NOT, KW_NULL, KW_NULLS, KW_OFFSET,
   KW_ON, KW_OR, KW_ORDER, KW_OUTER, KW_OVER, KW_OVERLAPS, KW_OVERWRITE, KW_PARQUET, KW_PARQUETFILE,
@@ -314,7 +315,7 @@ nonterminal TableName table_name;
 nonterminal FunctionName function_name;
 nonterminal Expr where_clause;
 nonterminal Predicate predicate, between_predicate, comparison_predicate,
-  compound_predicate, in_predicate, like_predicate, exists_predicate;
+  compound_predicate, in_predicate, like_predicate, exists_predicate, range_query_predicate;
 nonterminal ArrayList<Expr> group_by_clause, opt_partition_by_clause;
 nonterminal Expr having_clause;
 nonterminal ArrayList<OrderByElement> order_by_elements, opt_order_by_clause;
@@ -2346,6 +2347,8 @@ predicate ::=
   {: RESULT = p; :}
   | in_predicate:p
   {: RESULT = p; :}
+  | range_query_predicate:p
+  {: RESULT = p; :}
   | exists_predicate:p
   {: RESULT = p; :}
   | like_predicate:p
@@ -2414,6 +2417,11 @@ in_predicate ::=
   {: RESULT = new InPredicate(e, s, false); :}
   | expr:e KW_NOT KW_IN subquery:s
   {: RESULT = new InPredicate(e, s, true); :}
+  ;
+  
+range_query_predicate ::=
+  KW_INSIDE LPAREN rectangle:rect RPAREN
+  {: RESULT = new RangeQueryPredicate(rect); :}
   ;
 
 subquery ::=

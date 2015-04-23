@@ -123,6 +123,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("inner", new Integer(SqlParserSymbols.KW_INNER));
     keywordMap.put("inpath", new Integer(SqlParserSymbols.KW_INPATH));
     keywordMap.put("insert", new Integer(SqlParserSymbols.KW_INSERT));
+    keywordMap.put("inside", new Integer(SqlParserSymbols.KW_INSIDE));
     keywordMap.put("int", new Integer(SqlParserSymbols.KW_INT));
     keywordMap.put("integer", new Integer(SqlParserSymbols.KW_INT));
     keywordMap.put("intermediate", new Integer(SqlParserSymbols.KW_INTERMEDIATE));
