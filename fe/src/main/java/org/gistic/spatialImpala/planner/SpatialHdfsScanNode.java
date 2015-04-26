@@ -4,6 +4,7 @@ package org.gistic.spatialImpala.planner;
 
 import com.cloudera.impala.planner.*;
 import org.gistic.spatialImpala.catalog.*;
+import org.gistic.spatialImpala.analysis.*;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -16,6 +17,7 @@ import java.util.TreeMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.cloudera.impala.analysis.Predicate;
 import com.cloudera.impala.analysis.Analyzer;
 import com.cloudera.impala.analysis.BinaryPredicate;
 import com.cloudera.impala.analysis.BinaryPredicate.Operator;
@@ -50,6 +52,7 @@ import com.cloudera.impala.thrift.TQueryOptions;
 import com.cloudera.impala.thrift.TScanRange;
 import com.cloudera.impala.thrift.TScanRangeLocation;
 import com.cloudera.impala.thrift.TScanRangeLocations;
+import com.cloudera.impala.thrift.TSpatialHdfsScanNode;
 import com.google.common.base.Objects;
 import com.google.common.base.Objects.ToStringHelper;
 import com.google.common.base.Preconditions;
@@ -65,7 +68,7 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
 
   private final static Logger LOG = LoggerFactory.getLogger(SpatialHdfsScanNode.class);
   List<GlobalIndexRecord> GIsForPartitions;
-  
+  Rectangle rect_;
   /**
    * Constructs node to scan given data files of table 'tbl_'.
    */
@@ -73,6 +76,11 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     super(id, desc, tbl);
     GIsForPartitions = GIs;
     displayName_ = "Spatial Scan Hdfs";
+  }
+  
+  public SpatialHdfsScanNode(PlanNodeId id, TupleDescriptor desc, HdfsTable tbl) {
+	super(id, desc, tbl);
+	displayName_ = "Spatial Scan Hdfs";
   }
 
   /**
@@ -87,7 +95,20 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     assignConjuncts(analyzer);
 
     analyzer.enforceSlotEquivalences(tupleIds_.get(0), conjuncts_);
-
+    Predicate predicate;
+    for (int i = 0 ; i < conjuncts_.size(); i++) {
+    	predicate = (Predicate)conjuncts_.get(i);
+    	if (predicate instanceof RangeQueryPredicate) {
+    		GIsForPartitions = ((RangeQueryPredicate)predicate).getGIs();
+    		rect_ = ((RangeQueryPredicate)predicate).getRectangle();
+    	}
+    }
+    
+    if (GIsForPartitions == null || rect_ == null) {
+		String errMsg = "No range query predicate found";
+	    throw new InternalException(errMsg);
+	}
+    
     // do partition pruning before deciding which slots to materialize,
     // we might end up removing some predicates
     computeSpatialPartitions(analyzer);
@@ -149,7 +170,7 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
   @Override
   protected void toThrift(TPlanNode msg) {
     // TODO: retire this once the migration to the new plan is complete
-    msg.hdfs_scan_node = new THdfsScanNode(desc_.getId().asInt());
+    msg.spatial_hdfs_scan_node = new TSpatialHdfsScanNode(desc_.getId().asInt(), rect_.toThrift());
     msg.node_type = TPlanNodeType.SPATIAL_HDFS_SCAN_NODE;
   }
 }

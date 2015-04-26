@@ -1627,7 +1627,14 @@ public class Planner {
     } else if (tblRef.getTable() instanceof HBaseTable) {
       // HBase table
       scanNode = new HBaseScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc());
-    } else {
+    } 
+    else if (tblRef.getTable() instanceof SpatialHdfsTable) {
+	  scanNode = new SpatialHdfsScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
+	          (SpatialHdfsTable)tblRef.getTable());
+	  scanNode.init(analyzer);
+	  return scanNode;
+	}
+    else {
       throw new InternalException("Invalid table ref class: " + tblRef.getClass());
     }
     // TODO: move this to HBaseScanNode.init();
