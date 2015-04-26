@@ -19,6 +19,7 @@ import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.thrift.TExprNode;
+import com.cloudera.impala.thrift.TRangeQuery;
 import com.cloudera.impala.thrift.TExprNodeType;
 import com.cloudera.impala.analysis.Predicate;
 import com.cloudera.impala.analysis.CompoundPredicate;
@@ -34,42 +35,87 @@ import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.Iterator;
 
-public class RangeQueryPredicate extends Predicate {
-  private Rectangle rect_;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+
+public class RangeQueryPredicate extends Predicate {
+  private final static Logger LOG = LoggerFactory.getLogger(RangeQueryPredicate.class);
+  private Rectangle rect_;
+  private static final String TABLE_NOT_SPATIAL_ERROR_MSG = "Table is not a spatial table.";
+  private static final String TAG = "tag";
+  private static final String X = "x";
+  private static final String Y = "y";
+  
   public RangeQueryPredicate(Rectangle rect) {
     this.rect_ = rect;
   }
+  
+  public Rectangle getRectangle() {
+	  return rect_;
+  }
 
-
+  //Global indexes of partitions which either full contained or intersect with the rectangle
+  private List<GlobalIndexRecord> GIsIntersectAndFully;
+	
+  public List<GlobalIndexRecord> getGIs () {
+	  return GIsIntersectAndFully;
+  }
+  
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
 	
 	Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
 	Iterator itr = tupleDescs.iterator();
 	TableName tableName = null;
+	SpatialHdfsTable spatialTable = null;
 	
 	while (itr.hasNext()) {
 		TupleDescriptor desc = (TupleDescriptor) itr.next();
 		if (desc.getTable() instanceof SpatialHdfsTable) {
 			tableName = desc.getTableName();
+			spatialTable = (SpatialHdfsTable) desc.getTable(); 
 		}
 	}
 	
-	if (tableName == null) {
+	if (tableName == null || spatialTable == null) {
 		String errMsg = "No spatial table found";
 	    throw new AnalysisException(errMsg);
 	}
 	
-	children_.add(new SlotRef(tableName, "x"));
-	children_.add(new SlotRef(tableName, "y"));
+	children_.add(new SlotRef(tableName, X));
+	children_.add(new SlotRef(tableName, Y));
     super.analyze(analyzer);
+    
+    
+ // Global index shouldn't be null.
+	GlobalIndex globalIndex = spatialTable.getGlobalIndexIfAny();
+	if (globalIndex == null)
+		throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
+				+ " : Table doesn't have global indexes.");
+	
+	List<String> columnNames = spatialTable.getColumnNames();
+	if (!(columnNames.contains(TAG) && columnNames.contains(X) && columnNames
+			.contains(Y)))
+		throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
+				+ " : Table doesn't have the required columns.");
+
+	//Now fill the GIsIntersect and GIsFullyContained vectors 
+	HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
+	
+	for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+		if (rect_.intersects(gIRecord.getMBR())) {
+			GIsIntersectAndFully.add(gIRecord);
+                       LOG.info("GI is Intersected: " + gIRecord.getTag());
+		}
+	}
     
   }
 
   @Override
   protected void toThrift(TExprNode msg) {
     // Can't serialize a predicate with a subquery
+	  msg.range_query = new TRangeQuery(rect_.toThrift());
   }
 
   @Override
