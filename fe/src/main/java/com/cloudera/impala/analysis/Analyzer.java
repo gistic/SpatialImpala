@@ -17,6 +17,7 @@ package com.cloudera.impala.analysis;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -268,6 +269,10 @@ public class Analyzer {
   };
 
   private final GlobalState globalState_;
+  
+  public Collection<TupleDescriptor> getTubleDescriptors() {
+	  return this.globalState_.descTbl.getTupleDescs();
+  }
 
   public boolean containsSubquery() { return globalState_.containsSubquery; }
 
