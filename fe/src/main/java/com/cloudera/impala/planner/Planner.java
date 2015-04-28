@@ -1616,8 +1616,14 @@ public class Planner {
       throws InternalException {
     ScanNode scanNode = null;
     if (tblRef.getTable() instanceof HdfsTable) {
-      scanNode = new HdfsScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
-          (HdfsTable)tblRef.getTable());
+      if (tblRef.getTable() instanceof SpatialHdfsTable) {
+        scanNode = new SpatialHdfsScanNode(nodeIdGenerator_.getNextId(),
+            tblRef.getDesc(), (SpatialHdfsTable) tblRef.getTable());
+      }
+      else {
+        scanNode = new HdfsScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
+            (HdfsTable)tblRef.getTable());
+      }
       scanNode.init(analyzer);
       return scanNode;
     } else if (tblRef.getTable() instanceof DataSourceTable) {
@@ -1628,12 +1634,6 @@ public class Planner {
       // HBase table
       scanNode = new HBaseScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc());
     } 
-    else if (tblRef.getTable() instanceof SpatialHdfsTable) {
-	  scanNode = new SpatialHdfsScanNode(nodeIdGenerator_.getNextId(), tblRef.getDesc(),
-	          (SpatialHdfsTable)tblRef.getTable());
-	  scanNode.init(analyzer);
-	  return scanNode;
-	}
     else {
       throw new InternalException("Invalid table ref class: " + tblRef.getClass());
     }

@@ -117,7 +117,7 @@ struct TSpatialSelectNode {
 
 struct TSpatialHdfsScanNode {
   1: required Types.TTupleId tuple_id
-  2: required Shapes.TRectangle rectangle
+  2: optional Shapes.TRectangle rectangle
 }
 
 struct THdfsScanNode {

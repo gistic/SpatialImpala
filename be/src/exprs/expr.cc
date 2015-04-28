@@ -51,6 +51,7 @@
 #include "exprs/tuple-is-null-predicate.h"
 #include "exprs/udf-builtins.h"
 #include "exprs/utility-functions.h"
+#include "exprs/range-query.h"
 #include "gen-cpp/Exprs_types.h"
 #include "gen-cpp/Data_types.h"
 #include "runtime/lib-cache.h"
@@ -63,6 +64,7 @@
 #include "gen-cpp/ImpalaService_types.h"
 
 using namespace impala;
+using namespace spatialimpala;
 using namespace impala_udf;
 using namespace std;
 using namespace llvm;
@@ -245,6 +247,9 @@ Status Expr::CreateExpr(ObjectPool* pool, const TExprNode& texpr_node, Expr** ex
       } else {
         *expr = pool->Add(new ScalarFnCall(texpr_node));
       }
+      return Status::OK;
+    case TExprNodeType::RANGE_QUERY:
+      *expr = pool->Add(new RangeQuery(texpr_node));
       return Status::OK;
     default:
       stringstream os;

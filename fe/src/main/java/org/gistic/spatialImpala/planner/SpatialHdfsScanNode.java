@@ -97,18 +97,14 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     analyzer.enforceSlotEquivalences(tupleIds_.get(0), conjuncts_);
     Predicate predicate;
     for (int i = 0 ; i < conjuncts_.size(); i++) {
-    	predicate = (Predicate)conjuncts_.get(i);
-    	if (predicate instanceof RangeQueryPredicate) {
-    		GIsForPartitions = ((RangeQueryPredicate)predicate).getGIs();
-    		rect_ = ((RangeQueryPredicate)predicate).getRectangle();
-    	}
+      predicate = (Predicate)conjuncts_.get(i);
+      if (predicate instanceof RangeQueryPredicate) {
+        GIsForPartitions = ((RangeQueryPredicate)predicate).getGIs();
+    	rect_ = ((RangeQueryPredicate)predicate).getRectangle();
+        break;
+      }
     }
-    
-    if (GIsForPartitions == null || rect_ == null) {
-		String errMsg = "No range query predicate found";
-	    throw new InternalException(errMsg);
-	}
-    
+        
     // do partition pruning before deciding which slots to materialize,
     // we might end up removing some predicates
     computeSpatialPartitions(analyzer);
@@ -142,6 +138,12 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
 
       LOG.info("Partition Info::(Name: " + partition.getPartitionName() + " Id: " + partition.getId() + ")");
 
+      if (GIsForPartitions == null) {
+        partitions_.add(partition);
+        descTbl.addReferencedPartition(tbl_, partition.getId());
+        continue;
+      }
+
       List<LiteralExpr> values = partition.getPartitionValues();
       for (LiteralExpr value : values) {
         if (! (value instanceof StringLiteral))
@@ -169,8 +171,11 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
   
   @Override
   protected void toThrift(TPlanNode msg) {
-    // TODO: retire this once the migration to the new plan is complete
-    msg.spatial_hdfs_scan_node = new TSpatialHdfsScanNode(desc_.getId().asInt(), rect_.toThrift());
+    msg.spatial_hdfs_scan_node = new TSpatialHdfsScanNode(desc_.getId().asInt());
+
+    if (rect_ != null)
+      msg.spatial_hdfs_scan_node.rectangle = rect_.toThrift();
+
     msg.node_type = TPlanNodeType.SPATIAL_HDFS_SCAN_NODE;
   }
 }

@@ -14,7 +14,7 @@ Rectangle::Rectangle(double x1, double y1, double x2, double y2) {
 Rectangle::Rectangle(TRectangle& rect) {
   this->x1_ = rect.x1;
   this->y1_ = rect.y1;
-  this->x2_ = rect.y2;
+  this->x2_ = rect.x2;
   this->y2_ = rect.y2;
 }
 

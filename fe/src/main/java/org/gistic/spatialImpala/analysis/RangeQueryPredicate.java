@@ -27,6 +27,7 @@ import com.cloudera.impala.analysis.BinaryPredicate;
 import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.NumericLiteral;
+import com.google.common.base.Preconditions;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -47,16 +48,17 @@ public class RangeQueryPredicate extends Predicate {
   private static final String X = "x";
   private static final String Y = "y";
   
+  //Global indexes of partitions which either full contained or intersect with the rectangle
+  private List<GlobalIndexRecord> GIsIntersectAndFully;
+
   public RangeQueryPredicate(Rectangle rect) {
     this.rect_ = rect;
+    this.GIsIntersectAndFully = new ArrayList<GlobalIndexRecord>();
   }
   
   public Rectangle getRectangle() {
 	  return rect_;
   }
-
-  //Global indexes of partitions which either full contained or intersect with the rectangle
-  private List<GlobalIndexRecord> GIsIntersectAndFully;
 	
   public List<GlobalIndexRecord> getGIs () {
 	  return GIsIntersectAndFully;
@@ -114,13 +116,18 @@ public class RangeQueryPredicate extends Predicate {
 
   @Override
   protected void toThrift(TExprNode msg) {
-    // Can't serialize a predicate with a subquery
-	  msg.range_query = new TRangeQuery(rect_.toThrift());
+    Preconditions.checkState(children_.size() == 2);
+    msg.range_query = new TRangeQuery(rect_.toThrift());
+    msg.node_type = TExprNodeType.RANGE_QUERY;
   }
 
   @Override
   public String toSqlImpl() {
     StringBuilder strBuilder = new StringBuilder();
+    strBuilder.append("Inside");
+    strBuilder.append("(");
+    strBuilder.append(rect_.toString());
+    strBuilder.append(")");
     return strBuilder.toString();
   }
   

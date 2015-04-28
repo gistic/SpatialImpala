@@ -12,8 +12,8 @@ using namespace spatialimpala;
 using namespace llvm;
 
 RangeQuery::RangeQuery(const TExprNode& node) : Expr(node, true) {
-  // TODO: Initialize Range with the value provided from TExprNode.
-  range_ = NULL;
+  TRangeQuery range_query = node.range_query;
+  this->range_ = new Rectangle(range_query.rectangle);
 }
 
 RangeQuery::~RangeQuery() {
@@ -33,6 +33,14 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
     return Status(ss.str());
   }
 
+  if (children()[0]->type() != TYPE_DOUBLE || children()[1]->type() != TYPE_DOUBLE) {
+    stringstream ss;
+    ss << "Slots are not of TYPE_DOUBLE" << endl;
+    ss << "First Slot is: " << children()[0]->type() << endl;
+    ss << "Second Slot is: " << children()[0]->type() << endl;
+    return Status(ss.str());
+  }
+
   Function* slot_ref_x;
   RETURN_IF_ERROR(children()[0]->GetCodegendComputeFn(state, &slot_ref_x));
   Function* slot_ref_y;
@@ -46,45 +54,51 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
   Value* args[2];
   *fn = CreateIrFunctionPrototype(codegen, "ApplyRangeQuery", &args);
 
-  CodegenAnyVal x_value = CodegenAnyVal::CreateCallWrapped(
-      codegen, &builder, TYPE_DOUBLE, slot_ref_x, args, "x_val");
-
-  CodegenAnyVal y_value = CodegenAnyVal::CreateCallWrapped(
-      codegen, &builder, TYPE_DOUBLE, slot_ref_y, args, "y_val");
-
-  Value* cmp = builder.CreateOr(x_value.GetIsNull(), y_value.GetIsNull(), "is_null");
-  
-  CodegenAnyVal x1_value(codegen, &builder, TYPE_DOUBLE, NULL, "x1_value");
-  CodegenAnyVal y1_value(codegen, &builder, TYPE_DOUBLE, NULL, "y1_value");
-  CodegenAnyVal x2_value(codegen, &builder, TYPE_DOUBLE, NULL, "x2_value");
-  CodegenAnyVal y2_value(codegen, &builder, TYPE_DOUBLE, NULL, "y2_value");
-  
-  x1_value.SetVal(range_->x1_);
-  y1_value.SetVal(range_->y1_);
-  x2_value.SetVal(range_->x2_);
-  y2_value.SetVal(range_->y2_);
-
-  Value* boundary_x1 = builder.CreateFCmpULE(x1_value.GetVal(), x_value.GetVal(), "boundary_x1");
-  Value* boundary_x2 = builder.CreateFCmpUGT(x2_value.GetVal(), x_value.GetVal(), "boundary_x2");
-  Value* boundary_y1 = builder.CreateFCmpULE(y1_value.GetVal(), y_value.GetVal(), "boundary_y1");
-  Value* boundary_y2 = builder.CreateFCmpUGT(y2_value.GetVal(), y_value.GetVal(), "boundary_y2");
-
-  Value* boundary_x = builder.CreateAnd(boundary_x1, boundary_x2, "boundary_x");
-  Value* boundary_y = builder.CreateAnd(boundary_y1, boundary_y2, "boundary_y");
-
-  Value* boundary = builder.CreateAnd(boundary_x, boundary_y, "boundary");
-
   BasicBlock* entry_block = BasicBlock::Create(context, "entry", *fn);
   BasicBlock* null_block = BasicBlock::Create(context, "null_block", *fn);
   BasicBlock* not_null_block = BasicBlock::Create(context, "not_null_block", *fn);
 
   builder.SetInsertPoint(entry_block);
 
+  CodegenAnyVal x_value = CodegenAnyVal::CreateCallWrapped(
+      codegen, &builder, children()[0]->type(), slot_ref_x, args, "x_val");
+
+  CodegenAnyVal y_value = CodegenAnyVal::CreateCallWrapped(
+      codegen, &builder, children()[1]->type(), slot_ref_y, args, "y_val");
+
+  Value* cmp = builder.CreateOr(x_value.GetIsNull(), y_value.GetIsNull(), "is_null");
+
   builder.CreateCondBr(cmp, null_block, not_null_block);
   builder.SetInsertPoint(null_block);
-  builder.CreateRet(codegen->false_value());
+  
+  CodegenAnyVal ret_null(codegen, &builder, TYPE_BOOLEAN, NULL, "ret_null");
+  ret_null.SetVal(codegen->false_value());
+  builder.CreateRet(ret_null.value());
+
   builder.SetInsertPoint(not_null_block);
-  builder.CreateRet(boundary);
+
+  Type* column_type = codegen->GetType(TYPE_DOUBLE);
+
+  Value* x1_value = ConstantFP::get(column_type, range_->x1_);
+  Value* y1_value = ConstantFP::get(column_type, range_->y1_);
+  Value* x2_value = ConstantFP::get(column_type, range_->x2_);
+  Value* y2_value = ConstantFP::get(column_type, range_->y2_);
+
+  Value* boundary_x1 = builder.CreateFCmpULE(x1_value, x_value.GetVal(), "boundary_x1");
+  Value* boundary_x2 = builder.CreateFCmpUGT(x2_value, x_value.GetVal(), "boundary_x2");
+  Value* boundary_y1 = builder.CreateFCmpULE(y1_value, y_value.GetVal(), "boundary_y1");
+  Value* boundary_y2 = builder.CreateFCmpUGT(y2_value, y_value.GetVal(), "boundary_y2");
+
+  Value* boundary_x = builder.CreateAnd(boundary_x1, boundary_x2, "boundary_x");
+  Value* boundary_y = builder.CreateAnd(boundary_y1, boundary_y2, "boundary_y");
+
+  Value* boundary = builder.CreateAnd(boundary_x, boundary_y, "boundary");
+  
+  CodegenAnyVal ret(codegen, &builder, TYPE_BOOLEAN, NULL, "ret");
+  ret.SetVal(boundary);
+  builder.CreateRet(ret.value());
+
+  *fn = codegen->FinalizeFunction(*fn);
 
   ir_compute_fn_ = *fn;
 
