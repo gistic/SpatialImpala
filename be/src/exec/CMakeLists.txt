@@ -61,16 +61,19 @@ add_library(Exec
   hdfs-parquet-table-writer.cc
   hbase-scan-node.cc
   hbase-table-scanner.cc
+  line.cc
   partitioned-aggregation-node.cc
   partitioned-aggregation-node-ir.cc
   partitioned-hash-join-node.cc
   partitioned-hash-join-node-ir.cc
+  point.cc
   read-write-util.cc
   rectangle.cc
   r-tree.cc
   scan-node.cc
   scanner-context.cc
   select-node.cc
+  shape.cc
   sort-exec-exprs.cc
   sort-node.cc
   spatial-hdfs-scan-node.cc

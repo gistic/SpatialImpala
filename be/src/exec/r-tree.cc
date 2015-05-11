@@ -26,7 +26,7 @@ RTree::~RTree() {
 }
 
 Rectangle RTree::GetMBR() {
-  return tree_.empty() ? Rectangle(0,0,0,0) : (tree_[0]->mbr_);
+  return tree_.empty() ? Rectangle() : (tree_[0]->mbr_);
 }
 
 void RTree::AddNode(char* node_data) {

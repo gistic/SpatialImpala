@@ -4,22 +4,25 @@
 #define IMPALA_EXEC_RECTANGLE_H
 
 #include "gen-cpp/Shapes_types.h"
+#include "exec/shape.h"
 
 using namespace impala;
 
 namespace spatialimpala {
 
 // Rtree implementation that represents rtree records.
-class Rectangle {
+class Rectangle : public Shape {
   public:
-    Rectangle(double x1=0, double y1=0, double x2=0, double y2=0);
+    Rectangle(TShape& shape);
     Rectangle(TRectangle& rect);
+    Rectangle(double x1 = 0, double y1 = 0, double x2 = 0, double y2 = 0);
     virtual ~Rectangle();
 
-    bool Intersects(Rectangle* other);
-    bool Contains(Rectangle* other);
+    virtual bool Intersects(Shape* other);
+    virtual bool Contains(Shape* other);
+    virtual void GetMBR(Shape* mbr);
+
     bool Contains(double x, double y);
-    void ToThrift(TRectangle* rect);
 
  // private:
     double x1_;
