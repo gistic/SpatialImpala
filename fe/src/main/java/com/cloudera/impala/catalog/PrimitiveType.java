@@ -40,6 +40,11 @@ public enum PrimitiveType {
   STRING("STRING", 16, TPrimitiveType.STRING),
   VARCHAR("VARCHAR", 16, TPrimitiveType.VARCHAR),
 
+  //Spatial types
+  LINE("LINE", 32, TPrimitiveType.LINE),
+  POINT("POINT", 16, TPrimitiveType.POINT),
+  RECTANGLE("RECTANGLE", 32, TPrimitiveType.RECTANGLE),
+  
   // Unsupported scalar type.
   BINARY("BINARY", -1, TPrimitiveType.BINARY),
 
@@ -81,6 +86,9 @@ public enum PrimitiveType {
       case CHAR: return CHAR;
       case DECIMAL: return DECIMAL;
       case BINARY: return BINARY;
+      case RECTANGLE: return RECTANGLE;
+      case POINT: return POINT;
+      case LINE: return LINE;
     }
     return INVALID_TYPE;
   }
