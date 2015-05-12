@@ -69,6 +69,9 @@ public class ScalarType extends Type {
       case TIMESTAMP: return TIMESTAMP;
       case DATE: return DATE;
       case DATETIME: return DATETIME;
+      case RECTANGLE: return RECTANGLE;
+      case POINT: return POINT;
+      case LINE: return LINE;
       case DECIMAL: return (ScalarType) createDecimalType();
       default:
         Preconditions.checkState(false);
@@ -280,8 +283,10 @@ public class ScalarType extends Type {
         || type_ == PrimitiveType.SMALLINT || type_ == PrimitiveType.INT
         || type_ == PrimitiveType.BIGINT || type_ == PrimitiveType.FLOAT
         || type_ == PrimitiveType.DOUBLE || type_ == PrimitiveType.DATE
+        || type_ == PrimitiveType.RECTANGLE || type_ == PrimitiveType.LINE
         || type_ == PrimitiveType.DATETIME || type_ == PrimitiveType.TIMESTAMP
-        || type_ == PrimitiveType.CHAR || type_ == PrimitiveType.DECIMAL;
+        || type_ == PrimitiveType.CHAR || type_ == PrimitiveType.DECIMAL
+        || type_ == PrimitiveType.POINT;
   }
 
   @Override
