@@ -35,6 +35,9 @@ enum TPrimitiveType {
   DATETIME,
   TIMESTAMP,
   STRING,
+  RECTANGLE,
+  POINT,
+  LINE,
   // Unsupported types
   BINARY,
   DECIMAL,
