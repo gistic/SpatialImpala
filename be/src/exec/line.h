@@ -13,6 +13,7 @@ namespace spatialimpala {
 class Line : public Shape {
   public:
     Line(TShape& shape);
+    Line(double x1 = 0, double y1 = 0, double x2 = 0, double y2 = 0);
     virtual ~Line();
     
     virtual bool Intersects(Shape* other);

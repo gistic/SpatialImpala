@@ -29,6 +29,11 @@
 #include "runtime/mem-pool.h"
 #include "runtime/string-value.inline.h"
 #include "exprs/string-functions.h"
+#include "exec/point.h"
+#include "exec/line.h"
+#include "exec/rectangle.h"
+
+using namespace spatialimpala;
 
 namespace impala {
 
@@ -114,6 +119,46 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       *reinterpret_cast<double*>(slot) =
         StringParser::StringToFloat<double>(data, len, &parse_result);
       break;
+    case TYPE_POINT: {
+      if (len != 16) {
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      double x = StringParser::StringToFloat<double>(data, 8, &parse_result);
+      double y = StringParser::StringToFloat<double>(data + 8, 8, &parse_result);
+      Point point_data(x, y);
+      Point* point_slot = reinterpret_cast<Point*>(slot);
+      *point_slot = point_data;
+      break;
+    }
+    case TYPE_LINE: {
+      if (len != 32) {
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      double x1 = StringParser::StringToFloat<double>(data, 8, &parse_result);
+      double y1 = StringParser::StringToFloat<double>(data + 8, 8, &parse_result);
+      double x2 = StringParser::StringToFloat<double>(data + 16, 8, &parse_result);
+      double y2 = StringParser::StringToFloat<double>(data + 24, 8, &parse_result);
+      Line line_data(x1, y1, x2, y2);
+      Line* line_slot = reinterpret_cast<Line*>(slot);
+      *line_slot = line_data;
+      break;
+    }
+    case TYPE_RECTANGLE: {
+      if (len != 32) {
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      double x1 = StringParser::StringToFloat<double>(data, 8, &parse_result);
+      double y1 = StringParser::StringToFloat<double>(data + 8, 8, &parse_result);
+      double x2 = StringParser::StringToFloat<double>(data + 16, 8, &parse_result);
+      double y2 = StringParser::StringToFloat<double>(data + 24, 8, &parse_result);
+      Rectangle rect_data(x1, y1, x2, y2);
+      Rectangle* rect_slot = reinterpret_cast<Rectangle*>(slot);
+      *rect_slot = rect_data;
+      break;
+    }
     case TYPE_TIMESTAMP: {
       TimestampValue* ts_slot = reinterpret_cast<TimestampValue*>(slot);
       *ts_slot = TimestampValue(data, len);

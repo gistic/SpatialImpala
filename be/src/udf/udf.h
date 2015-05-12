@@ -515,6 +515,89 @@ struct TimestampVal : public AnyVal {
   bool operator!=(const TimestampVal& other) const { return !(*this == other); }
 };
 
+// Structure PointVal
+struct PointVal : public AnyVal {
+  double x;
+  double y;
+
+  PointVal(double x = 0, double y = 0) {
+    this->x = x;
+    this->y = y;
+  }
+
+  static PointVal null() {
+    PointVal result;
+    result.is_null = true;
+    return result;
+  }
+
+  bool operator==(const PointVal& other) const {
+    if (is_null && other.is_null) return true;
+    if (is_null || other.is_null) return false;
+    return x == other.x && y == other.y;
+  }
+
+  bool operator!=(const PointVal& other) const { return !(*this == other); }
+};
+
+// Structure LineVal
+struct LineVal : public AnyVal {
+  double x1;
+  double y1;
+  double x2;
+  double y2;
+
+  LineVal(double x1 = 0, double y1 = 0, double x2 = 0, double y2 = 0) {
+    this->x1 = x1;
+    this->y1 = y1;
+    this->x2 = x2;
+    this->y2 = y2;
+  }
+
+  static LineVal null() {
+    LineVal result;
+    result.is_null = true;
+    return result;
+  }
+
+  bool operator==(const LineVal& other) const {
+    if (is_null && other.is_null) return true;
+    if (is_null || other.is_null) return false;
+    return x1 == other.x1 && y1 == other.y1 && x2 == other.x2 && y2 == other.y2;
+  }
+
+  bool operator!=(const LineVal& other) const { return !(*this == other); }
+};
+
+// Structure RectangleVal
+struct RectangleVal : public AnyVal {
+  double x1;
+  double y1;
+  double x2;
+  double y2;
+
+  RectangleVal(double x1 = 0, double y1 = 0, double x2 = 0, double y2 = 0) {
+    this->x1 = x1;
+    this->y1 = y1;
+    this->x2 = x2;
+    this->y2 = y2;
+  }
+
+  static RectangleVal null() {
+    RectangleVal result;
+    result.is_null = true;
+    return result;
+  }
+
+  bool operator==(const RectangleVal& other) const {
+    if (is_null && other.is_null) return true;
+    if (is_null || other.is_null) return false;
+    return x1 == other.x1 && y1 == other.y1 && x2 == other.x2 && y2 == other.y2;
+  }
+
+  bool operator!=(const RectangleVal& other) const { return !(*this == other); }
+};
+
 // Note: there is a difference between a NULL string (is_null == true) and an
 // empty string (len == 0).
 struct StringVal : public AnyVal {

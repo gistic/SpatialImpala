@@ -36,6 +36,9 @@ enum PrimitiveType {
   TYPE_DOUBLE,
   TYPE_TIMESTAMP,
   TYPE_STRING,
+  TYPE_RECTANGLE,
+  TYPE_POINT,
+  TYPE_LINE,
   TYPE_DATE,        // Not implemented
   TYPE_DATETIME,    // Not implemented
   TYPE_BINARY,      // Not implemented
@@ -193,6 +196,12 @@ struct ColumnType {
       case TYPE_TIMESTAMP:
         // This is the size of the slot, the actual size of the data is 12.
         return 16;
+      case TYPE_POINT:
+        return 16;
+      case TYPE_LINE:
+        return 32;
+      case TYPE_RECTANGLE:
+        return 32;
       case TYPE_DECIMAL:
         return GetDecimalByteSize(precision);
       case TYPE_DATE:

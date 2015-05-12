@@ -40,6 +40,9 @@ PrimitiveType ThriftToType(TPrimitiveType::type ttype) {
     case TPrimitiveType::BINARY: return TYPE_BINARY;
     case TPrimitiveType::DECIMAL: return TYPE_DECIMAL;
     case TPrimitiveType::CHAR: return TYPE_CHAR;
+    case TPrimitiveType::POINT: return TYPE_POINT;
+    case TPrimitiveType::LINE: return TYPE_LINE;
+    case TPrimitiveType::RECTANGLE: return TYPE_RECTANGLE;
     default: return INVALID_TYPE;
   }
 }
@@ -63,6 +66,9 @@ TPrimitiveType::type ToThrift(PrimitiveType ptype) {
     case TYPE_BINARY: return TPrimitiveType::BINARY;
     case TYPE_DECIMAL: return TPrimitiveType::DECIMAL;
     case TYPE_CHAR: return TPrimitiveType::CHAR;
+    case TYPE_POINT: return TPrimitiveType::POINT;
+    case TYPE_LINE: return TPrimitiveType::LINE;
+    case TYPE_RECTANGLE: return TPrimitiveType::RECTANGLE;
     default: return TPrimitiveType::INVALID_TYPE;
   }
 }
@@ -86,6 +92,9 @@ string TypeToString(PrimitiveType t) {
     case TYPE_BINARY: return "BINARY";
     case TYPE_DECIMAL: return "DECIMAL";
     case TYPE_CHAR: return "CHAR";
+    case TYPE_POINT: return "POINT";
+    case TYPE_LINE: return "LINE";
+    case TYPE_RECTANGLE: return "RECTANGLE";
   };
   return "";
 }
@@ -110,6 +119,9 @@ string TypeToOdbcString(PrimitiveType t) {
     case TYPE_BINARY: return "binary";
     case TYPE_DECIMAL: return "decimal";
     case TYPE_CHAR: return "char";
+    case TYPE_POINT: return "point";
+    case TYPE_LINE: return "line";
+    case TYPE_RECTANGLE: return "rectangle";
   };
   return "unknown";
 }

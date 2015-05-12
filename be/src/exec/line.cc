@@ -17,6 +17,14 @@ Line::Line(TShape& shape) : Shape(shape) {
   this->y2_ = line.y2;
 }
 
+Line::Line(double x1, double y1, double x2, double y2) {
+  shape_.type = TShapeType::LINE;
+  this->x1_ = x1;
+  this->y1_ = y1;
+  this->x2_ = x2;
+  this->y2_ = y2;
+}
+
 Line::~Line() {
 }
 
