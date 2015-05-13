@@ -281,6 +281,24 @@ void* ExprContext::GetValue(Expr* e, TupleRow* row) {
           return NULL;
       }
     }
+    case TYPE_POINT: {
+      impala_udf::PointVal v = e->GetPointVal(this, row);
+      if (v.is_null) return NULL;
+      result_.point_val = Point::FromPointVal(v);
+      return &result_.point_val;
+    }
+    case TYPE_LINE: {
+      impala_udf::LineVal v = e->GetLineVal(this, row);
+      if (v.is_null) return NULL;
+      result_.line_val = Line::FromLineVal(v);
+      return &result_.line_val;
+    }
+    case TYPE_RECTANGLE: {
+      impala_udf::RectangleVal v = e->GetRectangleVal(this, row);
+      if (v.is_null) return NULL;
+      result_.rectangle_val = Rectangle::FromRectangleVal(v);
+      return &result_.rectangle_val;
+    }
     default:
       DCHECK(false) << "Type not implemented: " << e->type_.DebugString();
       return NULL;
@@ -329,4 +347,13 @@ TimestampVal ExprContext::GetTimestampVal(TupleRow* row) {
 }
 DecimalVal ExprContext::GetDecimalVal(TupleRow* row) {
   return root_->GetDecimalVal(this, row);
+}
+PointVal ExprContext::GetPointVal(TupleRow* row) {
+  return root_->GetPointVal(this, row);
+}
+LineVal ExprContext::GetLineVal(TupleRow* row) {
+  return root_->GetLineVal(this, row);
+}
+RectangleVal ExprContext::GetRectangleVal(TupleRow* row) {
+  return root_->GetRectangleVal(this, row);
 }

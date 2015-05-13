@@ -131,6 +131,9 @@ class Expr {
   virtual StringVal GetStringVal(ExprContext* context, TupleRow*);
   virtual TimestampVal GetTimestampVal(ExprContext* context, TupleRow*);
   virtual DecimalVal GetDecimalVal(ExprContext* context, TupleRow*);
+  virtual PointVal GetPointVal(ExprContext* context, TupleRow*);
+  virtual LineVal GetLineVal(ExprContext* context, TupleRow*);
+  virtual RectangleVal GetRectangleVal(ExprContext* context, TupleRow*);
 
   // Get the number of digits after the decimal that should be displayed for this
   // value. Returns -1 if no scale has been specified (currently the scale is only set for

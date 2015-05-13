@@ -47,3 +47,8 @@ void Point::GetMBR(Shape* mbr) {
   mbr_rect->x2_ = this->x_;
   mbr_rect->y2_ = this->y_;
 }
+
+Point Point::FromPointVal(PointVal& pv) {
+  Point p(pv.x, pv.y);
+  return p;
+}

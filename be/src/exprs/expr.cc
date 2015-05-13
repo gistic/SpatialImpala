@@ -534,6 +534,18 @@ AnyVal* Expr::GetConstVal(ExprContext* context) {
       constant_val_.reset(new DecimalVal(GetDecimalVal(context, NULL)));
       break;
     }
+    case TYPE_POINT: {
+      constant_val_.reset(new PointVal(GetPointVal(context, NULL)));
+      break;
+    }
+    case TYPE_LINE: {
+      constant_val_.reset(new LineVal(GetLineVal(context, NULL)));
+      break;
+    }
+    case TYPE_RECTANGLE: {
+      constant_val_.reset(new RectangleVal(GetRectangleVal(context, NULL)));
+      break;
+    }
     default:
       DCHECK(false) << "Type not implemented: " << type();
   }
@@ -607,4 +619,16 @@ TimestampVal Expr::GetTimestampVal(ExprContext* context, TupleRow* row) {
 DecimalVal Expr::GetDecimalVal(ExprContext* context, TupleRow* row) {
   DCHECK(false) << DebugString();
   return DecimalVal::null();
+}
+PointVal Expr::GetPointVal(ExprContext* context, TupleRow*) {
+  DCHECK(false) << DebugString();
+  return PointVal::null();
+}
+LineVal Expr::GetLineVal(ExprContext* context, TupleRow*) {
+  DCHECK(false) << DebugString();
+  return LineVal::null();
+}
+RectangleVal Expr::GetRectangleVal(ExprContext* context, TupleRow*) {
+  DCHECK(false) << DebugString();
+  return RectangleVal::null();
 }

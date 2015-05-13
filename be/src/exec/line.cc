@@ -105,3 +105,8 @@ void Line::GetMBR(Shape* mbr) {
   mbr_rect->x2_ = max(this->x1_, this->x2_);
   mbr_rect->y2_ = max(this->y1_, this->y2_);
 }
+
+Line Line::FromLineVal(LineVal& lv) {
+  Line l(lv.x1, lv.y1, lv.x2, lv.y2);
+  return l;
+}

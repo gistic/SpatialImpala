@@ -20,10 +20,14 @@
 #include "codegen/llvm-codegen.h"
 #include "gen-cpp/Exprs_types.h"
 #include "runtime/runtime-state.h"
+#include "exec/point.h"
+#include "exec/line.h"
+#include "exec/rectangle.h"
 
 using namespace impala_udf;
 using namespace std;
 using namespace llvm;
+using namespace spatialimpala;
 
 namespace impala {
 
@@ -155,6 +159,11 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   if (type_.type == TYPE_CHAR) {
     *fn = NULL;
     return Status("Codegen for Char not supported.");
+  }
+  if (type_.type == TYPE_POINT || type_.type == TYPE_LINE
+    || type_.type == TYPE_RECTANGLE) {
+    *fn = NULL;
+    return Status("Codegen for Shapes not supported.");
   }
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
@@ -457,6 +466,30 @@ DecimalVal SlotRef::GetDecimalVal(ExprContext* context, TupleRow* row) {
       DCHECK(false);
       return DecimalVal::null();
   }
+}
+
+PointVal SlotRef::GetPointVal(ExprContext* context, TupleRow* row) {
+  DCHECK_EQ(type_.type, TYPE_POINT);
+  Tuple* t = row->GetTuple(tuple_idx_);
+  if (t == NULL || t->IsNull(null_indicator_offset_)) return PointVal::null();
+  Point* pv = reinterpret_cast<Point*>(t->GetSlot(slot_offset_));
+  return PointVal(pv->x_, pv->y_);
+}
+
+LineVal SlotRef::GetLineVal(ExprContext* context, TupleRow* row) {
+  DCHECK_EQ(type_.type, TYPE_LINE);
+  Tuple* t = row->GetTuple(tuple_idx_);
+  if (t == NULL || t->IsNull(null_indicator_offset_)) return LineVal::null();
+  Line* lv = reinterpret_cast<Line*>(t->GetSlot(slot_offset_));
+  return LineVal(lv->x1_, lv->y1_, lv->x2_, lv->y2_);
+}
+
+RectangleVal SlotRef::GetRectangleVal(ExprContext* context, TupleRow* row) {
+  DCHECK_EQ(type_.type, TYPE_RECTANGLE);
+  Tuple* t = row->GetTuple(tuple_idx_);
+  if (t == NULL || t->IsNull(null_indicator_offset_)) return RectangleVal::null();
+  Rectangle* rv = reinterpret_cast<Rectangle*>(t->GetSlot(slot_offset_));
+  return RectangleVal(rv->x1_, rv->y1_, rv->x2_, rv->y2_);
 }
 
 }

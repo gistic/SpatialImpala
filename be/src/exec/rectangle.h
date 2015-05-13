@@ -5,8 +5,10 @@
 
 #include "gen-cpp/Shapes_types.h"
 #include "exec/shape.h"
+#include "udf/udf.h"
 
 using namespace impala;
+using namespace impala_udf;
 
 namespace spatialimpala {
 
@@ -23,6 +25,8 @@ class Rectangle : public Shape {
     virtual void GetMBR(Shape* mbr);
 
     bool Contains(double x, double y);
+
+    static Rectangle FromRectangleVal(RectangleVal& rv);
 
  // private:
     double x1_;

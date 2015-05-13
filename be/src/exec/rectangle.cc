@@ -101,3 +101,8 @@ void Rectangle::GetMBR(Shape* mbr) {
   mbr_rect->x2_ = this->x2_;
   mbr_rect->y2_ = this->y2_;
 }
+
+Rectangle Rectangle::FromRectangleVal(RectangleVal& rv) {
+  Rectangle r(rv.x1, rv.y1, rv.x2, rv.y2);
+  return r;
+}

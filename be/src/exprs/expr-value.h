@@ -18,6 +18,11 @@
 #include "runtime/decimal-value.h"
 #include "runtime/string-value.h"
 #include "runtime/timestamp-value.h"
+#include "exec/point.h"
+#include "exec/line.h"
+#include "exec/rectangle.h"
+
+using namespace spatialimpala;
 
 namespace impala {
 
@@ -35,6 +40,9 @@ struct ExprValue {
   Decimal4Value decimal4_val;
   Decimal8Value decimal8_val;
   Decimal16Value decimal16_val;
+  Point point_val;
+  Line line_val;
+  Rectangle rectangle_val;
 
   ExprValue()
     : bool_val(false),
@@ -48,7 +56,10 @@ struct ExprValue {
       timestamp_val(),
       decimal4_val(),
       decimal8_val(),
-      decimal16_val() {
+      decimal16_val(),
+      point_val(),
+      line_val(),
+      rectangle_val() {
   }
 
   ExprValue(bool v): bool_val(v) {}
@@ -66,6 +77,10 @@ struct ExprValue {
     string_val.ptr = const_cast<char*>(string_data.data());
     string_val.len = string_data.size();
   }
+
+  ExprValue(Point p) { point_val = p; }
+  ExprValue(Line l) { line_val = l; }
+  ExprValue(Rectangle r) { rectangle_val = r; }
 
   // Sets the value for type to '0' and returns a pointer to the data
   void* SetToZero(const ColumnType& type) {

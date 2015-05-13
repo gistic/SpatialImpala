@@ -5,8 +5,10 @@
 
 #include "gen-cpp/Shapes_types.h"
 #include "exec/shape.h"
+#include "udf/udf.h"
 
 using namespace impala;
+using namespace impala_udf;
 
 namespace spatialimpala {
 
@@ -19,6 +21,8 @@ class Line : public Shape {
     virtual bool Intersects(Shape* other);
     virtual bool Contains(Shape* other);
     virtual void GetMBR(Shape* mbr);
+
+    static Line FromLineVal(LineVal& lv);
 
 //  private:
     double x1_;

@@ -117,6 +117,9 @@ class ExprContext {
   StringVal GetStringVal(TupleRow* row);
   TimestampVal GetTimestampVal(TupleRow* row);
   DecimalVal GetDecimalVal(TupleRow* row);
+  PointVal GetPointVal(TupleRow* row);
+  LineVal GetLineVal(TupleRow* row);
+  RectangleVal GetRectangleVal(TupleRow* row);
 
   // Frees all local allocations made by fn_contexts_. This can be called when result data
   // from this context is no longer needed.
