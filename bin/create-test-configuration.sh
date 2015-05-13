@@ -63,17 +63,16 @@ rm -f authz-provider.ini
 if [ $CREATE_METASTORE -eq 1 ]; then
   echo "Creating postgresql database for Hive metastore"
   set +o errexit
-  dropdb -U hiveuser hive_$METASTORE_DB
+  sudo -u postgres dropdb -h localhost hive_$METASTORE_DB  
   set -e
-  createdb -U hiveuser hive_$METASTORE_DB
-
-  psql -U hiveuser -d hive_$METASTORE_DB \
+  echo "CREATE DATABASE hive_$METASTORE_DB OWNER postgres ENCODING 'UTF8';" | sudo -u postgres psql
+  sudo -u postgres psql -d hive_$METASTORE_DB \
        -f ${HIVE_HOME}/scripts/metastore/upgrade/postgres/hive-schema-0.10.0.postgres.sql
 fi
 
 set +e
 echo "Creating Sentry Policy Server DB"
-createdb -U hiveuser sentry_policy
+createdb sentry_policy
 set -e
 
 function generate_config {
