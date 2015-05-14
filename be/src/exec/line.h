@@ -31,6 +31,8 @@ class Line : public Shape {
     double y2_;
 };
 
+std::ostream& operator<< (std::ostream& out, Line const &value);
+
 }
 
 #endif

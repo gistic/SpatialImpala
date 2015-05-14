@@ -110,3 +110,9 @@ Line Line::FromLineVal(LineVal& lv) {
   Line l(lv.x1, lv.y1, lv.x2, lv.y2);
   return l;
 }
+
+std::ostream& spatialimpala::operator<< (std::ostream& out, Line const &value) {
+  out << "Line(";
+  out << value.x1_ << ", " << value.y1_ << ", " << value.x2_ << ", " << value.y2_ << ")";
+  return out;
+}

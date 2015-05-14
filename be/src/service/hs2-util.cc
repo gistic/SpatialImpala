@@ -17,10 +17,14 @@
 #include "common/logging.h"
 #include "runtime/raw-value.h"
 #include "runtime/types.h"
+#include "exec/point.h"
+#include "exec/line.h"
+#include "exec/rectangle.h"
 
 using namespace apache::hive::service::cli;
 using namespace impala;
 using namespace std;
+using namespace spatialimpala;
 
 // Set the null indicator bit for row 'row_idx', assuming this will be called for
 // successive increasing values of row_idx. If 'is_null' is true, the row_idx'th bit will
@@ -183,6 +187,30 @@ void impala::ExprValueToHS2TColumn(const void* value, const TColumnType& type,
       nulls = &column->stringVal.nulls;
       break;
     }
+    case TPrimitiveType::POINT:
+      if (value != NULL) {
+        stringstream ss;
+        ss << (*reinterpret_cast<const Point*>(value));
+        column->stringVal.values.push_back(ss.str());
+      }
+      nulls = &column->stringVal.nulls;
+      break;
+    case TPrimitiveType::LINE:
+      if (value != NULL) {
+        stringstream ss;
+        ss << (*reinterpret_cast<const Line*>(value));
+        column->stringVal.values.push_back(ss.str());
+      }
+      nulls = &column->stringVal.nulls;
+      break;
+    case TPrimitiveType::RECTANGLE:
+      if (value != NULL) {
+        stringstream ss;
+        ss << (*reinterpret_cast<const Rectangle*>(value));
+        column->stringVal.values.push_back(ss.str());
+      }
+      nulls = &column->stringVal.nulls;
+      break;
     default:
       DCHECK(false) << "Unhandled type: "
                     << TypeToString(ThriftToType(type.types[0].scalar_type.type));

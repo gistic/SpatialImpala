@@ -29,6 +29,8 @@ class Point : public Shape {
     double y_;
 };
 
+std::ostream& operator<< (std::ostream& out, Point const &value);
+
 }
 
 #endif

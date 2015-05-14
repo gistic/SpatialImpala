@@ -18,9 +18,13 @@
 #include "runtime/raw-value.h"
 #include "runtime/string-value.inline.h"
 #include "runtime/tuple.h"
+#include "exec/point.h"
+#include "exec/line.h"
+#include "exec/rectangle.h"
 
 using namespace boost;
 using namespace std;
+using namespace spatialimpala;
 
 namespace impala {
 
@@ -67,6 +71,15 @@ void RawValue::PrintValueAsBytes(const void* value, const ColumnType& type,
       break;
     case TYPE_DECIMAL:
       stream->write(chars, type.GetByteSize());
+      break;
+    case TYPE_POINT:
+      (*stream) << (*reinterpret_cast<const Point*>(value));
+      break;
+    case TYPE_LINE:
+      (*stream) << (*reinterpret_cast<const Line*>(value));
+      break;
+    case TYPE_RECTANGLE:
+      (*stream) << (*reinterpret_cast<const Rectangle*>(value));
       break;
     default:
       DCHECK(false) << "bad RawValue::PrintValue() type: " << type.DebugString();
@@ -295,6 +308,15 @@ void RawValue::Write(const void* value, const ColumnType& type,
     }
     case TYPE_DECIMAL:
       memcpy(dst, value, type.GetByteSize());
+      break;
+    case TYPE_POINT:
+      *reinterpret_cast<Point*>(dst) = *reinterpret_cast<const Point*>(value);
+      break;
+    case TYPE_LINE:
+      *reinterpret_cast<Line*>(dst) = *reinterpret_cast<const Line*>(value);
+      break;
+    case TYPE_RECTANGLE:
+      *reinterpret_cast<Rectangle*>(dst) = *reinterpret_cast<const Rectangle*>(value);
       break;
     default:
       DCHECK(false) << "RawValue::Write(): bad type: " << type.DebugString();

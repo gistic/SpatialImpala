@@ -106,3 +106,9 @@ Rectangle Rectangle::FromRectangleVal(RectangleVal& rv) {
   Rectangle r(rv.x1, rv.y1, rv.x2, rv.y2);
   return r;
 }
+
+std::ostream& spatialimpala::operator<< (std::ostream& out, Rectangle const &value) {
+  out << "Rectangle(";
+  out << value.x1_ << ", " << value.y1_ << ", " << value.x2_ << ", " << value.y2_ << ")";
+  return out;
+}

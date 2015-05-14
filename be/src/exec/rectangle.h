@@ -35,6 +35,8 @@ class Rectangle : public Shape {
     double y2_;
 };
 
+std::ostream& operator<< (std::ostream& out, Rectangle const &value);
+
 }
 
 #endif

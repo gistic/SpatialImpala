@@ -52,3 +52,9 @@ Point Point::FromPointVal(PointVal& pv) {
   Point p(pv.x, pv.y);
   return p;
 }
+
+std::ostream& spatialimpala::operator<< (std::ostream& out, Point const &value) {
+  out << "Point(";
+  out << value.x_ << ", " << value.y_ << ")";
+  return out;
+}
