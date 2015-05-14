@@ -171,7 +171,7 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
   
   @Override
   protected void toThrift(TPlanNode msg) {
-    msg.spatial_hdfs_scan_node = new TSpatialHdfsScanNode(desc_.getId().asInt());
+    msg.spatial_hdfs_scan_node = new TSpatialHdfsScanNode(desc_.getId().asInt(), (rect_ != null));
 
     if (rect_ != null)
       msg.spatial_hdfs_scan_node.rectangle = rect_.toThrift();
