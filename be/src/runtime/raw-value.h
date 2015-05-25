@@ -26,6 +26,11 @@
 #include "runtime/timestamp-value.h"
 #include "runtime/types.h"
 #include "util/hash-util.h"
+#include "exec/point.h"
+#include "exec/line.h"
+#include "exec/rectangle.h"
+
+using namespace spatialimpala;
 
 namespace impala {
 
@@ -311,6 +316,15 @@ inline void RawValue::PrintValue(const void* value, const ColumnType& type, int 
         default:
           DCHECK(false) << type;
       }
+      break;
+    case TYPE_POINT:
+      (*stream) << (*reinterpret_cast<const Point*>(value));
+      break;
+    case TYPE_LINE:
+      (*stream) << (*reinterpret_cast<const Line*>(value));
+      break;
+    case TYPE_RECTANGLE:
+      (*stream) << (*reinterpret_cast<const Rectangle*>(value));
       break;
     default:
       DCHECK(false);

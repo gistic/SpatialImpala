@@ -41,9 +41,9 @@ public enum PrimitiveType {
   VARCHAR("VARCHAR", 16, TPrimitiveType.VARCHAR),
 
   //Spatial types
-  LINE("LINE", 32, TPrimitiveType.LINE),
-  POINT("POINT", 16, TPrimitiveType.POINT),
-  RECTANGLE("RECTANGLE", 32, TPrimitiveType.RECTANGLE),
+  LINE("LINE", 48, TPrimitiveType.LINE),
+  POINT("POINT", 32, TPrimitiveType.POINT),
+  RECTANGLE("RECTANGLE", 48, TPrimitiveType.RECTANGLE),
   
   // Unsupported scalar type.
   BINARY("BINARY", -1, TPrimitiveType.BINARY),

@@ -21,8 +21,10 @@ class Shape {
 
     TShapeType::type GetType();
 
+    static double ConvertToDouble(const char* data);
+
   protected:
-    TShape shape_;
+    TShapeType::type type_;
 };
 
 }

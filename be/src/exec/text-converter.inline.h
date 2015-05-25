@@ -29,10 +29,12 @@
 #include "runtime/mem-pool.h"
 #include "runtime/string-value.inline.h"
 #include "exprs/string-functions.h"
+#include "util/url-coding.h"
 #include "exec/point.h"
 #include "exec/line.h"
 #include "exec/rectangle.h"
 
+using namespace std;
 using namespace spatialimpala;
 
 namespace impala {
@@ -120,40 +122,76 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
         StringParser::StringToFloat<double>(data, len, &parse_result);
       break;
     case TYPE_POINT: {
-      if (len != 16) {
+      string encoded_data(data, len);
+      string decoded_data;
+
+      if (! Base64Decode(encoded_data, &decoded_data)) {
+        VLOG_QUERY << "Point data couldn't be decoded from Base64.";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
       }
-      double x = StringParser::StringToFloat<double>(data, 8, &parse_result);
-      double y = StringParser::StringToFloat<double>(data + 8, 8, &parse_result);
+
+      if (decoded_data.length() != 16) {
+        VLOG_QUERY << "Point data length is not correct: " << decoded_data.length();
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      
+      const char* p_data = decoded_data.c_str();
+      double x = Shape::ConvertToDouble(p_data);
+      double y = Shape::ConvertToDouble(p_data + 8);
       Point point_data(x, y);
       Point* point_slot = reinterpret_cast<Point*>(slot);
       *point_slot = point_data;
       break;
     }
     case TYPE_LINE: {
-      if (len != 32) {
+      string encoded_data(data, len);
+      string decoded_data;
+
+      if (! Base64Decode(encoded_data, &decoded_data)) {
+        VLOG_QUERY << "Line data couldn't be decoded from Base64.";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
       }
-      double x1 = StringParser::StringToFloat<double>(data, 8, &parse_result);
-      double y1 = StringParser::StringToFloat<double>(data + 8, 8, &parse_result);
-      double x2 = StringParser::StringToFloat<double>(data + 16, 8, &parse_result);
-      double y2 = StringParser::StringToFloat<double>(data + 24, 8, &parse_result);
+
+      if (decoded_data.length() != 32) {
+        VLOG_QUERY << "Line data length is not correct: " << decoded_data.length();
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      
+      const char* l_data = decoded_data.c_str();
+      double x1 = Shape::ConvertToDouble(l_data);
+      double y1 = Shape::ConvertToDouble(l_data + 8);
+      double x2 = Shape::ConvertToDouble(l_data + 16);
+      double y2 = Shape::ConvertToDouble(l_data + 24);
       Line line_data(x1, y1, x2, y2);
       Line* line_slot = reinterpret_cast<Line*>(slot);
       *line_slot = line_data;
       break;
     }
     case TYPE_RECTANGLE: {
-      if (len != 32) {
+      string encoded_data(data, len);
+      string decoded_data;
+
+      if (! Base64Decode(encoded_data, &decoded_data)) {
+        VLOG_QUERY << "Rectangle data couldn't be decoded from Base64.";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
       }
-      double x1 = StringParser::StringToFloat<double>(data, 8, &parse_result);
-      double y1 = StringParser::StringToFloat<double>(data + 8, 8, &parse_result);
-      double x2 = StringParser::StringToFloat<double>(data + 16, 8, &parse_result);
-      double y2 = StringParser::StringToFloat<double>(data + 24, 8, &parse_result);
+
+      if (decoded_data.length() != 32) {
+        VLOG_QUERY << "Rectangle data length is not correct: " << decoded_data.length();
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      
+      const char* r_data = decoded_data.c_str();
+      double x1 = Shape::ConvertToDouble(r_data);
+      double y1 = Shape::ConvertToDouble(r_data + 8);
+      double x2 = Shape::ConvertToDouble(r_data + 16);
+      double y2 = Shape::ConvertToDouble(r_data + 24);
       Rectangle rect_data(x1, y1, x2, y2);
       Rectangle* rect_slot = reinterpret_cast<Rectangle*>(slot);
       *rect_slot = rect_data;

@@ -108,9 +108,9 @@ public abstract class Type {
     supportedTypes.add(CHAR);
     supportedTypes.add(TIMESTAMP);
     supportedTypes.add(DECIMAL);
-    supportedTypes.add(RECTANGLE);
-    supportedTypes.add(LINE);
-    supportedTypes.add(POINT);
+//    supportedTypes.add(RECTANGLE);
+//    supportedTypes.add(LINE);
+//    supportedTypes.add(POINT);
   }
 
   public static ArrayList<ScalarType> getIntegerTypes() {

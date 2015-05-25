@@ -7,8 +7,7 @@
 using namespace spatialimpala;
 
 Rectangle::Rectangle(TRectangle& rect) {
-  shape_.type = TShapeType::RECTANGLE;
-  shape_.rectangle = rect;
+  type_ = TShapeType::RECTANGLE;
   this->x1_ = rect.x1;
   this->y1_ = rect.y1;
   this->x2_ = rect.x2;
@@ -24,7 +23,7 @@ Rectangle::Rectangle(TShape& shape) : Shape(shape) {
 }
 
 Rectangle::Rectangle(double x1, double y1, double x2, double y2) {
-  shape_.type = TShapeType::RECTANGLE;
+  type_ = TShapeType::RECTANGLE;
   this->x1_ = x1;
   this->y1_ = y1;
   this->x2_ = x2;

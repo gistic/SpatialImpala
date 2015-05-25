@@ -12,7 +12,7 @@ Point::Point(TShape& shape) : Shape(shape) {
 }
 
 Point::Point(double x, double y) {
-  shape_.type = TShapeType::POINT;
+  type_ = TShapeType::POINT;
   this->x_ = x;
   this->y_ = y;
 }

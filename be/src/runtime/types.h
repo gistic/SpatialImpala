@@ -197,11 +197,11 @@ struct ColumnType {
         // This is the size of the slot, the actual size of the data is 12.
         return 16;
       case TYPE_POINT:
-        return 16;
+        return 32;
       case TYPE_LINE:
-        return 32;
+        return 48;
       case TYPE_RECTANGLE:
-        return 32;
+        return 48;
       case TYPE_DECIMAL:
         return GetDecimalByteSize(precision);
       case TYPE_DATE:

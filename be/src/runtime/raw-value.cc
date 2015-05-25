@@ -18,13 +18,9 @@
 #include "runtime/raw-value.h"
 #include "runtime/string-value.inline.h"
 #include "runtime/tuple.h"
-#include "exec/point.h"
-#include "exec/line.h"
-#include "exec/rectangle.h"
 
 using namespace boost;
 using namespace std;
-using namespace spatialimpala;
 
 namespace impala {
 
