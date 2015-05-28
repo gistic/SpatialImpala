@@ -20,6 +20,12 @@ RangeQuery::~RangeQuery() {
 }
 
 Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
+  if (GetNumChildren() == 1 && (children()[0]->type().type == TYPE_POINT
+    || children()[0]->type().type == TYPE_LINE || children()[0]->type().type == TYPE_RECTANGLE)) {
+    *fn = NULL;
+    return Status("Codegen for Shapes not supported.");
+  }
+
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
     return Status::OK;
@@ -33,7 +39,7 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
     return Status(ss.str());
   }
 
-  if (children()[0]->type() != TYPE_DOUBLE || children()[1]->type() != TYPE_DOUBLE) {
+  if (children()[0]->type().type != TYPE_DOUBLE || children()[1]->type().type != TYPE_DOUBLE) {
     stringstream ss;
     ss << "Slots are not of TYPE_DOUBLE" << endl;
     ss << "First Slot is: " << children()[0]->type() << endl;
@@ -107,18 +113,42 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
 
 
 BooleanVal RangeQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
-  DCHECK_EQ(GetNumChildren(), 2);
+  if (GetNumChildren() == 2) {
+    if (! (children()[0]->is_slotref() && children()[1]->is_slotref()))
+      return BooleanVal::null();
 
-  if (! (children()[0]->is_slotref() && children()[1]->is_slotref()))
-    return BooleanVal::null();
-
-  DoubleVal x = children()[0]->GetDoubleVal(NULL, row);
-  DoubleVal y = children()[1]->GetDoubleVal(NULL, row);
+    DoubleVal x = children()[0]->GetDoubleVal(NULL, row);
+    DoubleVal y = children()[1]->GetDoubleVal(NULL, row);
   
-  DoubleVal null_val = DoubleVal::null();
-  if (x == null_val || y == null_val)
-    return BooleanVal::null();
+    DoubleVal null_val = DoubleVal::null();
+    if (x == null_val || y == null_val)
+      return BooleanVal::null();
 
-  return BooleanVal(range_->Contains(x.val, y.val));
+    return BooleanVal(range_->Contains(x.val, y.val));
+  }
+  else if (GetNumChildren() == 1) {
+    if (! children()[0]->is_slotref())
+      return BooleanVal::null();
+
+    switch (children()[0]->type().type) {
+      case TYPE_POINT: {
+        PointVal p_val = children()[0]->GetPointVal(NULL, row);
+        return BooleanVal(range_->Contains(new Point(p_val.x, p_val.y)));
+      }
+      case TYPE_LINE: {
+        LineVal l_val = children()[0]->GetLineVal(NULL, row);
+        return BooleanVal(range_->Contains(new Line(l_val.x1, l_val.y1, l_val.x2, l_val.y2)));
+      }
+      case TYPE_RECTANGLE: {
+        RectangleVal r_val = children()[0]->GetRectangleVal(NULL, row);
+        return BooleanVal(range_->Contains(new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
+      }
+      default:
+        return BooleanVal::null();
+    }
+  }
+  else {
+    return BooleanVal::null();
+  }
 }
 
