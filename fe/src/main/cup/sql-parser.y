@@ -449,6 +449,7 @@ nonterminal CreateFunctionStmtBase.OptArg create_function_arg_key;
 nonterminal SpatialPointInclusionStmt spatial_point_inclusion_stmt;
 nonterminal Rectangle rectangle; 
 nonterminal NumericLiteral rectangle_arg;
+nonterminal NumericLiteral signed_rectangle_arg;
 nonterminal SpatialKnnStmt spatial_knn_stmt;
 nonterminal Point point;
 nonterminal NumericLiteral point_arg;
@@ -589,8 +590,8 @@ spatial_join_stmt ::=
  ;
 
 rectangle ::=
-  KW_RECTANGLE LPAREN rectangle_arg:x1 COMMA rectangle_arg:y1 COMMA
-  rectangle_arg:x2 COMMA rectangle_arg:y2 RPAREN
+  KW_RECTANGLE LPAREN signed_rectangle_arg:x1 COMMA signed_rectangle_arg:y1 COMMA
+  signed_rectangle_arg:x2 COMMA signed_rectangle_arg:y2 RPAREN
   {: RESULT = new Rectangle(x1.getDoubleValue(), y1.getDoubleValue(),
    x2.getDoubleValue(), y2.getDoubleValue()); :}
   ;
@@ -598,6 +599,15 @@ rectangle ::=
 point ::=
   KW_POINT LPAREN point_arg:x COMMA point_arg:y RPAREN
   {: RESULT = new Point(x.getDoubleValue(), y.getDoubleValue()); :}
+  ;
+
+signed_rectangle_arg ::=
+  SUBTRACT rectangle_arg:a 
+  {: a.swapSign(); RESULT = a; :}
+  | ADD rectangle_arg:a 
+  {: RESULT = a; :}
+  | rectangle_arg:a
+  {: RESULT = a; :}
   ;
 
 rectangle_arg ::=
