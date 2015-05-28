@@ -136,7 +136,7 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
       if (!partition.hasFileDescriptors())
         continue;
 
-      LOG.info("Partition Info::(Name: " + partition.getPartitionName() + " Id: " + partition.getId() + ")");
+      //LOG.info("Partition Info::(Name: " + partition.getPartitionName() + " Id: " + partition.getId() + ")");
 
       if (GIsForPartitions == null) {
         partitions_.add(partition);
@@ -152,7 +152,7 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
         boolean found = false;
         StringLiteral string_value = (StringLiteral) value;
         for (GlobalIndexRecord record: GIsForPartitions) {
-          LOG.info("Literal: " + string_value.getValue() + " Record name: " + record.getTag());
+          //LOG.info("Literal: " + string_value.getValue() + " Record name: " + record.getTag());
           if (string_value.getValue().equals(record.getTag())) {
             LOG.info("Partition to process::(Name: " + record.getTag() + ")");
             partitions_.add(partition);
