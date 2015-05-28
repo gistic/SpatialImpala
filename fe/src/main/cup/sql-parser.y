@@ -2420,8 +2420,10 @@ in_predicate ::=
   ;
   
 range_query_predicate ::=
-  KW_INSIDE LPAREN rectangle:rect RPAREN
-  {: RESULT = new RangeQueryPredicate(rect); :}
+  KW_INSIDE LPAREN column_ref:col1 COMMA rectangle:rect RPAREN
+  {: RESULT = new RangeQueryPredicate(rect, col1); :}
+  | KW_INSIDE LPAREN column_ref:col1 COMMA column_ref:col2 COMMA rectangle:rect RPAREN
+  {: RESULT = new RangeQueryPredicate(rect, col1, col2); :}
   ;
 
 subquery ::=
