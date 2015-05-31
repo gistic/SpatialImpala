@@ -100,7 +100,9 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
       predicate = (Predicate)conjuncts_.get(i);
       if (predicate instanceof RangeQueryPredicate) {
         GIsForPartitions = ((RangeQueryPredicate)predicate).getGIs();
-    	rect_ = ((RangeQueryPredicate)predicate).getRectangle();
+        if (((RangeQueryPredicate)predicate).hasXandYColumns()) {
+    		rect_ = ((RangeQueryPredicate)predicate).getRectangle();
+        }
         break;
       }
     }
