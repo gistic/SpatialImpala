@@ -5,6 +5,9 @@ package org.gistic.spatialImpala.analysis;
 import org.gistic.spatialImpala.catalog.*;
 
 import com.cloudera.impala.catalog.Table;
+import com.cloudera.impala.catalog.PrimitiveType;
+import com.cloudera.impala.catalog.ScalarType;
+import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.authorization.Privilege;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.analysis.Analyzer;
@@ -20,6 +23,7 @@ import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.thrift.TExprNode;
 import com.cloudera.impala.thrift.TRangeQuery;
+import com.cloudera.impala.thrift.TSlotRef;
 import com.cloudera.impala.thrift.TExprNodeType;
 import com.cloudera.impala.analysis.Predicate;
 import com.cloudera.impala.analysis.CompoundPredicate;
@@ -45,14 +49,23 @@ public class RangeQueryPredicate extends Predicate {
   private Rectangle rect_;
   private static final String TABLE_NOT_SPATIAL_ERROR_MSG = "Table is not a spatial table.";
   private static final String TAG = "tag";
-  private static final String X = "x";
-  private static final String Y = "y";
+  private SlotRef col1;
+  private SlotRef col2;
   
   //Global indexes of partitions which either full contained or intersect with the rectangle
   private List<GlobalIndexRecord> GIsIntersectAndFully;
 
-  public RangeQueryPredicate(Rectangle rect) {
+  public RangeQueryPredicate(Rectangle rect, SlotRef col1, SlotRef col2) {
     this.rect_ = rect;
+    this.col1 = col1;
+    this.col2 = col2;
+    this.GIsIntersectAndFully = new ArrayList<GlobalIndexRecord>();
+  }
+  
+  public RangeQueryPredicate(Rectangle rect, SlotRef col1) {
+    this.rect_ = rect;
+    this.col1 = col1;
+    this.col2 = null;
     this.GIsIntersectAndFully = new ArrayList<GlobalIndexRecord>();
   }
   
@@ -85,38 +98,77 @@ public class RangeQueryPredicate extends Predicate {
 	    throw new AnalysisException(errMsg);
 	}
 	
-	children_.add(new SlotRef(tableName, X));
-	children_.add(new SlotRef(tableName, Y));
+	children_.add(new SlotRef (tableName, col1.getColumnName()));
+	
+	if (col2 != null) {
+		children_.add(new SlotRef (tableName, col2.getColumnName()));
+	}
+	
+	
     super.analyze(analyzer);
     
-    
- // Global index shouldn't be null.
-	GlobalIndex globalIndex = spatialTable.getGlobalIndexIfAny();
-	if (globalIndex == null)
-		throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
-				+ " : Table doesn't have global indexes.");
-	
-	List<String> columnNames = spatialTable.getColumnNames();
-	if (!(columnNames.contains(TAG) && columnNames.contains(X) && columnNames
-			.contains(Y)))
-		throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
-				+ " : Table doesn't have the required columns.");
-
-	//Now fill the GIsIntersect and GIsFullyContained vectors 
-	HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
-	
-	for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-		if (rect_.intersects(gIRecord.getMBR())) {
-			GIsIntersectAndFully.add(gIRecord);
-                       LOG.info("GI is Intersected: " + gIRecord.getTag());
-		}
+    if (col2 != null) {
+    	if (children_.get(0).getType() != ScalarType.createType(PrimitiveType.DOUBLE) || children_.get(1).getType() != ScalarType.createType(PrimitiveType.DOUBLE))
+	    {
+	    	throw new AnalysisException("Error: Coulmns should be double data type");
+    	}
 	}
+    else {
+    	if (children_.get(0).getType() != ScalarType.createType(PrimitiveType.RECTANGLE) || children_.get(0).getType() != ScalarType.createType(PrimitiveType.POINT) || children_.get(0).getType() != ScalarType.createType(PrimitiveType.LINE))
+    	{
+	    	throw new AnalysisException("Error: Coulmn should be from Shapes data type");
+	    }
+    }
     
+    //Make sure that the columns type is double in case of 2 columns and shape in case of 1 column
+    
+    
+    
+    GlobalIndex globalIndex = spatialTable.getGlobalIndexIfAny();
+    
+    if(hasXandYColumns()) {
+	    // Global index shouldn't be null.
+		if (globalIndex == null)
+			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
+					+ " : Table doesn't have global indexes.");
+		
+		List<String> columnNames = spatialTable.getColumnNames();
+		if (!(columnNames.contains(TAG)))
+			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
+					+ " : Table doesn't have the required columns.");
+		
+	    
+		//Now fill the GIsIntersect and GIsFullyContained vectors 
+		HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
+		
+		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+			if (rect_.intersects(gIRecord.getMBR())) {
+				GIsIntersectAndFully.add(gIRecord);
+	                       LOG.info("GI is Intersected: " + gIRecord.getTag());
+			}
+		}
+    }
+    else
+    {
+    	HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
+		
+		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+			GIsIntersectAndFully.add(gIRecord);
+		}
+    }
   }
 
+  public boolean hasXandYColumns () {
+	  if(col2 != null && col1.getColumnName().toLowerCase() == "x" && col2.getColumnName().toLowerCase() == "y") {
+		  return true;
+	  }
+	  else {
+		  return false;
+	  }
+  }
+  
   @Override
   protected void toThrift(TExprNode msg) {
-    Preconditions.checkState(children_.size() == 2);
     msg.range_query = new TRangeQuery(rect_.toThrift());
     msg.node_type = TExprNodeType.RANGE_QUERY;
   }
@@ -132,5 +184,5 @@ public class RangeQueryPredicate extends Predicate {
   }
   
   @Override
-  public Expr clone() { return new RangeQueryPredicate(this.rect_); }
+  public Expr clone() { return new RangeQueryPredicate(this.rect_, this.col1, this.col2); }
 }
