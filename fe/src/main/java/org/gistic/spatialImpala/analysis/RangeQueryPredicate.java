@@ -85,28 +85,17 @@ public class RangeQueryPredicate extends Predicate {
 	TableName tableName = null;
 	SpatialHdfsTable spatialTable = null;
 	
-	while (itr.hasNext()) {
-		TupleDescriptor desc = (TupleDescriptor) itr.next();
-		if (desc.getTable() instanceof SpatialHdfsTable) {
-			tableName = desc.getTableName();
-			spatialTable = (SpatialHdfsTable) desc.getTable(); 
-		}
-	}
 	
-	if (tableName == null || spatialTable == null) {
-		String errMsg = "No spatial table found";
-	    throw new AnalysisException(errMsg);
-	}
-	
-	children_.add(new SlotRef (tableName, col1.getColumnName()));
+	children_.add(col1);
 	
 	if (col2 != null) {
-		children_.add(new SlotRef (tableName, col2.getColumnName()));
+		children_.add(col2);
 	}
 	
 	
     super.analyze(analyzer);
     
+  //Make sure that the columns type is double in case of 2 columns and shape in case of 1 column
     if (col2 != null) {
     	if (children_.get(0).getType() != ScalarType.createType(PrimitiveType.DOUBLE) || children_.get(1).getType() != ScalarType.createType(PrimitiveType.DOUBLE))
 	    {
@@ -114,19 +103,25 @@ public class RangeQueryPredicate extends Predicate {
     	}
 	}
     else {
-    	if (children_.get(0).getType() != ScalarType.createType(PrimitiveType.RECTANGLE) || children_.get(0).getType() != ScalarType.createType(PrimitiveType.POINT) || children_.get(0).getType() != ScalarType.createType(PrimitiveType.LINE))
+    	if (!((ScalarType)children_.get(0).getType()).isShapeType())
     	{
-	    	throw new AnalysisException("Error: Coulmn should be from Shapes data type");
+	    	throw new AnalysisException("Error: Coulmn should be from Shapes data type " + children_.get(0).getType().toString()+" found!!");
 	    }
     }
     
-    //Make sure that the columns type is double in case of 2 columns and shape in case of 1 column
     
+    while (itr.hasNext()) {
+		TupleDescriptor desc = (TupleDescriptor) itr.next();
+		if (desc.getTable() instanceof SpatialHdfsTable) {
+			tableName = desc.getTableName();
+			spatialTable = (SpatialHdfsTable) desc.getTable(); 
+		}
+	}
     
-    
-    GlobalIndex globalIndex = spatialTable.getGlobalIndexIfAny();
-    
-    if(hasXandYColumns()) {
+    if(hasXandYColumns() && spatialTable != null) {
+    	
+    	GlobalIndex globalIndex = spatialTable.getGlobalIndexIfAny();
+    	    
 	    // Global index shouldn't be null.
 		if (globalIndex == null)
 			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
@@ -146,14 +141,6 @@ public class RangeQueryPredicate extends Predicate {
 				GIsIntersectAndFully.add(gIRecord);
 	                       LOG.info("GI is Intersected: " + gIRecord.getTag());
 			}
-		}
-    }
-    else
-    {
-    	HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
-		
-		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-			GIsIntersectAndFully.add(gIRecord);
 		}
     }
   }
