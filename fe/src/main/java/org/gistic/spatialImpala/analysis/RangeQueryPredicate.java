@@ -118,6 +118,7 @@ public class RangeQueryPredicate extends Predicate {
 		}
 	}
     
+    
     if(hasXandYColumns() && spatialTable != null) {
     	
     	GlobalIndex globalIndex = spatialTable.getGlobalIndexIfAny();
@@ -146,7 +147,7 @@ public class RangeQueryPredicate extends Predicate {
   }
 
   public boolean hasXandYColumns () {
-	  if(col2 != null && col1.getColumnName().toLowerCase() == "x" && col2.getColumnName().toLowerCase() == "y") {
+	  if(col2 != null && col1.getColumnName().toLowerCase().equals("x") && col2.getColumnName().toLowerCase().equals("y")) {
 		  return true;
 	  }
 	  else {
