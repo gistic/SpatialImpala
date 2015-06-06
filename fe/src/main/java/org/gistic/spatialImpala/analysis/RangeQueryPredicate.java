@@ -49,8 +49,11 @@ public class RangeQueryPredicate extends Predicate {
   private Rectangle rect_;
   private static final String TABLE_NOT_SPATIAL_ERROR_MSG = "Table is not a spatial table.";
   private static final String TAG = "tag";
+  private static final double ACCEPTED_DATA_RATIO = 0.5;
+  private double prunedDataRatio;
   private SlotRef col1;
   private SlotRef col2;
+  private boolean rangeQueryColsAreIndexed;
   
   //Global indexes of partitions which either full contained or intersect with the rectangle
   private List<GlobalIndexRecord> GIsIntersectAndFully;
@@ -59,6 +62,8 @@ public class RangeQueryPredicate extends Predicate {
     this.rect_ = rect;
     this.col1 = col1;
     this.col2 = col2;
+    rangeQueryColsAreIndexed = false;
+    prunedDataRatio = 1;
     this.GIsIntersectAndFully = new ArrayList<GlobalIndexRecord>();
   }
   
@@ -66,6 +71,8 @@ public class RangeQueryPredicate extends Predicate {
     this.rect_ = rect;
     this.col1 = col1;
     this.col2 = null;
+    rangeQueryColsAreIndexed = false;
+    prunedDataRatio = 1;
     this.GIsIntersectAndFully = new ArrayList<GlobalIndexRecord>();
   }
   
@@ -84,6 +91,7 @@ public class RangeQueryPredicate extends Predicate {
 	Iterator itr = tupleDescs.iterator();
 	TableName tableName = null;
 	SpatialHdfsTable spatialTable = null;
+	GlobalIndex globalIndex = null;
 	
 	
 	children_.add(col1);
@@ -118,22 +126,20 @@ public class RangeQueryPredicate extends Predicate {
 		}
 	}
     
-    
-    if(hasXandYColumns() && spatialTable != null) {
-    	
-    	GlobalIndex globalIndex = spatialTable.getGlobalIndexIfAny();
-    	    
-	    // Global index shouldn't be null.
-		if (globalIndex == null)
+    if (spatialTable != null) {
+    	globalIndex = spatialTable.getGlobalIndexIfAny();
+    	LOG.info("Table is spatial");
+    	// Global index shouldn't be null
+    	if (globalIndex == null)
 			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
 					+ " : Table doesn't have global indexes.");
-		
-		List<String> columnNames = spatialTable.getColumnNames();
-		if (!(columnNames.contains(TAG)))
-			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
-					+ " : Table doesn't have the required columns.");
-		
+    	
+    	checkIfColumnsAreIndexed(globalIndex);
+    }
+    
+    if(rangeQueryColsAreIndexed && spatialTable != null) {
 	    
+    	LOG.info("The query is on the indexed columns");
 		//Now fill the GIsIntersect and GIsFullyContained vectors 
 		HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
 		
@@ -143,15 +149,30 @@ public class RangeQueryPredicate extends Predicate {
 	                       LOG.info("GI is Intersected: " + gIRecord.getTag());
 			}
 		}
+		prunedDataRatio = GIsIntersectAndFully.size() * 1.0 /  globalIndexMap.size();
+		LOG.info("Pruned data ratio is : " + Double.toString(prunedDataRatio));
     }
   }
+  
+  public boolean getRangeQueryColsAreIndexed() {
+	  return rangeQueryColsAreIndexed;
+  }
+  
+  public boolean isPrunedDataRatioIsAccepted () {
+	  if (prunedDataRatio > ACCEPTED_DATA_RATIO) {
+		  return false;
+	  }
+	  return true;
+  }
 
-  public boolean hasXandYColumns () {
-	  if(col2 != null && col1.getColumnName().toLowerCase().equals("x") && col2.getColumnName().toLowerCase().equals("y")) {
-		  return true;
+  public void checkIfColumnsAreIndexed (GlobalIndex globalIndex) {
+	  if(col2 == null) {
+		  if (globalIndex.isOneOfIndexedCol(col1))
+				  rangeQueryColsAreIndexed = true;
 	  }
 	  else {
-		  return false;
+		  if (globalIndex.isOneOfIndexedCol(col1) && globalIndex.isOneOfIndexedCol(col2)) 
+				  rangeQueryColsAreIndexed = true;
 	  }
   }
   
