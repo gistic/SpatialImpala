@@ -100,8 +100,9 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
       predicate = (Predicate)conjuncts_.get(i);
       if (predicate instanceof RangeQueryPredicate) {
         GIsForPartitions = ((RangeQueryPredicate)predicate).getGIs();
-        if (((RangeQueryPredicate)predicate).hasXandYColumns()) {
+        if (((RangeQueryPredicate)predicate).isPrunedDataRatioIsAccepted() && ((RangeQueryPredicate)predicate).getRangeQueryColsAreIndexed()) {
     		rect_ = ((RangeQueryPredicate)predicate).getRectangle();
+    		LOG.info("Pruning ratio is accepted for spatial query. An r-tree will be constructed");
         }
         break;
       }
