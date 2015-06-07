@@ -49,7 +49,7 @@ public class RangeQueryPredicate extends Predicate {
   private Rectangle rect_;
   private static final String TABLE_NOT_SPATIAL_ERROR_MSG = "Table is not a spatial table.";
   private static final String TAG = "tag";
-  private static final double ACCEPTED_DATA_RATIO = 0.5;
+  private static final double ACCEPTED_DATA_RATIO = 0.06;
   private double prunedDataRatio;
   private SlotRef col1;
   private SlotRef col2;
