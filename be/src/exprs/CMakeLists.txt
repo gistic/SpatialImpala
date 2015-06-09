@@ -42,6 +42,7 @@ add_library(Exprs
   math-functions.cc
   null-literal.cc
   operators.cc
+  overlap-query.cc
   range-query.cc
   slot-ref.cc
   string-functions.cc
