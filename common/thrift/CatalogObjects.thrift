@@ -287,6 +287,9 @@ struct TGlobalIndex {
 
   // Map of global indexes' records.
   2: required map<string, TGlobalIndexRecord> globalIndexMap
+  
+  //The columns on which the table is indexed 
+  3: required string index
 }
 
 // Represents a table or view.
