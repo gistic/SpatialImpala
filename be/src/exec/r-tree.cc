@@ -115,8 +115,11 @@ void RTree::CreateRTreeSplit(int node_index, vector<RTreeSplit>* list_of_splits)
     if (!list_of_splits->empty()) {
       RTreeSplit old_split = list_of_splits->back();
       VLOG_QUERY << "Old Split: [" << old_split.start_offset << ", " << old_split.end_offset << "]"; 
+
       // The 2 Splits should be merged into one.
-      if (old_split.end_offset >= split.start_offset) {
+      if (old_split.end_offset >= split.start_offset
+        && split.end_offset >= old_split.start_offset) {
+
         split.start_offset = min(old_split.start_offset, split.start_offset);
         split.end_offset = max(old_split.end_offset, split.end_offset);
         list_of_splits->pop_back();

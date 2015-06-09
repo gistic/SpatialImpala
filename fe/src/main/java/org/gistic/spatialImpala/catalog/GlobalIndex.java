@@ -185,8 +185,9 @@ public class GlobalIndex implements CatalogObject {
 		HashMap<String, GlobalIndexRecord> gIMap = new HashMap<String, GlobalIndexRecord>();
 		Scanner scanner = new Scanner(data);
 		while (scanner.hasNext()) {
-			String[] separatedRecord = scanner.next().split(",");
-			if (separatedRecord.length != 6) {
+			String line = scanner.next();
+                        String[] separatedRecord = line.split(",");
+			if (separatedRecord.length != 8) {
 				LOG.error(GLOBAL_INDEX_READ_EXCEPTION_MSG + globalIndexPath);
 				scanner.close();
 				return null;
@@ -209,9 +210,8 @@ public class GlobalIndex implements CatalogObject {
 				scanner.close();
 				return null;
 			}
-			LOG.info("Reading Record: [" + id + ", " + separatedRecord[5] + ", " + x1 + ", " + y1 + ", " + x2 + ", " + y2 + "]");
-			GlobalIndexRecord gIRecord = new GlobalIndexRecord(id, separatedRecord[5], new Rectangle(x1, y1, x2, y2));
-			gIMap.put(separatedRecord[5], gIRecord);
+			GlobalIndexRecord gIRecord = new GlobalIndexRecord(id, separatedRecord[7], new Rectangle(x1, y1, x2, y2));
+			gIMap.put(separatedRecord[7], gIRecord);
 		}
 		scanner.close();
 		return gIMap;
