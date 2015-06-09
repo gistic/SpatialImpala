@@ -2436,6 +2436,11 @@ range_query_predicate ::=
   {: RESULT = new RangeQueryPredicate(rect, col1, col2); :}
   ;
 
+overlaps_predicate ::=
+  KW_OVERLAPS LPAREN column_ref:col1 COMMA column_ref:col2 RPAREN
+  {: RESULT = new OverlapQueryPredicate(col1, col2); :}
+  ;
+
 subquery ::=
   LPAREN subquery:s RPAREN
   {: RESULT = s; :}

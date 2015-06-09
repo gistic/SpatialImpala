@@ -35,7 +35,8 @@ enum TExprNodeType {
   FUNCTION_CALL,
   AGGREGATE_EXPR,
   DECIMAL_LITERAL,
-  RANGE_QUERY
+  RANGE_QUERY,
+  OVERLAP_QUERY
 }
 
 struct TBoolLiteral {
