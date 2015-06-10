@@ -20,6 +20,7 @@ import org.gistic.spatialImpala.analysis.SpatialPointInclusionStmt;
 import org.gistic.spatialImpala.analysis.SpatialKnnStmt;
 import org.gistic.spatialImpala.analysis.SpatialJoinStmt;
 import org.gistic.spatialImpala.analysis.RangeQueryPredicate;
+import org.gistic.spatialImpala.analysis.OverlapQueryPredicate;
 
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.catalog.ScalarType;
@@ -315,7 +316,7 @@ nonterminal TableName table_name;
 nonterminal FunctionName function_name;
 nonterminal Expr where_clause;
 nonterminal Predicate predicate, between_predicate, comparison_predicate,
-  compound_predicate, in_predicate, like_predicate, exists_predicate, range_query_predicate;
+  compound_predicate, in_predicate, like_predicate, exists_predicate, range_query_predicate, overlaps_predicate;
 nonterminal ArrayList<Expr> group_by_clause, opt_partition_by_clause;
 nonterminal Expr having_clause;
 nonterminal ArrayList<OrderByElement> order_by_elements, opt_order_by_clause;
@@ -2358,6 +2359,8 @@ predicate ::=
   | in_predicate:p
   {: RESULT = p; :}
   | range_query_predicate:p
+  {: RESULT = p; :}
+  | overlaps_predicate:p
   {: RESULT = p; :}
   | exists_predicate:p
   {: RESULT = p; :}

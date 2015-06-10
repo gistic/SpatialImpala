@@ -52,6 +52,7 @@
 #include "exprs/udf-builtins.h"
 #include "exprs/utility-functions.h"
 #include "exprs/range-query.h"
+#include "exprs/overlap-query.h"
 #include "gen-cpp/Exprs_types.h"
 #include "gen-cpp/Data_types.h"
 #include "runtime/lib-cache.h"
@@ -250,6 +251,9 @@ Status Expr::CreateExpr(ObjectPool* pool, const TExprNode& texpr_node, Expr** ex
       return Status::OK;
     case TExprNodeType::RANGE_QUERY:
       *expr = pool->Add(new RangeQuery(texpr_node));
+      return Status::OK;
+    case TExprNodeType::OVERLAP_QUERY:
+      *expr = pool->Add(new OverlapQuery(texpr_node));
       return Status::OK;
     default:
       stringstream os;

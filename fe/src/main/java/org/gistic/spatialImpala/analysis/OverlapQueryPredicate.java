@@ -53,13 +53,20 @@ public class OverlapQueryPredicate extends Predicate {
     this.col1 = col1;
     this.col2 = col2;
   }
+  
+  
+  private OverlapQueryPredicate(OverlapQueryPredicate overlapPreicate, SlotRef col1, SlotRef col2) {
+    super(overlapPreicate);
+    this.col1 = col1;
+    this.col2 = col2;
+  }
     
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
 	
 	Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
 	Iterator itr = tupleDescs.iterator();
-	
+	children_.clear();
 	children_.add(col1);
 	children_.add(col2);
 	
@@ -91,5 +98,5 @@ public class OverlapQueryPredicate extends Predicate {
   }
   
   @Override
-  public Expr clone() { return new OverlapQueryPredicate(this.col1, this.col2); }
+  public Expr clone() { return new OverlapQueryPredicate(this, this.col1, this.col2); }
 }

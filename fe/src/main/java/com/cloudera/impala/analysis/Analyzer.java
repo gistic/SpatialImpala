@@ -14,6 +14,7 @@
 
 package com.cloudera.impala.analysis;
 
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -28,6 +29,8 @@ import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.gistic.spatialImpala.analysis.OverlapQueryPredicate;
 
 import com.cloudera.impala.authorization.AuthorizationChecker;
 import com.cloudera.impala.authorization.AuthorizationConfig;
@@ -777,6 +780,29 @@ public class Analyzer {
     LOG.trace("register tuple/slotConjunct: " + Integer.toString(e.getId().asInt())
         + " " + e.toSql() + " " + e.debugString());
 
+    if (e instanceof OverlapQueryPredicate) {
+	    if (tupleIds.size() < 2) return;
+	   
+	    OverlapQueryPredicate ovelapBredicate = (OverlapQueryPredicate)e;
+	
+	    // examine children and update eqJoinConjuncts
+	    for (int i = 0; i < 2; ++i) {
+	      tupleIds = Lists.newArrayList();
+	      ovelapBredicate.getChild(i).getIds(tupleIds, null);
+	      if (tupleIds.size() == 1) {
+	        if (!globalState_.eqJoinConjuncts.containsKey(tupleIds.get(0))) {
+	          List<ExprId> conjunctIds = Lists.newArrayList();
+	          conjunctIds.add(e.getId());
+	          globalState_.eqJoinConjuncts.put(tupleIds.get(0), conjunctIds);
+	        } else {
+	          globalState_.eqJoinConjuncts.get(tupleIds.get(0)).add(e.getId());
+	        }
+	        ovelapBredicate.setIsEqJoinConjunct(true);
+	        LOG.trace("register eqJoinConjunct: " + Integer.toString(e.getId().asInt()));
+	      }
+	    }
+    }
+    
     if (!(e instanceof BinaryPredicate)) return;
     BinaryPredicate binaryPred = (BinaryPredicate) e;
 
