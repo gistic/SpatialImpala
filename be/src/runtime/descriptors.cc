@@ -530,6 +530,11 @@ StructType* TupleDescriptor::GenerateLlvmStruct(LlvmCodeGen* codegen) {
   for (int i = 0; i < slots().size(); ++i) {
     SlotDescriptor* slot_desc = slots()[i];
     if (slot_desc->type().type == TYPE_CHAR) return NULL;
+    if (slot_desc->type().type == TYPE_POINT
+      || slot_desc->type().type == TYPE_LINE
+      || slot_desc->type().type == TYPE_RECTANGLE) {
+      return NULL;
+    }
     if (slot_desc->is_materialized()) {
       slot_desc->field_idx_ = slot_desc->slot_idx_ + num_null_bytes_;
       DCHECK_LT(slot_desc->field_idx(), struct_fields.size());

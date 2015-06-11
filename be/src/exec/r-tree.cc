@@ -55,7 +55,6 @@ void RTree::AddNode(char* node_data) {
   double x2 = *reinterpret_cast<double*>(&x2_bytes);
   double y2 = *reinterpret_cast<double*>(&y2_bytes);
   
-  VLOG_QUERY << "RTree Node: " << offset << " [ (" << x1 << ", " << y1 << "), (" << x2 << ", " << y2 <<") ]"; 
   Rectangle mbr(x1, y1, x2, y2);
   RTreeNode* node = new RTreeNode(offset, mbr);
   this->tree_.push_back(node);
