@@ -8,6 +8,7 @@ import org.apache.log4j.Logger;
 
 import com.cloudera.impala.catalog.Catalog;
 import com.cloudera.impala.catalog.CatalogObject;
+import com.cloudera.impala.analysis.SlotRef;
 import com.cloudera.impala.common.FileSystemUtil;
 import com.cloudera.impala.thrift.TCatalogObjectType;
 import com.cloudera.impala.thrift.TGlobalIndex;
@@ -16,6 +17,7 @@ import com.cloudera.impala.thrift.TGlobalIndexRecord;
 import java.io.IOException;
 import java.util.Scanner;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map.Entry;
@@ -30,14 +32,20 @@ public class GlobalIndex implements CatalogObject {
 	private static String GLOBAL_INDEX_READ_EXCEPTION_MSG = "Couldn't parse Global Index file: ";
 	private static String GLOBAL_INDEX_SUFFIX = "_global_index";
 	public static String GLOBAL_INDEX_TABLE_PARAM = "globalIndex";
+	public static String INDEXED_ON_KEYWORD = "index";
 	private HashMap<String, GlobalIndexRecord> globalIndexMap;
 	private final String tableName_;
 	private long catalogVersion_ = Catalog.INITIAL_CATALOG_VERSION;
+	private List<SlotRef> indexedOnCols;
+	private String indexes;
 
 	private GlobalIndex(String tableName,
-			HashMap<String, GlobalIndexRecord> globalIndexMap) {
+			HashMap<String, GlobalIndexRecord> globalIndexMap, String indexes) {
 		this.tableName_ = tableName;
 		this.globalIndexMap = globalIndexMap;
+		indexedOnCols = new ArrayList<SlotRef>();
+		this.indexes = indexes;
+		fillIndexedOnCols (indexes);
 	}
 	
 	public HashMap<String, GlobalIndexRecord> getGlobalIndexMap() {
@@ -106,6 +114,24 @@ public class GlobalIndex implements CatalogObject {
 		}
 		return ret;
 	}*/
+	
+	private void fillIndexedOnCols (String indexes) {
+		List<String> columnNames = Arrays.asList(indexes.split("\\s*,\\s*"));
+		for (String name : columnNames) {
+			indexedOnCols.add(new SlotRef(null, name));
+		}
+			
+	}
+	
+	public boolean isOneOfIndexedCol(SlotRef col) {
+		for (SlotRef indexedCol : indexedOnCols) {
+			if (indexedCol.getColumnName().equals(col.getColumnName())) {
+				return true;
+			}
+		}
+		
+		return false;
+	}
 
 	public GlobalIndexRecord getGIRecordforTag(String tag) {
 		return globalIndexMap.get(tag);
@@ -136,7 +162,7 @@ public class GlobalIndex implements CatalogObject {
 		for (Entry<String, GlobalIndexRecord> gIRecord : globalIndexMap.entrySet()) {
 			tGlobalIndexMap.put(gIRecord.getKey(), gIRecord.getValue().toThrift());
 		}
-		return new TGlobalIndex(tableName_, tGlobalIndexMap);
+		return new TGlobalIndex(tableName_, tGlobalIndexMap, indexes);
 	}
 
 	private static HashMap<String, GlobalIndexRecord> loadGlobalIndex(String globalIndexPath) {
@@ -159,8 +185,9 @@ public class GlobalIndex implements CatalogObject {
 		HashMap<String, GlobalIndexRecord> gIMap = new HashMap<String, GlobalIndexRecord>();
 		Scanner scanner = new Scanner(data);
 		while (scanner.hasNext()) {
-			String[] separatedRecord = scanner.next().split(",");
-			if (separatedRecord.length != 6) {
+			String line = scanner.next();
+                        String[] separatedRecord = line.split(",");
+			if (separatedRecord.length != 8) {
 				LOG.error(GLOBAL_INDEX_READ_EXCEPTION_MSG + globalIndexPath);
 				scanner.close();
 				return null;
@@ -183,17 +210,16 @@ public class GlobalIndex implements CatalogObject {
 				scanner.close();
 				return null;
 			}
-			LOG.info("Reading Record: [" + id + ", " + separatedRecord[5] + ", " + x1 + ", " + y1 + ", " + x2 + ", " + y2 + "]");
-			GlobalIndexRecord gIRecord = new GlobalIndexRecord(id, separatedRecord[5], new Rectangle(x1, y1, x2, y2));
-			gIMap.put(separatedRecord[5], gIRecord);
+			GlobalIndexRecord gIRecord = new GlobalIndexRecord(id, separatedRecord[7], new Rectangle(x1, y1, x2, y2));
+			gIMap.put(separatedRecord[7], gIRecord);
 		}
 		scanner.close();
 		return gIMap;
 	}
 	
-	public static GlobalIndex loadAndCreateGlobalIndex(String tableName, String globalIndexPath) {
+	public static GlobalIndex loadAndCreateGlobalIndex(String tableName, String globalIndexPath, String indexes) {
 		HashMap<String, GlobalIndexRecord> gIMap = loadGlobalIndex(globalIndexPath);
-		return gIMap != null ? new GlobalIndex(tableName, gIMap) : null;
+		return gIMap != null ? new GlobalIndex(tableName, gIMap, indexes) : null;
 	}
 	
 	public static GlobalIndex fromThrift(TGlobalIndex tGlobalIndex) {
@@ -201,6 +227,6 @@ public class GlobalIndex implements CatalogObject {
 		for (Entry<String, TGlobalIndexRecord> gIRecord : tGlobalIndex.getGlobalIndexMap().entrySet()) {
 			gIMap.put(gIRecord.getKey(), GlobalIndexRecord.fromThrift(gIRecord.getValue()));
 		}
-		return new GlobalIndex(tGlobalIndex.getTbl_name(), gIMap);
+		return new GlobalIndex(tGlobalIndex.getTbl_name(), gIMap, tGlobalIndex.getIndex());
 	}
 }

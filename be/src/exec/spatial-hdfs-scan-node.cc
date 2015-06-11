@@ -8,7 +8,10 @@ SpatialHdfsScanNode::SpatialHdfsScanNode(ObjectPool* pool, const TPlanNode& tnod
                            const DescriptorTbl& descs)
     : HdfsScanNode(pool, tnode, descs) {
   TSpatialHdfsScanNode spatial_hdfs_scan_node = tnode.spatial_hdfs_scan_node;
-  this->range_ = new Rectangle(spatial_hdfs_scan_node.rectangle);
+  if (spatial_hdfs_scan_node.has_range)
+    this->range_ = new Rectangle(spatial_hdfs_scan_node.rectangle);
+  else
+    this->range_ = NULL;
 }
 
 SpatialHdfsScanNode::~SpatialHdfsScanNode() {

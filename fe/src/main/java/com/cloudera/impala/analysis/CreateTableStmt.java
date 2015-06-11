@@ -212,8 +212,13 @@ public class CreateTableStmt extends StatementBase {
     // and is valid.
     if (tblProperties_ != null) {
       String globalIndexPathIfAny = tblProperties_.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
-      if (globalIndexPathIfAny != null)
+      if (globalIndexPathIfAny != null) {
         (new HdfsUri(globalIndexPathIfAny)).analyze(analyzer, Privilege.ALL);
+        String indexedColumns = tblProperties_.get(GlobalIndex.INDEXED_ON_KEYWORD);
+        if (indexedColumns == null) {
+        	throw new AnalysisException("The columns, on which the table is indexed, should be given");
+        }
+      }
     }
     
     analyzeRowFormatValue(rowFormat_.getFieldDelimiter());

@@ -35,12 +35,13 @@ public class SpatialHdfsTable extends HdfsTable {
 		if (params == null)
 			return null;
 
-		String globalIndexPath = params
-				.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
-		if (globalIndexPath == null)
+		String globalIndexPath = params.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
+		String indexedColumns = params.get(GlobalIndex.INDEXED_ON_KEYWORD);
+		
+		if (globalIndexPath == null || indexedColumns == null)
 			return null;
 
-		return GlobalIndex.loadAndCreateGlobalIndex(tableName, globalIndexPath);
+		return GlobalIndex.loadAndCreateGlobalIndex(tableName, globalIndexPath, indexedColumns);
 	}
 
 	@Override

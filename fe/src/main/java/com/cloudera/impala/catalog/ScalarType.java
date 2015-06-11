@@ -373,6 +373,13 @@ public class ScalarType extends Type {
       return ScalarType.INVALID;
     }
   }
+  
+  public boolean isShapeType() {
+	  if (type_ == PrimitiveType.RECTANGLE || type_ == PrimitiveType.POINT || type_ == PrimitiveType.LINE) {
+		  return true;
+	  }
+	  return false;
+  }
 
   public ScalarType getNextResolutionType() {
     Preconditions.checkState(isNumericType() || isNull());
