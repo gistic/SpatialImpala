@@ -64,7 +64,10 @@ class FunctionContext {
     TYPE_STRING,
     TYPE_FIXED_BUFFER,
     TYPE_DECIMAL,
-    TYPE_VARCHAR
+    TYPE_VARCHAR,
+    TYPE_POINT,
+    TYPE_LINE,
+    TYPE_RECTANGLE
   };
 
   struct TypeDesc {
