@@ -143,6 +143,15 @@ static void AppendAnyValType(int namespace_id, const ColumnType& type, stringstr
     case TYPE_DECIMAL:
       AppendMangledToken("DecimalVal", s);
       break;
+    case TYPE_POINT:
+      AppendMangledToken("PointVal", s);
+      break;
+    case TYPE_LINE:
+      AppendMangledToken("LineVal", s);
+      break;
+    case TYPE_RECTANGLE:
+      AppendMangledToken("RectangleVal", s);
+      break;
     default:
       DCHECK(false) << "NYI: " << type.DebugString();
   }
