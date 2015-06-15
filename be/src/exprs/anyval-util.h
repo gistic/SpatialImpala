@@ -16,12 +16,16 @@
 #ifndef IMPALA_EXPRS_ANYVAL_UTIL_H
 #define IMPALA_EXPRS_ANYVAL_UTIL_H
 
+#include "exec/line.h"
+#include "exec/point.h"
+#include "exec/rectangle.h"
 #include "runtime/timestamp-value.h"
 #include "udf/udf-internal.h"
 #include "util/hash-util.h"
 
 using namespace impala_udf;
 using namespace std;
+using namespace spatialimpala;
 
 namespace impala {
 
@@ -154,7 +158,9 @@ class AnyValUtil {
       case TYPE_CHAR:
         return sizeof(StringVal);
       case TYPE_TIMESTAMP: return sizeof(TimestampVal);
-      case TYPE_DECIMAL: return sizeof(DecimalVal);
+      case TYPE_POINT: return sizeof(PointVal);
+      case TYPE_LINE: return sizeof(LineVal);
+      case TYPE_RECTANGLE: return sizeof(RectangleVal);
       default:
         DCHECK(false) << t;
         return 0;
@@ -260,6 +266,31 @@ class AnyValUtil {
           default:
             break;
         }
+      case TYPE_POINT: {
+        const Point* pv = reinterpret_cast<const Point*>(slot);
+        PointVal* point_val = reinterpret_cast<PointVal*>(dst);
+        point_val->x = pv->x_;
+        point_val->y = pv->y_;
+        return;
+      }
+      case TYPE_LINE: {
+        const Line* lv = reinterpret_cast<const Line*>(slot);
+        LineVal* line_val = reinterpret_cast<LineVal*>(dst);
+        line_val->x1 = lv->x1_;
+        line_val->y1 = lv->y1_;
+        line_val->x2 = lv->x2_;
+        line_val->y2 = lv->y2_;
+        return;
+      }
+      case TYPE_RECTANGLE: {
+        const Rectangle* rv = reinterpret_cast<const Rectangle*>(slot);
+        RectangleVal* rect_val = reinterpret_cast<RectangleVal*>(dst);
+        rect_val->x1 = rv->x1_;
+        rect_val->y1 = rv->y1_;
+        rect_val->x2 = rv->x2_;
+        rect_val->y2 = rv->y2_;
+        return;
+      }
       default:
         DCHECK(false) << "NYI: " << type;
     }

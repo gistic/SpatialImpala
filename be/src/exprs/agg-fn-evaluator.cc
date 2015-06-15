@@ -19,6 +19,9 @@
 #include "codegen/llvm-codegen.h"
 #include "common/logging.h"
 #include "exec/aggregation-node.h"
+#include "exec/point.h"
+#include "exec/line.h"
+#include "exec/rectangle.h"
 #include "exprs/aggregate-functions.h"
 #include "exprs/expr-context.h"
 #include "exprs/anyval-util.h"
@@ -33,6 +36,7 @@ using namespace impala;
 using namespace impala_udf;
 using namespace llvm;
 using namespace std;
+using namespace spatialimpala;
 
 // typedef for builtin aggregate functions. Unfortunately, these type defs don't
 // really work since the actual builtin is implemented not in terms of the base
@@ -299,6 +303,18 @@ inline void AggFnEvaluator::SetDstSlot(FunctionContext* ctx, const AnyVal* src,
         default:
           break;
       }
+    case TYPE_POINT:
+      *reinterpret_cast<Point*>(slot)
+         = Point::FromPointVal(*const_cast<PointVal*>(reinterpret_cast<const PointVal*>(src)));
+      return;
+    case TYPE_LINE:
+      *reinterpret_cast<Line*>(slot)
+         = Line::FromLineVal(*const_cast<LineVal*>(reinterpret_cast<const LineVal*>(src)));
+      return;
+    case TYPE_RECTANGLE:
+      *reinterpret_cast<Rectangle*>(slot)
+         = Rectangle::FromRectangleVal(*const_cast<RectangleVal*>(reinterpret_cast<const RectangleVal*>(src)));
+      return;
     default:
       DCHECK(false) << "NYI: " << dst_slot_desc->type();
   }

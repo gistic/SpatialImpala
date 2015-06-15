@@ -42,6 +42,9 @@ AnyVal* CreateAnyVal(const ColumnType& type) {
       return new StringVal;
     case TYPE_TIMESTAMP: return new TimestampVal;
     case TYPE_DECIMAL: return new DecimalVal;
+    case TYPE_POINT: return new PointVal;
+    case TYPE_LINE: return new LineVal;
+    case TYPE_RECTANGLE: return new RectangleVal;
     default:
       DCHECK(false) << "Unsupported type: " << type;
       return NULL;
@@ -91,6 +94,15 @@ FunctionContext::TypeDesc AnyValUtil::ColumnTypeToTypeDesc(const ColumnType& typ
       out.precision = type.precision;
       out.scale = type.scale;
       break;
+    case TYPE_POINT:
+      out.type = FunctionContext::TYPE_POINT;
+      break;
+    case TYPE_LINE:
+      out.type = FunctionContext::TYPE_LINE;
+      break;
+    case TYPE_RECTANGLE:
+      out.type = FunctionContext::TYPE_RECTANGLE;
+      break;
     default:
       DCHECK(false) << "Unknown type: " << type;
   }
@@ -114,6 +126,9 @@ ColumnType AnyValUtil::TypeDescToColumnType(const FunctionContext::TypeDesc& typ
       return ColumnType::CreateCharType(type.len);
     case FunctionContext::TYPE_VARCHAR:
       return ColumnType::CreateVarcharType(type.len);
+    case FunctionContext::TYPE_POINT: return ColumnType(TYPE_POINT);
+    case FunctionContext::TYPE_LINE: return ColumnType(TYPE_LINE);
+    case FunctionContext::TYPE_RECTANGLE: return ColumnType(TYPE_RECTANGLE);
     default:
       DCHECK(false) << "Unknown type: " << type.type;
       return ColumnType(INVALID_TYPE);
