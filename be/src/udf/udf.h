@@ -579,7 +579,7 @@ struct RectangleVal : public AnyVal {
   double x2;
   double y2;
 
-  RectangleVal(double x1 = 0, double y1 = 0, double x2 = 0, double y2 = 0) {
+  RectangleVal(double x1 = 0.0, double y1 = 0.0, double x2 = 0.0, double y2 = 0.0) {
     this->x1 = x1;
     this->y1 = y1;
     this->x2 = x2;
@@ -596,6 +596,16 @@ struct RectangleVal : public AnyVal {
     if (is_null && other.is_null) return true;
     if (is_null || other.is_null) return false;
     return x1 == other.x1 && y1 == other.y1 && x2 == other.x2 && y2 == other.y2;
+  }
+
+  bool isOverlappedWith(const RectangleVal& other) const {
+    if (x1 > other.x2 || x2 < other.x1)
+      return false;
+
+    if (y1 > other.y2 || y2 < other.y1)
+      return false;
+
+    return true;
   }
 
   bool operator!=(const RectangleVal& other) const { return !(*this == other); }

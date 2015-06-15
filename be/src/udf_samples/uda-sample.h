@@ -1,3 +1,4 @@
+
 // Copyright 2012 Cloudera Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,8 +18,10 @@
 #define IMPALA_UDF_SAMPLE_UDA_H
 
 #include <udf/udf.h>
+#include <sstream>
 
 using namespace impala_udf;
+using namespace std;
 
 // This is an example of the COUNT aggregate function.
 void CountInit(FunctionContext* context, BigIntVal* val);
@@ -42,5 +45,26 @@ void StringConcatUpdate(FunctionContext* context, const StringVal& arg1,
     const StringVal& arg2, StringVal* val);
 void StringConcatMerge(FunctionContext* context, const StringVal& src, StringVal* dst);
 StringVal StringConcatFinalize(FunctionContext* context, const StringVal& val);
+
+
+//Overlapped shapes aggregate function
+struct RectangleNode {
+  RectangleVal rect;
+  StringVal tag;
+  RectangleNode *next;
+  RectangleNode (RectangleVal xrect, StringVal xtag) {
+    rect = xrect;
+    tag = xtag;
+    next = NULL;
+  }
+};
+
+
+void OverlappedInit(FunctionContext* context, StringVal* val1);
+void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
+    const StringVal& arg2, const IntVal& arg3, StringVal* val);
+void OverlappedMerge(FunctionContext* context, const StringVal& src, StringVal* dst);
+StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val);
+
 
 #endif
