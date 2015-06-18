@@ -82,18 +82,12 @@ void RTree::ApplyRangeQuery(Rectangle* range_query, vector<RTreeSplit>* list_of_
     for (int i = 0; i < num_of_mbrs; i++) {
       if (range_query->Contains(&tree_[index_to_be_searched + i]->mbr_)) {
         CreateRTreeSplit(index_to_be_searched + i, list_of_splits);
-        VLOG_QUERY << "Node: " << index_to_be_searched + i << " is fully contained.";
-        VLOG_QUERY << "Split created: [" << list_of_splits->back().start_offset << ", "
-            << list_of_splits->back().end_offset << "]";
       }
       else if(range_query->Intersects(&tree_[index_to_be_searched + i]->mbr_)) {
         if (index_to_be_searched < non_leaf_node_count_)
           to_be_searched.push(GetFirstChildOfNode(index_to_be_searched + i));
         else {
           CreateRTreeSplit(index_to_be_searched + i, list_of_splits);
-          VLOG_QUERY << "Node: " << index_to_be_searched + i << " is intersected.";
-          VLOG_QUERY << "Split created: [" << list_of_splits->back().start_offset << ", "
-              << list_of_splits->back().end_offset << "]";
         }
       }
     }
@@ -106,14 +100,12 @@ void RTree::CreateRTreeSplit(int node_index, vector<RTreeSplit>* list_of_splits)
   split.end_offset = (node_index == tree_.size() - 1) ?
   tree_size_ : tree_[node_index + 1]-> offset_of_first_element_;
   
-  VLOG_QUERY << "Current Split: [" << split.start_offset << ", " << split.end_offset << "]";
   // The node was the last node in the level
   if (split.end_offset <= split.start_offset)
     split.end_offset = tree_size_;
 
     if (!list_of_splits->empty()) {
       RTreeSplit old_split = list_of_splits->back();
-      VLOG_QUERY << "Old Split: [" << old_split.start_offset << ", " << old_split.end_offset << "]"; 
 
       // The 2 Splits should be merged into one.
       if (old_split.end_offset >= split.start_offset

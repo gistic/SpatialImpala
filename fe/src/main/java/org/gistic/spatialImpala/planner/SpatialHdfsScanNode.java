@@ -157,7 +157,7 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
         for (GlobalIndexRecord record: GIsForPartitions) {
           //LOG.info("Literal: " + string_value.getValue() + " Record name: " + record.getTag());
           if (string_value.getValue().equals(record.getTag())) {
-            LOG.info("Partition to process::(Name: " + record.getTag() + ")");
+            //LOG.info("Partition to process::(Name: " + record.getTag() + ")");
             partitions_.add(partition);
             descTbl.addReferencedPartition(tbl_, partition.getId());
             found = true;

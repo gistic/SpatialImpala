@@ -146,7 +146,7 @@ public class RangeQueryPredicate extends Predicate {
 		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
 			if (rect_.intersects(gIRecord.getMBR())) {
 				GIsIntersectAndFully.add(gIRecord);
-	                       LOG.info("GI is Intersected: " + gIRecord.getTag());
+	                //       LOG.info("GI is Intersected: " + gIRecord.getTag());
 			}
 		}
 		prunedDataRatio = GIsIntersectAndFully.size() * 1.0 /  globalIndexMap.size();
