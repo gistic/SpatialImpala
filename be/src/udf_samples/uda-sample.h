@@ -62,7 +62,7 @@ struct RectangleNode {
 
 void OverlappedInit(FunctionContext* context, StringVal* val1);
 void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
-    const StringVal& arg2, const IntVal& arg3, StringVal* val);
+    const IntVal& arg3, StringVal* val);
 void OverlappedMerge(FunctionContext* context, const StringVal& src, StringVal* dst);
 StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val);
 

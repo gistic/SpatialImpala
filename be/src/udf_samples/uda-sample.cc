@@ -145,11 +145,9 @@ void SumSmallDecimalMerge(FunctionContext*, const DecimalVal& src, DecimalVal* d
 
 struct RectNode{
   RectangleVal rect;
-  string tag;
   RectNode* next;
-  RectNode (RectangleVal xrect, string xtag) {
+  RectNode (RectangleVal xrect) {
     rect = xrect;
-    tag = xtag;
     next = NULL;
   }
 };
@@ -159,7 +157,7 @@ void OverlappedInit(FunctionContext* context, StringVal* val1) {
 }
 
 void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
-    const StringVal& arg2, const IntVal& arg3, StringVal* val) {
+    const IntVal& arg3, StringVal* val) {
   if (arg1.is_null) return;
   stringstream rect, tableId;
   string rectStr, tableIdstr;
@@ -167,7 +165,7 @@ void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
   rect << arg1.x1 <<",";
   rect << arg1.y1 <<",";
   rect << arg1.x2 <<",";
-  rect << arg1.y2 <<",";
+  rect << arg1.y2;
   
   tableId<<","<<arg3.val<<"/";
   
@@ -176,19 +174,17 @@ void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
   
   if (val->is_null) {
     val->is_null = false;
-    *val = StringVal(context, rectStr.size() + arg2.len + tableIdstr.size());
+    *val = StringVal(context, rectStr.size() + tableIdstr.size());
     
     memcpy(val->ptr, (char*)rectStr.c_str(), rectStr.size());
-    memcpy(val->ptr + rectStr.size(), arg2.ptr, arg2.len);
-    memcpy(val->ptr + rectStr.size() + arg2.len, (char*)tableIdstr.c_str(), tableIdstr.size());
+    memcpy(val->ptr + rectStr.size(), (char*)tableIdstr.c_str(), tableIdstr.size());
   } else {
-    int new_len = val->len + rectStr.size() + arg2.len + tableIdstr.size();
+    int new_len = val->len + rectStr.size() + tableIdstr.size();
     StringVal new_val(context, new_len);
     
     memcpy(new_val.ptr, val->ptr, val->len);
     memcpy(new_val.ptr + val->len, (char*)rectStr.c_str(), rectStr.size());
-    memcpy(new_val.ptr + val->len + rectStr.size(), arg2.ptr, arg2.len);
-    memcpy(new_val.ptr + val->len + rectStr.size() + arg2.len, (char*)tableIdstr.c_str(), tableIdstr.size());
+    memcpy(new_val.ptr + val->len + rectStr.size(), (char*)tableIdstr.c_str(), tableIdstr.size());
     
     *val = new_val;
   }
@@ -207,22 +203,23 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
   RectNode *list1Head, *list2Head;
   list1Head = list2Head = NULL;
   double x1, y1, x2, y2;
-  string tag;
   char* recordContext= NULL;
   char* colContext= NULL;
   int tableID;
   StringVal finalString, tempString;
   
-  ofstream myfile;
-  myfile.open ("/home/ahmed/logAggreg.txt", ios_base::ate);
+  //ofstream myfile;
+  //myfile.open ("/home/ahmed/logAggreg.txt", ios_base::ate);
+
 
   char *record = strtok_r((char*)val.ptr, "/", &recordContext);
   char *col;
   int count = 0;
   while (val.len > count) {
-    myfile<<val.len << "   " << count <<"\n";
+    
+    //myfile<<val.len << "   " << count <<"\n";
+    
     count += strlen(record) + 1;
-    myfile << record << "\n";
     char *temprecord = new char[strlen(record) + 1];
     strcpy(temprecord, record);
     col = strtok_r(temprecord, ",", &colContext);
@@ -234,69 +231,47 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
     col = strtok_r(NULL, ",", &colContext);
     y2 = atof(col);
     col = strtok_r(NULL, ",", &colContext);
-    myfile <<"**** "<< col <<"\n";
-    tag = string(col);
-    col = strtok_r(NULL, ",", &colContext);
     tableID = atoi(col);
-    myfile << "Record: (" << x1 << ", " << y1 << ", " << x2 << ", " << y2 << "), " << tag << ", " << tableID<<"\n";
-    RectNode *temp = new RectNode(RectangleVal(x1, y1, x2, y2), tag);
-    myfile << "Record: (" << temp->rect.x1 << ", " << temp->rect.y1 << ", " << temp->rect.x2 << ", " << temp->rect.y2 << "), " << temp->tag << "\n";
-    myfile<<"Table ID check\n";
+    
+    //myfile << "Record: (" << x1 << ", " << y1 << ", " << x2 << ", " << y2 << "), " << tableID<<"\n";
+   
+    RectNode *temp = new RectNode(RectangleVal(x1, y1, x2, y2));
+    
     if (tableID == 1) {
-      myfile<<"Table ID: 1\n";
+      
+      //myfile<<"Table ID: 1\n";
+      
       temp->next = list1Head;
-      myfile<<"List1"<<temp->tag<<"\n";
       list1Head = temp;
-      myfile<<"List1"<<list1Head->tag<<"\n";
     }
     else if (tableID == 2) {
-      myfile<<"Table ID: 2\n";
+      
+      //myfile<<"Table ID: 2\n";
+      
       temp->next = list2Head;
-      myfile<<"List2"<<temp->tag<<"\n";
       list2Head = temp;
-      myfile<<"List2"<<list2Head->tag<<"\n";
     }
     //delete[] temprecord;
+    
+    //myfile<<"-------------------------\n";
+    
     record = strtok_r(NULL, "/", &recordContext);
-    myfile<<record;
+    
+    //myfile<<record;
+   
   }
-  myfile<<"-------------------------\n";
-  myfile<<"List1head:"<<list1Head->tag<<"\n";
-  myfile<<"List2head:"<<list2Head->tag<<"\n";
+  
+  //myfile<<"-------------------------\n";
+
   RectNode *temp1, *temp2;
   temp1 = list1Head;
   int intersected = 0;
   while (temp1) {
-    myfile<<"List1"<<temp1->tag<<":";
     temp2 = list2Head;
     while (temp2) {
-      myfile<<" List2"<<temp2->tag<<",\n";
       if (temp1->rect.isOverlappedWith(temp2->rect)) {
       //if(true) {
         intersected++;
-        myfile<<"Temp1 tag: "<<temp1->tag<<"\n";
-        myfile<<"Temp2 tag: "<<temp2->tag<<"\n";
-        if (finalString.is_null) {
-          finalString.is_null = false;
-          finalString = StringVal(context, temp1->tag.length() + temp2->tag.length() + 3);
-          memcpy(finalString.ptr, "(", 1);
-          memcpy(finalString.ptr + 1, temp1->tag.c_str(), temp1->tag.length());
-          memcpy(finalString.ptr + 1 + temp1->tag.length(), ",", 1);
-          memcpy(finalString.ptr + 2 + temp1->tag.length(), temp2->tag.c_str(), temp2->tag.length());
-          memcpy(finalString.ptr + 2 + temp1->tag.length() + temp2->tag.length(), ")", 1);
-        }
-        else {
-          int new_len = finalString.len + temp1->tag.length() + temp2->tag.length() + 3;
-          StringVal new_val(context, new_len);
-          memcpy(new_val.ptr, finalString.ptr, finalString.len);
-          memcpy(new_val.ptr + finalString.len, "(", 1);
-          memcpy(new_val.ptr + finalString.len + 1, temp1->tag.c_str(), temp1->tag.length());
-          memcpy(new_val.ptr + finalString.len + 1 + temp1->tag.length(), ",", 1);
-          memcpy(new_val.ptr + finalString.len + 2 + temp1->tag.length(), temp2->tag.c_str(), temp2->tag.length());
-          memcpy(new_val.ptr + finalString.len + 2 + temp1->tag.length() + temp2->tag.length(), ")", 1);
-          finalString = new_val;
-        }
-        myfile<<"Final string: "<<(char*)finalString.ptr<<"\n";
       }
       temp2 = temp2->next;
     }
@@ -306,6 +281,8 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
   countstr<<intersected;
   StringVal intersectedRect = StringVal(context, countstr.str().size());
   memcpy(intersectedRect.ptr, countstr.str().c_str(), countstr.str().size());
-  myfile.close();
+  
+  //myfile.close();
+
   return intersectedRect;
 }
