@@ -49,6 +49,7 @@ void Base64Encode(const std::string& in, std::stringstream* out);
 // performant.
 // Returns true unless the string could not be correctly decoded.
 bool Base64Decode(const std::string& in, std::string* out);
+bool Base64Decode(const std::string& in, std::string* out, int size);
 
 // Replaces &, < and > with &amp;, &lt; and &gt; respectively. This is
 // not the full set of required encodings, but one that should be
