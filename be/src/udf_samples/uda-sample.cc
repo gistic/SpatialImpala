@@ -21,6 +21,7 @@
 #include <sstream>
 #include <iomanip>
 #include <fstream>
+#include <stdlib.h>
 using namespace impala_udf;
 using namespace std;
 
@@ -159,44 +160,61 @@ void OverlappedInit(FunctionContext* context, StringVal* val1) {
 void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
     const IntVal& arg3, StringVal* val) {
   if (arg1.is_null) return;
-  stringstream rect, tableId;
-  string rectStr, tableIdstr;
-  rect << setprecision(15);
-  rect << arg1.x1 <<",";
-  rect << arg1.y1 <<",";
-  rect << arg1.x2 <<",";
-  rect << arg1.y2;
+  stringstream recordStream;
+  string record;
+  recordStream << setprecision(15);
+  recordStream << arg1.x1 <<",";
+  recordStream << arg1.y1 <<",";
+  recordStream << arg1.x2 <<",";
+  recordStream << arg1.y2;
   
-  tableId<<","<<arg3.val<<"/";
-  
-  rectStr = rect.str();
-  tableIdstr = tableId.str();
+  recordStream<<","<<arg3.val<<"/";
+
+  record = recordStream.str();
+
+  int MEMORY_ALLOCATED_RECORDS = 10000;
+
+  int recordSize = record.size();
   
   if (val->is_null) {
     val->is_null = false;
-    *val = StringVal(context, rectStr.size() + tableIdstr.size());
-    
-    memcpy(val->ptr, (char*)rectStr.c_str(), rectStr.size());
-    memcpy(val->ptr + rectStr.size(), (char*)tableIdstr.c_str(), tableIdstr.size());
+    *val = StringVal(context, recordSize * MEMORY_ALLOCATED_RECORDS);
+    val->ptr[0] = '\0';
+    strcat((char*)val->ptr, (char*)record.c_str());
   } else {
-    int new_len = val->len + rectStr.size() + tableIdstr.size();
-    StringVal new_val(context, new_len);
-    
-    memcpy(new_val.ptr, val->ptr, val->len);
-    memcpy(new_val.ptr + val->len, (char*)rectStr.c_str(), rectStr.size());
-    memcpy(new_val.ptr + val->len + rectStr.size(), (char*)tableIdstr.c_str(), tableIdstr.size());
-    
-    *val = new_val;
+    int valLen = strlen((char*)val->ptr);
+    if ((valLen + recordSize) > val->len) {
+      int new_len = val->len + recordSize * MEMORY_ALLOCATED_RECORDS;
+      StringVal new_val(context, new_len);
+      strcat((char*)new_val.ptr, (char*)val->ptr);
+      strcat((char*)new_val.ptr, (char*)record.c_str());
+      
+      //delete[] val->ptr;
+      *val = new_val;
+    }
+    else {
+      strcat((char*)val->ptr, (char*)record.c_str());
+    }
   }
 }
 
 void OverlappedMerge(FunctionContext* context, const StringVal& src, StringVal* dst) {
   if (src.is_null) return;
-  int new_len = src.len + dst->len;
-  StringVal new_val(context, new_len);
-  memcpy(new_val.ptr, src.ptr, src.len);
-  memcpy(new_val.ptr + src.len, dst->ptr, dst->len);
-  *dst = src;
+  if (dst == NULL || dst->is_null) {
+    StringVal new_val(context, strlen((char*)src.ptr) + 1);
+    new_val.ptr[0] = '\0';
+    strcat((char*)new_val.ptr, (char*)src.ptr);
+    *dst = new_val;
+    return;
+  }
+  int new_len = strlen((char*)src.ptr) + strlen((char*)dst->ptr);
+  
+  StringVal new_val(context, new_len + 1);
+  new_val.ptr[0] = '\0';
+  strcat((char*)new_val.ptr, (char*)src.ptr);
+  strcat((char*)new_val.ptr, (char*)dst->ptr);
+  //delete[] dst->ptr;
+  *dst = new_val;
 }
 
 StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
@@ -208,66 +226,64 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
   int tableID;
   StringVal finalString, tempString;
   
-  //ofstream myfile;
-  //myfile.open ("/home/ahmed/logAggreg.txt", ios_base::ate);
-
-
+  ofstream myfile;
+  //myfile.open ("/home/ahmed/test.txt");
+  //myfile << (char*)val.ptr<<"\n";
+  int stringLen = strlen((char*)val.ptr);
   char *record = strtok_r((char*)val.ptr, "/", &recordContext);
   char *col;
   int count = 0;
-  while (val.len > count) {
-    
-    //myfile<<val.len << "   " << count <<"\n";
+  while (stringLen > count) {
     
     count += strlen(record) + 1;
+    //myfile << "stringLen = "<<stringLen<<"count = "<<count<<"\n";
     char *temprecord = new char[strlen(record) + 1];
     strcpy(temprecord, record);
+    
     col = strtok_r(temprecord, ",", &colContext);
     x1 = atof(col);
+   
     col = strtok_r(NULL, ",", &colContext);
     y1 = atof(col);
+    
     col = strtok_r(NULL, ",", &colContext);
     x2 = atof(col);
+    
     col = strtok_r(NULL, ",", &colContext);
     y2 = atof(col);
+    
     col = strtok_r(NULL, ",", &colContext);
     tableID = atoi(col);
     
-    //myfile << "Record: (" << x1 << ", " << y1 << ", " << x2 << ", " << y2 << "), " << tableID<<"\n";
-   
+    
     RectNode *temp = new RectNode(RectangleVal(x1, y1, x2, y2));
     
     if (tableID == 1) {
       
-      //myfile<<"Table ID: 1\n";
-      
+      //myfile << "Record 1:"<<temp->rect.x1<<", "<<temp->rect.y1<<", "<<temp->rect.x2<<", "<<temp->rect.y2<<", "<<"\n";
       temp->next = list1Head;
       list1Head = temp;
     }
     else if (tableID == 2) {
       
-      //myfile<<"Table ID: 2\n";
-      
+      //myfile << "Record 2:"<<temp->rect.x1<<", "<<temp->rect.y1<<", "<<temp->rect.x2<<", "<<temp->rect.y2<<", "<<"\n";
       temp->next = list2Head;
       list2Head = temp;
     }
-    //delete[] temprecord;
+    delete[] temprecord;
     
-    //myfile<<"-------------------------\n";
     
     record = strtok_r(NULL, "/", &recordContext);
     
-    //myfile<<record;
-   
+    
   }
-  
-  //myfile<<"-------------------------\n";
 
   RectNode *temp1, *temp2;
   temp1 = list1Head;
   int intersected = 0;
   while (temp1) {
     temp2 = list2Head;
+    //myfile << "Record 1:"<<temp1->rect.x1<<", "<<temp1->rect.y1<<", "<<temp1->rect.x2<<", "<<temp1->rect.y2<<", "<<"\n";
     while (temp2) {
       if (temp1->rect.isOverlappedWith(temp2->rect)) {
       //if(true) {
@@ -277,12 +293,11 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
     }
     temp1 = temp1->next;
   }
+  //delete[] val.ptr;
   stringstream countstr;
   countstr<<intersected;
   StringVal intersectedRect = StringVal(context, countstr.str().size());
   memcpy(intersectedRect.ptr, countstr.str().c_str(), countstr.str().size());
-  
-  //myfile.close();
-
+  myfile.close();
   return intersectedRect;
 }
