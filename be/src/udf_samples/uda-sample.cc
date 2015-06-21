@@ -282,7 +282,7 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
   temp1 = list1Head;
   int intersected = 0;
   while (temp1) {
-    temp2 = list1Head;
+    temp2 = list2Head;
     //myfile << "Record 1:"<<temp1->rect.x1<<", "<<temp1->rect.y1<<", "<<temp1->rect.x2<<", "<<temp1->rect.y2<<", "<<"\n";
     while (temp2) {
       if (temp1->rect.isOverlappedWith(temp2->rect)) {
