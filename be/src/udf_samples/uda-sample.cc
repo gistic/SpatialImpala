@@ -21,6 +21,7 @@
 #include <sstream>
 #include <iomanip>
 #include <fstream>
+#include <stdlib.h>
 using namespace impala_udf;
 using namespace std;
 
@@ -188,7 +189,7 @@ void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
       strcat((char*)new_val.ptr, (char*)val->ptr);
       strcat((char*)new_val.ptr, (char*)record.c_str());
       
-      delete[] val->ptr;
+      //delete[] val->ptr;
       *val = new_val;
     }
     else {
@@ -212,7 +213,7 @@ void OverlappedMerge(FunctionContext* context, const StringVal& src, StringVal* 
   new_val.ptr[0] = '\0';
   strcat((char*)new_val.ptr, (char*)src.ptr);
   strcat((char*)new_val.ptr, (char*)dst->ptr);
-  delete[] dst->ptr;
+  //delete[] dst->ptr;
   *dst = new_val;
 }
 
@@ -225,25 +226,32 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
   int tableID;
   StringVal finalString, tempString;
   
-  
-
+  ofstream myfile;
+  //myfile.open ("/home/ahmed/test.txt");
+  //myfile << (char*)val.ptr<<"\n";
+  int stringLen = strlen((char*)val.ptr);
   char *record = strtok_r((char*)val.ptr, "/", &recordContext);
   char *col;
   int count = 0;
-  int stringLen = strlen((char*)val.ptr);
   while (stringLen > count) {
     
     count += strlen(record) + 1;
+    //myfile << "stringLen = "<<stringLen<<"count = "<<count<<"\n";
     char *temprecord = new char[strlen(record) + 1];
     strcpy(temprecord, record);
+    
     col = strtok_r(temprecord, ",", &colContext);
     x1 = atof(col);
+   
     col = strtok_r(NULL, ",", &colContext);
     y1 = atof(col);
+    
     col = strtok_r(NULL, ",", &colContext);
     x2 = atof(col);
+    
     col = strtok_r(NULL, ",", &colContext);
     y2 = atof(col);
+    
     col = strtok_r(NULL, ",", &colContext);
     tableID = atoi(col);
     
@@ -252,13 +260,13 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
     
     if (tableID == 1) {
       
-      
+      //myfile << "Record 1:"<<temp->rect.x1<<", "<<temp->rect.y1<<", "<<temp->rect.x2<<", "<<temp->rect.y2<<", "<<"\n";
       temp->next = list1Head;
       list1Head = temp;
     }
     else if (tableID == 2) {
       
-      
+      //myfile << "Record 2:"<<temp->rect.x1<<", "<<temp->rect.y1<<", "<<temp->rect.x2<<", "<<temp->rect.y2<<", "<<"\n";
       temp->next = list2Head;
       list2Head = temp;
     }
@@ -274,7 +282,8 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
   temp1 = list1Head;
   int intersected = 0;
   while (temp1) {
-    temp2 = list2Head;
+    temp2 = list1Head;
+    //myfile << "Record 1:"<<temp1->rect.x1<<", "<<temp1->rect.y1<<", "<<temp1->rect.x2<<", "<<temp1->rect.y2<<", "<<"\n";
     while (temp2) {
       if (temp1->rect.isOverlappedWith(temp2->rect)) {
       //if(true) {
@@ -289,6 +298,6 @@ StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
   countstr<<intersected;
   StringVal intersectedRect = StringVal(context, countstr.str().size());
   memcpy(intersectedRect.ptr, countstr.str().c_str(), countstr.str().size());
-  
+  myfile.close();
   return intersectedRect;
 }
