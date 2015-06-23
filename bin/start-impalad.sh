@@ -21,7 +21,7 @@ set -e
 set -u
 
 BUILD_TYPE=debug
-IMPALAD_ARGS=""
+IMPALAD_ARGS="-rm_default_memory=4G"
 BINARY_BASE_DIR=${IMPALA_HOME}/be/build
 GDB_PREFIX=""
 IN_PROCESS_BINARY=testutil/mini-impala-cluster

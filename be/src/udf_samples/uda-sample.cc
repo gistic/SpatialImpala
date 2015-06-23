@@ -22,6 +22,7 @@
 #include <iomanip>
 #include <fstream>
 #include <stdlib.h>
+
 using namespace impala_udf;
 using namespace std;
 
@@ -144,45 +145,87 @@ void SumSmallDecimalMerge(FunctionContext*, const DecimalVal& src, DecimalVal* d
 //Overlap aggregate function
 //-------------------------------------------------------------------------
 
-struct RectNode{
-  RectangleVal rect;
-  RectNode* next;
-  RectNode (RectangleVal xrect) {
-    rect = xrect;
-    next = NULL;
-  }
+struct Rect{  
+  
+  double x1;
+  double y1; 
+  double x2; 
+  double y2;
+
+    Rect (double x1, double y1, double x2, double y2) {
+      this->x1 = x1;
+      this->y1 = y1;
+      this->x2 = x2;
+      this->y2 = y2;
+    }
 };
+
+typedef Rect* RectPtr;
+
+int compareFunc (const void * val1, const void * val2)
+{
+  Rect* rect1 = * (Rect **) val1;
+  Rect* rect2 = * (Rect **) val2; 
+  
+    return ( rect1->x1 - rect2->x1 );
+}
+
+bool isIntersected(Rect* r, Rect* s){
+  return (s->x2 > r->x1 
+    && r->x2 > s->x1 
+    && s->y2 > r->y1 
+    && r->y2 > s->y1);
+}
 
 void OverlappedInit(FunctionContext* context, StringVal* val1) {
   val1->is_null = true;
+
+  ofstream myfile;
+  myfile.open ("./spatialJoin.out");
+  myfile << "\nStarting collecting ....\n\n ";
+  myfile.close();
+
 }
+
+const static char defaultHeader[] = "0000000011#";
+const static int headerSize = strlen(defaultHeader);
 
 void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
     const IntVal& arg3, StringVal* val) {
+   
   if (arg1.is_null) return;
+  
   stringstream recordStream;
   string record;
+  
   recordStream << setprecision(15);
   recordStream << arg1.x1 <<",";
   recordStream << arg1.y1 <<",";
   recordStream << arg1.x2 <<",";
   recordStream << arg1.y2;
   
-  recordStream<<","<<arg3.val<<"/";
+  recordStream<<","<<arg3.val<<"/"; 
 
   record = recordStream.str();
 
-  int MEMORY_ALLOCATED_RECORDS = 10000;
+  int MEMORY_ALLOCATED_RECORDS = 1000000;
 
   int recordSize = record.size();
   
   if (val->is_null) {
     val->is_null = false;
-    *val = StringVal(context, recordSize * MEMORY_ALLOCATED_RECORDS);
-    val->ptr[0] = '\0';
-    strcat((char*)val->ptr, (char*)record.c_str());
-  } else {
-    int valLen = strlen((char*)val->ptr);
+    *val = StringVal(context, recordSize * MEMORY_ALLOCATED_RECORDS);     
+    strcpy((char*)val->ptr, defaultHeader);       
+  } //else {
+    /*int valLen = strlen((char*)val->ptr);
+
+    if( (valLen/recordSize) % 10000 == 0 ){
+      ofstream myfile;
+      myfile.open ("./spatialJoin.out");
+      myfile << "Records Received " << (valLen/recordSize) ;
+      myfile.close();
+    }
+
     if ((valLen + recordSize) > val->len) {
       int new_len = val->len + recordSize * MEMORY_ALLOCATED_RECORDS;
       StringVal new_val(context, new_len);
@@ -192,10 +235,39 @@ void OverlappedUpdate(FunctionContext* context, const RectangleVal& arg1,
       //delete[] val->ptr;
       *val = new_val;
     }
-    else {
-      strcat((char*)val->ptr, (char*)record.c_str());
-    }
+    else {*/
+  
+  int lengthFieldSize = headerSize - 1;
+
+  char totalLength_str[lengthFieldSize+1];
+  
+  memcpy(totalLength_str, (char*) val->ptr, sizeof(char) * lengthFieldSize);
+
+  int totalLength = atoi(totalLength_str);
+
+  strcat((char*)(val->ptr + totalLength), (char*)record.c_str());
+
+  totalLength += recordSize;
+  
+  stringstream temp;
+  temp << totalLength;
+  const char* newLength_str = temp.str().c_str();
+
+  int totalLength_str_len = strlen(newLength_str);
+
+  memcpy((char*)(val->ptr + (lengthFieldSize - totalLength_str_len)), newLength_str, totalLength_str_len);
+
+  if( (((totalLength-headerSize))/recordSize) % 10000 == 0 ){ 
+      ofstream myfile;
+      myfile.open ("./spatialJoin.out");
+      myfile << "Records Received " << ((totalLength-headerSize)/recordSize) << "\n";
+      myfile.close();
   }
+
+  //printf("State : %s\n", val->ptr ); 
+  //printf("New Record : %s\n", record.c_str());
+  //printf("Record size : %d\n", recordSize ); 
+  //printf("Records received : %d\n", ((totalLength-headerSize)/recordSize) ); 
 }
 
 void OverlappedMerge(FunctionContext* context, const StringVal& src, StringVal* dst) {
@@ -211,93 +283,128 @@ void OverlappedMerge(FunctionContext* context, const StringVal& src, StringVal* 
   
   StringVal new_val(context, new_len + 1);
   new_val.ptr[0] = '\0';
-  strcat((char*)new_val.ptr, (char*)src.ptr);
-  strcat((char*)new_val.ptr, (char*)dst->ptr);
+  
+  if(*(src.ptr + headerSize - 1) == '#')
+    strcat((char*)new_val.ptr, (char*)(src.ptr + headerSize));
+  else
+    strcat((char*)new_val.ptr, (char*)src.ptr );
+  
+  if(*(dst->ptr + headerSize - 1) == '#')
+    strcat((char*)new_val.ptr, (char*)(dst->ptr + headerSize));
+  else
+    strcat((char*)new_val.ptr, (char*)dst->ptr );
+
   //delete[] dst->ptr;
   *dst = new_val;
 }
 
-StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {
-  RectNode *list1Head, *list2Head;
-  list1Head = list2Head = NULL;
+StringVal OverlappedFinalize(FunctionContext* context, const StringVal& val) {      
+  
+  char* records_str = (char*)val.ptr;
+
   double x1, y1, x2, y2;
-  char* recordContext= NULL;
+  char* restOfRecords= NULL;
   char* colContext= NULL;
   int tableID;
-  StringVal finalString, tempString;
   
   ofstream myfile;
-  //myfile.open ("/home/ahmed/test.txt");
-  //myfile << (char*)val.ptr<<"\n";
-  int stringLen = strlen((char*)val.ptr);
-  char *record = strtok_r((char*)val.ptr, "/", &recordContext);
-  char *col;
-  int count = 0;
-  while (stringLen > count) {
+  myfile.open ("./spatialJoin.out");
+  myfile << "\nParsing ....\n\n ";
+
+  int records_str_len = strlen((char*)records_str);
+
+  char *record;
+    char *field;
+    int count = 0;
+
+    Rect **list1 = NULL, **list2 = NULL;
+    int list1Size = 0, list2Size = 0;
+
+
     
-    count += strlen(record) + 1;
-    //myfile << "stringLen = "<<stringLen<<"count = "<<count<<"\n";
-    char *temprecord = new char[strlen(record) + 1];
-    strcpy(temprecord, record);
-    
-    col = strtok_r(temprecord, ",", &colContext);
-    x1 = atof(col);
-   
-    col = strtok_r(NULL, ",", &colContext);
-    y1 = atof(col);
-    
-    col = strtok_r(NULL, ",", &colContext);
-    x2 = atof(col);
-    
-    col = strtok_r(NULL, ",", &colContext);
-    y2 = atof(col);
-    
-    col = strtok_r(NULL, ",", &colContext);
-    tableID = atoi(col);
-    
-    
-    RectNode *temp = new RectNode(RectangleVal(x1, y1, x2, y2));
-    
-    if (tableID == 1) {
+    while ((record = strtok_r(records_str, "/", &restOfRecords)) != NULL) {
+
+      if(list1 == NULL) list1 = new RectPtr[records_str_len / (strlen(record)+1)];
+      if(list2 == NULL) list2 = new RectPtr[records_str_len / (strlen(record)+1)];
+
+
       
-      //myfile << "Record 1:"<<temp->rect.x1<<", "<<temp->rect.y1<<", "<<temp->rect.x2<<", "<<temp->rect.y2<<", "<<"\n";
-      temp->next = list1Head;
-      list1Head = temp;
-    }
-    else if (tableID == 2) {
+      x1 = atof(strtok_r(record, ",", &colContext));     
+      y1 = atof(strtok_r(NULL, ",", &colContext));      
+      x2 = atof(strtok_r(NULL, ",", &colContext));      
+      y2 = atof(strtok_r(NULL, ",", &colContext));      
+      tableID = atoi(strtok_r(NULL, ",", &colContext));
+
+      //printf("%f, %f, %f, %f, %d\n",x1,y1,x2,y2,tableID);     
+
+      Rect *rect = new Rect(x1, y1, x2, y2);      
+
+      if (tableID == 1) {               
+          list1[list1Size++] = rect;
+      } else if (tableID == 2) {                
+          list2[list2Size++] = rect;
+      }           
       
-      //myfile << "Record 2:"<<temp->rect.x1<<", "<<temp->rect.y1<<", "<<temp->rect.x2<<", "<<temp->rect.y2<<", "<<"\n";
-      temp->next = list2Head;
-      list2Head = temp;
+      records_str = restOfRecords;       
+    
     }
-    delete[] temprecord;
-    
-    
-    record = strtok_r(NULL, "/", &recordContext);
-    
-    
+
+    qsort(list1, list1Size, sizeof(list1[0]), compareFunc);
+    qsort(list2, list2Size, sizeof(list2[0]), compareFunc);
+
+    myfile << "\nSpatial Joining ....\n\n"; 
+    myfile << "List 1 of size : " << list1Size << "\n";
+    myfile << "List 2 of size : " << list2Size << "\n";
+
+    Rect** R = list1;
+    Rect** S = list2;
+
+    int R_length = list1Size;
+    int S_length = list2Size;
+
+    int i = 0, j = 0;
+    while (i < list1Size && j < list2Size) {
+      Rect* r;
+      Rect* s;
+      if (compareFunc(&R[i], &S[j]) < 0) {
+        r = R[i];
+        int jj = j;
+
+        while ((jj < S_length) && ((s = S[jj])->x1 <= r->x2)) {
+          if (isIntersected(r, s)) count++;         
+          jj++;
+        }
+        i++;        
+      } else {
+        s = S[j];
+        int ii = i;
+
+        while ((ii < R_length) && ((r = R[ii])->x1 <= s->x2)) {
+          if (isIntersected(r,s)) count++;
+          ii++;         
+        }
+        j++;
+      }   
+
+      if(i % 1000 == 0) 
+        myfile << "List 1 : Processed " << i << " of " << list1Size << " Shapes\n";
+       
   }
 
-  RectNode *temp1, *temp2;
-  temp1 = list1Head;
-  int intersected = 0;
-  while (temp1) {
-    temp2 = list2Head;
-    //myfile << "Record 1:"<<temp1->rect.x1<<", "<<temp1->rect.y1<<", "<<temp1->rect.x2<<", "<<temp1->rect.y2<<", "<<"\n";
-    while (temp2) {
-      if (temp1->rect.isOverlappedWith(temp2->rect)) {
-      //if(true) {
-        intersected++;
-      }
-      temp2 = temp2->next;
-    }
-    temp1 = temp1->next;
-  }
-  //delete[] val.ptr;
+  myfile << "\nFinished processing, Count : " << count << "\n";
+
+  for(int i=0; i < list1Size; i++) delete list1[i];
+  for(int i=0; i < list2Size; i++) delete list2[i];
+
+  delete list1;
+  delete list2;
+
   stringstream countstr;
-  countstr<<intersected;
+  countstr << count;
   StringVal intersectedRect = StringVal(context, countstr.str().size());
   memcpy(intersectedRect.ptr, countstr.str().c_str(), countstr.str().size());
+  
   myfile.close();
+
   return intersectedRect;
 }
