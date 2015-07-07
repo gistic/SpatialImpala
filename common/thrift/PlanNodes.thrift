@@ -42,7 +42,8 @@ enum TPlanNodeType {
   DATA_SOURCE_NODE,
   ANALYTIC_EVAL_NODE,
   SPATIAL_HDFS_SCAN_NODE,
-  SPATIAL_SELECT_NODE
+  SPATIAL_SELECT_NODE,
+  SPATIAL_JOIN_NODE
 }
 
 // phases of an execution node
@@ -167,6 +168,7 @@ struct TEqJoinCondition {
   2: required Exprs.TExpr right;
 }
 
+
 enum TJoinOp {
   INNER_JOIN,
   LEFT_OUTER_JOIN,
@@ -200,6 +202,28 @@ struct THashJoinNode {
   // after constructing the build side that can be applied to the probe side.
   4: optional bool add_probe_filters
 }
+
+struct TSpatialJoinNode {
+  1: required TJoinOp join_op
+
+  // the overlap predicate
+  2: required Exprs.TExpr spatial_join_expr
+  
+  // build expr
+  3: required Exprs.TExprNode build_expr
+  
+  // probe expr
+  4: required Exprs.TExprNode probe_expr
+  
+  // anything from the ON or USING clauses (but *not* the WHERE clause) that's not an
+  // overlap predicate
+  5: optional list<Exprs.TExpr> other_join_conjuncts
+  
+  // If true, this join node can (but may choose not to) generate slot filters
+  // after constructing the build side that can be applied to the probe side.
+  6: optional bool add_probe_filters
+}
+
 
 struct TAggregationNode {
   1: optional list<Exprs.TExpr> grouping_exprs
@@ -375,7 +399,8 @@ struct TPlanNode {
   20: optional TAnalyticNode analytic_node
   21: optional TSpatialSelectNode spatial_select_node
   22: optional TSpatialHdfsScanNode spatial_hdfs_scan_node
-
+  23: optional TSpatialJoinNode spatial_join_node
+  
   // Label that should be used to print this node to the user.
   17: optional string label
 
