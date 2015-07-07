@@ -19,6 +19,7 @@
 #include <vector>
 #include <string>
 
+#include "runtime/channel.h"
 #include "exec/data-sink.h"
 #include "common/global-types.h"
 #include "common/object-pool.h"
@@ -89,12 +90,13 @@ class DataStreamSender : public DataSink {
 
   virtual RuntimeProfile* profile() { return profile_; }
 
- private:
-  class Channel;
-
   // Sender instance id, unique within a fragment.
   int sender_id_;
+  boost::scoped_ptr<MemTracker> mem_tracker_;
   RuntimeState* state_;
+  RuntimeProfile::Counter* thrift_transmit_timer_;
+
+ protected:
   ObjectPool* pool_;
   const RowDescriptor& row_desc_;
   bool broadcast_;  // if true, send all rows on all channels
@@ -115,10 +117,8 @@ class DataStreamSender : public DataSink {
 
   RuntimeProfile* profile_; // Allocated from pool_
   RuntimeProfile::Counter* serialize_batch_timer_;
-  RuntimeProfile::Counter* thrift_transmit_timer_;
   RuntimeProfile::Counter* bytes_sent_counter_;
   RuntimeProfile::Counter* uncompressed_bytes_counter_;
-  boost::scoped_ptr<MemTracker> mem_tracker_;
 
   // Throughput per time spent in TransmitData
   RuntimeProfile::Counter* network_throughput_;

@@ -48,6 +48,7 @@ add_library(Runtime
   runtime-state.cc
   sorted-run-merger.cc
   sorter.cc
+  spatial-data-stream-sender.cc
   string-value.cc
   thread-resource-mgr.cc
   timestamp-parse-util.cc

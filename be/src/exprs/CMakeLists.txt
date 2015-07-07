@@ -45,6 +45,7 @@ add_library(Exprs
   overlap-query.cc
   range-query.cc
   slot-ref.cc
+  spatial-partition.cc
   string-functions.cc
   timestamp-functions.cc
   timezone_db.cc

@@ -77,6 +77,7 @@ add_library(Exec
   sort-exec-exprs.cc
   sort-node.cc
   spatial-hdfs-scan-node.cc
+  spatial-join-node.cc
   spatial-select-node.cc
   text-converter.cc
   topn-node.cc
