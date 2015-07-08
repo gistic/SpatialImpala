@@ -7,10 +7,9 @@
 #include <boost/thread.hpp>
 #include <string>
 
+#include "exec/row-batch-list.h"
 #include "exec/exec-node.h"
-#include "exec/old-hash-table.h"
 #include "exec/blocking-join-node.h"
-#include "util/promise.h"
 
 #include "gen-cpp/PlanNodes_types.h"  // for TJoinOp
 
@@ -49,14 +48,36 @@ class SpatialJoinNode : public BlockingJoinNode {
 
  private:
 
-  // spatial-join conjuncts from the JOIN clause
-  std::vector<ExprContext*> spatial_join_conjunct_ctxs_;
+  // position of the last processed build for the current probe pos.
+  int build_batch_pos_;
+
+  TupleRow** built_rows_;
+  TupleRow** lastest_probe_batch_;
+  int built_rows_count_;
+  int last_ii_;
+  int last_jj_;
+
+  // our predicate is separated into
+  // build_expr_ (over child(1)) and probe_expr_ (over child(0))
+  ExprContext* probe_expr_ctx_;
+  ExprContext* build_expr_ctx_;
+
+  // spatial-join conjunct from the JOIN clause
+  ExprContext* spatial_join_conjunct_ctx_;
 
   // non-spatial-join conjuncts from the JOIN clause
   std::vector<ExprContext*> other_join_conjunct_ctxs_;
 
   // Construct the build hash table, adding all the rows in 'build_batch'
-  void ProcessBuildBatch(RowBatch* build_batch);
+  void ProcessBuildBatch(RowBatchList* build_batch);
+
+  // Processes a probe batch for the common (non right-outer join) cases.
+  //  out_batch: the batch for resulting tuple rows
+  //  probe_batch: the probe batch to process.  This function can be called to
+  //    continue processing a batch in the middle
+  //  max_added_rows: maximum rows that can be added to out_batch
+  // return the number of rows added to out_batch
+  int ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batch, int max_added_rows);
 };
 
 }
