@@ -51,16 +51,22 @@ class SpatialJoinNode : public BlockingJoinNode {
   // position of the last processed build for the current probe pos.
   int build_batch_pos_;
 
+  std::vector<TupleRow*> build_rows;
+  std::vector<TupleRow*> *lastest_probe_batch;  
+
   TupleRow** built_rows_;
   TupleRow** lastest_probe_batch_;
-  int built_rows_count_;
+
   int last_ii_;
   int last_jj_;
 
   // our predicate is separated into
   // build_expr_ (over child(1)) and probe_expr_ (over child(0))
+  //TODO (MA) : Where are those being created ?
   ExprContext* probe_expr_ctx_;
   ExprContext* build_expr_ctx_;
+
+  RowsX1Comparator *rowsX1Comparator;
 
   // spatial-join conjunct from the JOIN clause
   ExprContext* spatial_join_conjunct_ctx_;

@@ -26,6 +26,7 @@ const char* SpatialJoinNode::LLVM_CLASS_NAME = "class.impala::SpatialJoinNode";
 SpatialJoinNode::SpatialJoinNode(
     ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs)
   : BlockingJoinNode("HashJoinNode", tnode.hash_join_node.join_op, pool, tnode, descs) {
+    //TODO: (MA) Is this really HashJoinNode ? 
 
   // The spatial join node does not support cross or anti joins
   DCHECK_NE(join_op_, TJoinOp::CROSS_JOIN);
@@ -67,6 +68,9 @@ Status SpatialJoinNode::Prepare(RuntimeState* state) {
   RETURN_IF_ERROR(build_expr_ctx_->Prepare(state, child(1)->row_desc()));
   RETURN_IF_ERROR(probe_expr_ctx_->Prepare(state, child(0)->row_desc()));
 
+  rowsX1Comparator = new RowsX1Comparator(build_expr_ctx_, probe_expr_ctx_);
+
+  //TODO (MA) : How & Where are those expressions used, should it be inside the process probe or process build ??
   // spatial_join_conjunct_ctx_ are evaluated in the context of the rows produced by this
   // node
   RETURN_IF_ERROR(spatial_join_conjunct_ctx_->Prepare(state, row_descriptor_));
@@ -115,6 +119,7 @@ Status SpatialJoinNode::ConstructBuildSide(RuntimeState* state) {
     if (eos) break;
   }
 
+  //TODO (MA) : Is it called only once ??
   ProcessBuildBatch(&build_batches);
   return Status::OK;
 }
