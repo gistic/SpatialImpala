@@ -62,11 +62,8 @@ class SpatialJoinNode : public BlockingJoinNode {
 
   // our predicate is separated into
   // build_expr_ (over child(1)) and probe_expr_ (over child(0))
-  //TODO (MA) : Where are those being created ?
   ExprContext* probe_expr_ctx_;
   ExprContext* build_expr_ctx_;
-
-  RowsX1Comparator *rowsX1Comparator;
 
   // spatial-join conjunct from the JOIN clause
   ExprContext* spatial_join_conjunct_ctx_;
@@ -84,6 +81,8 @@ class SpatialJoinNode : public BlockingJoinNode {
   //  max_added_rows: maximum rows that can be added to out_batch
   // return the number of rows added to out_batch
   int ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batch, int max_added_rows);
+  void AddOutputRow(RowBatch* out_batch, int* rows_added, uint8_t** out_row_mem,
+                    TupleRow* build, TupleRow* probe, int max_added_rows);
 };
 
 }
