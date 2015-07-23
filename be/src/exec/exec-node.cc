@@ -34,6 +34,7 @@
 #include "exec/hdfs-scan-node.h"
 #include "exec/hbase-scan-node.h"
 #include "exec/spatial-hdfs-scan-node.h"
+#include "exec/spatial-join-node.h"
 #include "exec/select-node.h"
 #include "exec/spatial-select-node.h"
 #include "exec/partitioned-aggregation-node.h"
@@ -281,6 +282,9 @@ Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
       break;
     case TPlanNodeType::CROSS_JOIN_NODE:
       *node = pool->Add(new CrossJoinNode(pool, tnode, descs));
+      break;
+    case TPlanNodeType::SPATIAL_JOIN_NODE:
+      *node = pool->Add(new SpatialJoinNode(pool, tnode, descs));
       break;
     case TPlanNodeType::EMPTY_SET_NODE:
       *node = pool->Add(new EmptySetNode(pool, tnode, descs));

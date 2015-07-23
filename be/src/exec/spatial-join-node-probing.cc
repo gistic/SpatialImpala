@@ -50,11 +50,8 @@ void SpatialJoinNode::AddOutputRow
 
   if (EvalConjuncts(conjunct_ctxs, num_conjunct_ctxs, out_row)) {
     (*rows_added)++;
-    // Filled up out batch or hit limit
-    if (UNLIKELY((*rows_added) == max_added_rows)) return;
     // Advance to next out row
-    out_row_mem += out_batch->row_byte_size();
-    out_row = reinterpret_cast<TupleRow*>(out_row_mem);
+    (*out_row_mem) += out_batch->row_byte_size();
   }
 }
 

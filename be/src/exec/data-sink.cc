@@ -25,6 +25,7 @@
 #include "gen-cpp/ImpalaInternalService_types.h"
 #include "gen-cpp/ImpalaInternalService_constants.h"
 #include "runtime/data-stream-sender.h"
+#include "runtime/spatial-data-stream-sender.h"
 #include "util/container-util.h"
 
 using namespace std;
@@ -44,9 +45,16 @@ Status DataSink::CreateDataSink(ObjectPool* pool,
       }
 
       // TODO: figure out good buffer size based on size of output row
-      tmp_sink = new DataStreamSender(pool,
-          params.sender_id, row_desc, thrift_sink.stream_sink,
-          params.destinations, 16 * 1024);
+      if (thrift_sink.stream_sink.output_partition.isSpatial) {
+        tmp_sink = new SpatialDataStreamSender(pool,
+            params.sender_id, row_desc, thrift_sink.stream_sink,
+            params.destinations, 16 * 1024);
+      }
+      else {
+        tmp_sink = new DataStreamSender(pool,
+            params.sender_id, row_desc, thrift_sink.stream_sink,
+            params.destinations, 16 * 1024);
+      }
       sink->reset(tmp_sink);
       break;
 

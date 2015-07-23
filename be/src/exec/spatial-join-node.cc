@@ -25,7 +25,7 @@ const char* SpatialJoinNode::LLVM_CLASS_NAME = "class.impala::SpatialJoinNode";
 
 SpatialJoinNode::SpatialJoinNode(
     ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs)
-  : BlockingJoinNode("SpatialJoinNode", tnode.hash_join_node.join_op, pool, tnode, descs) {
+  : BlockingJoinNode("SpatialJoinNode", tnode.spatial_join_node.join_op, pool, tnode, descs) {
 
   // The spatial join node does not support cross or anti joins
   DCHECK_NE(join_op_, TJoinOp::CROSS_JOIN);
@@ -45,12 +45,10 @@ Status SpatialJoinNode::Init(const TPlanNode& tnode) {
   RETURN_IF_ERROR(
       Expr::CreateExprTree(pool_, tnode.spatial_join_node.spatial_join_expr,
                             &spatial_join_conjunct_ctx_));
-  //RETURN_IF_ERROR(
-  //    Expr::CreateExprTree(pool_, tnode.spatial_join_node.probe_expr, &ctx));
-  //probe_expr_ctxs_.push_back(ctx);
-  //RETURN_IF_ERROR(
-  //    Expr::CreateExprTree(pool_, tnode.spatial_join_node.build_expr, &ctx));
-  //build_expr_ctxs_.push_back(ctx);
+  RETURN_IF_ERROR(
+      Expr::CreateExprTree(pool_, tnode.spatial_join_node.probe_expr, &probe_expr_ctx_));
+  RETURN_IF_ERROR(
+      Expr::CreateExprTree(pool_, tnode.spatial_join_node.build_expr, &build_expr_ctx_));
   RETURN_IF_ERROR(
       Expr::CreateExprTrees(pool_, tnode.spatial_join_node.other_join_conjuncts,
                             &other_join_conjunct_ctxs_));

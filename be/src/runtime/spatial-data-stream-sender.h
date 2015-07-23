@@ -49,6 +49,9 @@ class SpatialDataStreamSender : public DataStreamSender {
   // buffers (ie, blocks if there are still in-flight rpcs from the last
   // Send() call).
   virtual Status Send(RuntimeState* state, RowBatch* batch, bool eos);
+  
+  private:
+  std::map<std::string, std::vector<std::string> > partitions_;
 };
 
 }
