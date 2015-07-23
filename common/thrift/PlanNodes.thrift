@@ -210,10 +210,10 @@ struct TSpatialJoinNode {
   2: required Exprs.TExpr spatial_join_expr
   
   // build expr
-  3: required Exprs.TExprNode build_expr
+  3: required Exprs.TExpr build_expr
   
   // probe expr
-  4: required Exprs.TExprNode probe_expr
+  4: required Exprs.TExpr probe_expr
   
   // anything from the ON or USING clauses (but *not* the WHERE clause) that's not an
   // overlap predicate

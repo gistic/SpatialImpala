@@ -15,6 +15,7 @@
 package com.cloudera.impala.planner;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -48,6 +49,7 @@ import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.TupleId;
 import com.cloudera.impala.analysis.UnionStmt;
 import com.cloudera.impala.analysis.UnionStmt.UnionOperand;
+import com.cloudera.impala.analysis.Predicate;
 import com.cloudera.impala.catalog.ColumnStats;
 import com.cloudera.impala.catalog.DataSourceTable;
 import com.cloudera.impala.catalog.HBaseTable;
@@ -72,6 +74,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 
 import org.gistic.spatialImpala.analysis.SpatialPointInclusionStmt;
+import org.gistic.spatialImpala.analysis.OverlapQueryPredicate;
 import org.gistic.spatialImpala.catalog.*;
 import org.gistic.spatialImpala.planner.*;
 /**
@@ -274,6 +277,11 @@ public class Planner {
       Preconditions.checkState(childFragments.size() == 2);
       result = createHashJoinFragment(
           (HashJoinNode) root, childFragments.get(1), childFragments.get(0),
+          perNodeMemLimit, fragments, analyzer);
+    } else if (root instanceof SpatialJoinNode) {
+      Preconditions.checkState(childFragments.size() == 2);
+      result = createSpatialJoinFragment(
+          (SpatialJoinNode) root, childFragments.get(1), childFragments.get(0),
           perNodeMemLimit, fragments, analyzer);
     } else if (root instanceof CrossJoinNode) {
       Preconditions.checkState(childFragments.size() == 2);
@@ -622,6 +630,60 @@ public class Planner {
       return joinFragment;
     }
   }
+  
+  
+  
+  private PlanFragment createSpatialJoinFragment(
+	      SpatialJoinNode node, PlanFragment rightChildFragment,
+	      PlanFragment leftChildFragment, long perNodeMemLimit,
+	      ArrayList<PlanFragment> fragments, Analyzer analyzer)
+	      throws InternalException {
+    // broadcast: send the rightChildFragment's output to each node executing
+    // the leftChildFragment; the cost across all nodes is proportional to the
+    // total amount of data sent
+    PlanNode rhsTree = rightChildFragment.getPlanRoot();
+    long rhsDataSize = 0;
+
+    node.setDistributionMode(SpatialJoinNode.DistributionMode.PARTITIONED);
+
+    // Neither lhs nor rhs are already partitioned on the join exprs.
+    // Create a new parent fragment containing a SspatialJoin node with two
+    // ExchangeNodes as inputs; the latter are the destinations of the
+    // left- and rightChildFragments, which now partition their output
+    // on their respective join exprs.
+    // The new fragment is spatial-partitioned on the lhs input join exprs.
+    
+    OverlapQueryPredicate overlapPredicate = node.getOverlapPredicate();
+    
+    ArrayList<Expr> lhExpr = new ArrayList<Expr>(Arrays.asList(overlapPredicate.getLeftHandSidePartitionCol()));
+    ArrayList<Expr> rhExpr = new ArrayList<Expr>(Arrays.asList(overlapPredicate.getRightHandSidePartitionCol()));
+    
+    DataPartition lhsJoinPartition = new DataPartition(
+            TPartitionType.HASH_PARTITIONED, lhExpr);
+    
+    DataPartition rhsJoinPartition = new SpatialDataPartition(
+            TPartitionType.HASH_PARTITIONED, rhExpr, overlapPredicate.getIntersectedPartitions());
+    
+    ExchangeNode lhsExchange = new ExchangeNode(nodeIdGenerator_.getNextId());
+    lhsExchange.addChild(leftChildFragment.getPlanRoot(), false, analyzer);
+    lhsExchange.computeStats(null);
+    node.setChild(0, lhsExchange);
+    ExchangeNode rhsExchange = new ExchangeNode(nodeIdGenerator_.getNextId());
+    rhsExchange.addChild(rightChildFragment.getPlanRoot(), false, analyzer);
+    rhsExchange.computeStats(null);
+    node.setChild(1, rhsExchange);
+
+  // Connect the child fragments in a new fragment, and set the data partition
+  // of the new fragment and its child fragments.
+  PlanFragment joinFragment =
+      new PlanFragment(fragmentIdGenerator_.getNextId(), node, lhsJoinPartition);
+  leftChildFragment.setDestination(lhsExchange);
+  leftChildFragment.setOutputPartition(lhsJoinPartition);
+  rightChildFragment.setDestination(rhsExchange);
+  rightChildFragment.setOutputPartition(rhsJoinPartition);
+
+  return joinFragment;
+}
 
   /**
    * Returns a new fragment with a UnionNode as its root. The data partition of the
@@ -1152,8 +1214,14 @@ public class Planner {
           }
         });
 
+    PlanNode result;
     for (Pair<TableRef, Long> candidate: candidates) {
-      PlanNode result = createJoinPlan(analyzer, candidate.first, refPlans);
+      if (candidate.first.getTable() instanceof SpatialHdfsTable) {
+    	  result = createSpatialJoinPlan(analyzer, candidate.first, refPlans);
+      }
+      else {
+    	  result = createJoinPlan(analyzer, candidate.first, refPlans);
+      }
       if (result != null) return result;
     }
     return null;
@@ -1253,6 +1321,143 @@ public class Planner {
           candidate = createJoinNode(analyzer, rhsPlan, root, ref, null, false);
         } else {
           candidate = createJoinNode(analyzer, root, rhsPlan, null, ref, false);
+        }
+        if (candidate == null) continue;
+        LOG.trace("cardinality=" + Long.toString(candidate.getCardinality()));
+
+        // Use 'candidate' as the new root; don't consider any other table refs at this
+        // position in the plan.
+        if (joinOp.isOuterJoin() || joinOp.isSemiJoin()) {
+          newRoot = candidate;
+          minEntry = entry;
+          break;
+        }
+
+        if (newRoot == null || candidate.getCardinality() < newRoot.getCardinality()) {
+          newRoot = candidate;
+          minEntry = entry;
+        }
+      }
+      if (newRoot == null) return null;
+
+      // we need to insert every rhs row into the hash table and then look up
+      // every lhs row
+      long lhsCardinality = root.getCardinality();
+      long rhsCardinality = minEntry.second.getCardinality();
+      numOps += lhsCardinality + rhsCardinality;
+      LOG.debug(Integer.toString(i) + " chose " + minEntry.first.getAlias()
+          + " #lhs=" + Long.toString(lhsCardinality)
+          + " #rhs=" + Long.toString(rhsCardinality)
+          + " #ops=" + Long.toString(numOps));
+      remainingRefs.remove(minEntry);
+      joinedRefs.add(minEntry.first);
+      root = newRoot;
+      // assign id_ after running through the possible choices in order to end up
+      // with a dense sequence of node ids
+      root.setId(nodeIdGenerator_.getNextId());
+      analyzer.setAssignedConjuncts(root.getAssignedConjuncts());
+      ++i;
+    }
+
+    return root;
+  }
+  
+  
+  
+  /**
+   * Returns a plan with leftmostRef's plan as its leftmost input; the joins
+   * are in decreasing order of selectiveness (percentage of rows they eliminate).
+   * The leftmostRef's join will be inverted if it is an outer/semi/cross join.
+   */
+  private PlanNode createSpatialJoinPlan(
+      Analyzer analyzer, TableRef leftmostRef, List<Pair<TableRef, PlanNode>> refPlans)
+      throws ImpalaException {
+
+    LOG.trace("createSpatialJoinPlan: " + leftmostRef.getAlias());
+    // the refs that have yet to be joined
+    List<Pair<TableRef, PlanNode>> remainingRefs = Lists.newArrayList();
+    PlanNode root = null;  // root of accumulated join plan
+    for (Pair<TableRef, PlanNode> entry: refPlans) {
+      if (entry.first == leftmostRef) {
+        root = entry.second;
+      } else {
+        remainingRefs.add(entry);
+      }
+    }
+    Preconditions.checkNotNull(root);
+    // refs that have been joined. The union of joinedRefs and the refs in remainingRefs
+    // are the set of all table refs.
+    Set<TableRef> joinedRefs = Sets.newHashSet();
+    joinedRefs.add(leftmostRef);
+
+    // If the leftmostTblRef is an outer/semi/cross join, we must invert it.
+    if (leftmostRef.getJoinOp().isOuterJoin()
+        || leftmostRef.getJoinOp().isSemiJoin()
+        || leftmostRef.getJoinOp().isCrossJoin()) {
+      leftmostRef.invertJoin();
+    }
+
+    long numOps = 0;
+    int i = 0;
+    while (!remainingRefs.isEmpty()) {
+      // we minimize the resulting cardinality at each step in the join chain,
+      // which minimizes the total number of hash table lookups
+      PlanNode newRoot = null;
+      Pair<TableRef, PlanNode> minEntry = null;
+      for (Pair<TableRef, PlanNode> entry: remainingRefs) {
+        TableRef ref = entry.first;
+        LOG.trace(Integer.toString(i) + " considering ref " + ref.getAlias());
+
+        // Determine whether we can or must consider this join at this point in the plan.
+        // Place outer/semi joins at a fixed position in the plan tree (IMPALA-860),
+        // s.t. all the tables appearing to the left/right of an outer/semi join in
+        // the original query still remain to the left/right after join ordering. This
+        // prevents join re-ordering across outer/semi joins which is generally wrong.
+        // The checks below relies on remainingRefs being in the order as they originally
+        // appeared in the query.
+        JoinOperator joinOp = ref.getJoinOp();
+        if (joinOp.isOuterJoin() || joinOp.isSemiJoin()) {
+          List<TupleId> currentTids = Lists.newArrayList(root.getTblRefIds());
+          currentTids.add(ref.getId());
+          // Place outer/semi joins at a fixed position in the plan tree. We know that
+          // the join resulting from 'ref' must become the new root if the current
+          // root materializes exactly those tuple ids corresponding to TableRefs
+          // appearing to the left of 'ref' in the original query.
+          List<TupleId> tableRefTupleIds = ref.getAllTupleIds();
+          if (!currentTids.containsAll(tableRefTupleIds) ||
+              !tableRefTupleIds.containsAll(currentTids)) {
+            // Do not consider the remaining table refs to prevent incorrect re-ordering
+            // of tables across outer/semi/anti joins.
+            break;
+          }
+        } else if (ref.getJoinOp().isCrossJoin()) {
+          if (!joinedRefs.contains(ref.getLeftTblRef())) continue;
+        }
+
+        PlanNode rhsPlan = entry.second;
+        analyzer.setAssignedConjuncts(root.getAssignedConjuncts());
+
+        boolean invertJoin = false;
+        /*if (joinOp.isOuterJoin() || joinOp.isSemiJoin() || joinOp.isCrossJoin()) {
+          // Invert the join if doing so reduces the size of build-side hash table
+          // (may also reduce network costs depending on the join strategy).
+          // Only consider this optimization if both the lhs/rhs cardinalities are known.
+          // The null-aware left anti-join operator is never considered for inversion
+          // because we can't execute the null-aware right anti-join efficiently.
+          long lhsCard = root.getCardinality();
+          long rhsCard = rhsPlan.getCardinality();
+          if (lhsCard != -1 && rhsCard != -1 &&
+              lhsCard * root.getAvgRowSize() < rhsCard * rhsPlan.getAvgRowSize() &&
+              !joinOp.isNullAwareLeftAntiJoin()) {
+            invertJoin = true;
+          }
+        }*/
+        PlanNode candidate = null;
+        if (invertJoin) {
+          ref.setJoinOp(ref.getJoinOp().invert());
+          candidate = createSpatialJoinNode(analyzer, rhsPlan, root, ref, null, false);
+        } else {
+          candidate = createSpatialJoinNode(analyzer, root, rhsPlan, null, ref, false);
         }
         if (candidate == null) continue;
         LOG.trace("cardinality=" + Long.toString(candidate.getCardinality()));
@@ -1869,6 +2074,115 @@ public class Planner {
 
     HashJoinNode result =
         new HashJoinNode(outer, inner, tblRef, eqJoinConjuncts, otherJoinConjuncts);
+    result.init(analyzer);
+    return result;
+  }
+  
+  /**
+   * Create a spatial node to join outer with inner. Either the outer or the inner may be a plan
+   * created from a table ref (but not both), and the corresponding outer/innerRef
+   * should be non-null.
+   */
+  private PlanNode createSpatialJoinNode(
+      Analyzer analyzer, PlanNode outer, PlanNode inner, TableRef outerRef,
+      TableRef innerRef, boolean throwOnError) throws ImpalaException {
+    Preconditions.checkState(innerRef != null ^ outerRef != null);
+    TableRef tblRef = (innerRef != null) ? innerRef : outerRef;
+    
+    /*if (tblRef.getJoinOp() == JoinOperator.CROSS_JOIN) {
+      // TODO If there are eq join predicates then we should construct a hash join
+      CrossJoinNode result = new CrossJoinNode(outer, inner);
+      result.init(analyzer);
+      return result;
+    }*/
+
+    List<BinaryPredicate> eqJoinConjuncts = Lists.newArrayList();
+    List<Expr> eqJoinPredicates = Lists.newArrayList();
+    // get eq join predicates for the TableRefs' ids (not the PlanNodes' ids, which
+    // are materialized)
+    if (innerRef != null) {
+      getHashLookupJoinConjuncts(
+          analyzer, outer.getTblRefIds(), innerRef, eqJoinConjuncts, eqJoinPredicates);
+    } else {
+      getHashLookupJoinConjuncts(
+          analyzer, inner.getTblRefIds(), outerRef, eqJoinConjuncts, eqJoinPredicates);
+      // Reverse the lhs/rhs of the join conjuncts.
+      for (BinaryPredicate eqJoinConjunct: eqJoinConjuncts) {
+        Expr swapTmp = eqJoinConjunct.getChild(0);
+        eqJoinConjunct.setChild(0, eqJoinConjunct.getChild(1));
+        eqJoinConjunct.setChild(1, swapTmp);
+      }
+    }
+    /*if (eqJoinConjuncts.isEmpty()) {
+      if (!throwOnError) return null;
+      throw new NotImplementedException(
+          String.format(
+            "Join with '%s' requires at least one conjunctive equality predicate. To " +
+            "perform a Cartesian product between two tables, use a CROSS JOIN.",
+            innerRef.getAliasAsName()));
+    }*/
+    analyzer.markConjunctsAssigned(eqJoinPredicates);
+    
+    
+    
+    List<Expr> otherJoinConjuncts = Lists.newArrayList();
+    if (tblRef.getJoinOp().isOuterJoin()) {
+      // Also assign conjuncts from On clause. All remaining unassigned conjuncts
+      // that can be evaluated by this join are assigned in createSelectPlan().
+      otherJoinConjuncts = analyzer.getUnassignedOjConjuncts(tblRef);
+    } else if (tblRef.getJoinOp().isSemiJoin()) {
+      // Unassigned conjuncts bound by the invisible tuple id of a semi join must have
+      // come from the join's On-clause, and therefore, must be added to the other join
+      // conjuncts to produce correct results.
+      otherJoinConjuncts =
+          analyzer.getUnassignedConjuncts(tblRef.getAllTupleIds(), false);
+      if (tblRef.getJoinOp().isNullAwareLeftAntiJoin()) {
+        boolean hasNullMatchingEqOperator = false;
+        // Keep only the null-matching eq conjunct in the eqJoinConjuncts and move
+        // all the others in otherJoinConjuncts. The BE relies on this
+        // separation for correct execution of the null-aware left anti join.
+        Iterator<BinaryPredicate> it = eqJoinConjuncts.iterator();
+        while (it.hasNext()) {
+          BinaryPredicate conjunct = it.next();
+          if (!conjunct.isNullMatchingEq()) {
+            otherJoinConjuncts.add(conjunct);
+            it.remove();
+          } else {
+            // Only one null-matching eq conjunct is allowed
+            Preconditions.checkState(!hasNullMatchingEqOperator);
+            hasNullMatchingEqOperator = true;
+          }
+        }
+        Preconditions.checkState(hasNullMatchingEqOperator);
+      }
+    }
+    analyzer.markConjunctsAssigned(otherJoinConjuncts);
+
+    //merge the eqJoinConjuncts and the otherJoinonjuncts together
+    Iterator<BinaryPredicate> it = eqJoinConjuncts.iterator();
+    while (it.hasNext()) {
+      BinaryPredicate conjunct = it.next();
+      otherJoinConjuncts.add(conjunct);
+      it.remove();
+    }
+    
+    ArrayList<Expr> bindingPredicates = analyzer.getBoundPredicates(tblRef.getAllTupleIds().get(0));
+    
+    Predicate predicate;
+    OverlapQueryPredicate overlapPredicate = null;
+    for (int i = 0 ; i < bindingPredicates.size(); i++) {
+      predicate = (Predicate)bindingPredicates.get(i);
+      if (predicate instanceof OverlapQueryPredicate) {
+    	  overlapPredicate = (OverlapQueryPredicate)predicate; 
+      }
+    }
+    if (overlapPredicate == null){
+    	throw new NotImplementedException(
+          "No overlapPredicate was found in the spatial join statement");
+    }
+    analyzer.markConjunctAssigned(overlapPredicate);
+    SpatialJoinNode result =
+        new SpatialJoinNode(outer, inner, tblRef, overlapPredicate, otherJoinConjuncts);
     result.init(analyzer);
     return result;
   }

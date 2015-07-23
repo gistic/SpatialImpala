@@ -198,6 +198,7 @@ public class SlotRef extends Expr {
   }
 
   public String getColumnName() { return col_; }
+  public TableName getTableName() { return tblName_; }
 
   @Override
   public Expr clone() { return new SlotRef(this); }

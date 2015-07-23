@@ -45,20 +45,36 @@ import org.slf4j.LoggerFactory;
 
 
 public class OverlapQueryPredicate extends Predicate {
-  private final static Logger LOG = LoggerFactory.getLogger(RangeQueryPredicate.class);
+  private final static Logger LOG = LoggerFactory.getLogger(OverlapQueryPredicate.class);
   private SlotRef col1;
   private SlotRef col2;
+  private SlotRef leftGlobalIndexSlotRef;
+  private SlotRef rightGlobalIndexSlotRef;
 
   public OverlapQueryPredicate(SlotRef col1, SlotRef col2) {
     this.col1 = col1;
     this.col2 = col2;
   }
+  private HashMap<String, List<String>> intersectedPartitions_;
   
   
   private OverlapQueryPredicate(OverlapQueryPredicate overlapPreicate, SlotRef col1, SlotRef col2) {
     super(overlapPreicate);
     this.col1 = col1;
     this.col2 = col2;
+    intersectedPartitions_ = new HashMap<String, List<String>>();
+  }
+  
+  public Expr getLeftHandSidePartitionCol() {
+	  return leftGlobalIndexSlotRef;
+  }
+  
+  public Expr getRightHandSidePartitionCol() {
+	  return rightGlobalIndexSlotRef;
+  }
+  
+  public HashMap<String, List<String>> getIntersectedPartitions() {
+	  return intersectedPartitions_;
   }
     
   @Override
@@ -70,6 +86,7 @@ public class OverlapQueryPredicate extends Predicate {
 	children_.add(col1);
 	children_.add(col2);
 	
+	SpatialHdfsTable spatialTable1, spatialTable2;
 	
     super.analyze(analyzer);
     
@@ -77,6 +94,53 @@ public class OverlapQueryPredicate extends Predicate {
     if (!((ScalarType)children_.get(0).getType()).isShapeType() || !((ScalarType)children_.get(1).getType()).isShapeType())
     {
 	   	throw new AnalysisException("Error: Overlaps predicate shoud take 2 columns from shapes data type ");
+    }
+    spatialTable1 = spatialTable2 = null;
+    while (itr.hasNext()) {
+		TupleDescriptor desc = (TupleDescriptor) itr.next();
+		if(desc.getTableName().equals(((SlotRef)children_.get(0)).getTableName())) {
+			if (desc.getTable() instanceof SpatialHdfsTable) {
+				spatialTable1 = (SpatialHdfsTable) desc.getTable(); 
+			}
+		}
+		if(desc.getTableName().equals(((SlotRef)children_.get(1)).getTableName())) {
+			if (desc.getTable() instanceof SpatialHdfsTable) {
+				spatialTable2 = (SpatialHdfsTable) desc.getTable(); 
+			}
+		}
+	}
+    
+    leftGlobalIndexSlotRef = new SlotRef(((SlotRef)children_.get(0)).getTableName(), "tag");
+    rightGlobalIndexSlotRef = new SlotRef(((SlotRef)children_.get(1)).getTableName(), "tag");
+    
+    if ((spatialTable1 == null) || (spatialTable2 == null))
+    {
+	   	throw new AnalysisException("Overlap predicate should only be used with spatial tables");
+    }
+    
+    GlobalIndex globalIndexLeft, globalIndexRight;
+    
+    if (spatialTable1 != spatialTable2) {
+    	globalIndexLeft = spatialTable1.getGlobalIndexIfAny();
+    	globalIndexRight = spatialTable2.getGlobalIndexIfAny();
+
+    	HashMap<String, GlobalIndexRecord> globalIndexMapLeft = globalIndexLeft.getGlobalIndexMap();
+    	HashMap<String, GlobalIndexRecord> globalIndexMapRight = globalIndexRight.getGlobalIndexMap();
+		
+    	int index;
+		for (GlobalIndexRecord gIRecordRight : globalIndexMapRight.values()) {
+			index = 0;
+			List<String> tmpIntersected = new ArrayList<String>();
+			for (GlobalIndexRecord gIRecordLeft : globalIndexMapLeft.values()) {
+				if (gIRecordRight.getMBR().intersects(gIRecordLeft.getMBR())) {
+					tmpIntersected.add(gIRecordLeft.getTag());
+				}
+				index++;
+			}
+			if (tmpIntersected.size() > 0) {
+				intersectedPartitions_.put(gIRecordRight.getTag(), tmpIntersected);
+			}
+		}
     }
   }
   

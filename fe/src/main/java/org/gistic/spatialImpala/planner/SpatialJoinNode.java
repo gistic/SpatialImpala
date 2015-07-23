@@ -50,7 +50,7 @@ public class SpatialJoinNode extends PlanNode {
   
   private final JoinOperator joinOp_;
   
-  enum DistributionMode {
+  public enum DistributionMode {
     NONE("NONE"),
     BROADCAST("BROADCAST"),
     PARTITIONED("PARTITIONED");
@@ -68,7 +68,7 @@ public class SpatialJoinNode extends PlanNode {
 //join conjuncts_ from the JOIN clause that aren't equi-join predicates
  private List<Expr> otherJoinConjuncts_;
 
-  private DistributionMode distrMode_;
+ private DistributionMode distrMode_;
 
   // overlap conjunct
   private OverlapQueryPredicate overlapPredicate_;
@@ -285,8 +285,8 @@ public class SpatialJoinNode extends PlanNode {
     
     TExpr exprBuild = overlapPredicate_.getChild(0).treeToThrift();
 	TExpr exprProbe = overlapPredicate_.getChild(1).treeToThrift();
-	msg.spatial_join_node.build_expr = exprBuild.nodes.get(0); 
-	msg.spatial_join_node.probe_expr = exprProbe.nodes.get(0);
+	msg.spatial_join_node.build_expr = exprBuild; 
+	msg.spatial_join_node.probe_expr = exprProbe;
 	
 	for (Expr e: otherJoinConjuncts_) {
       msg.hash_join_node.addToOther_join_conjuncts(e.treeToThrift());

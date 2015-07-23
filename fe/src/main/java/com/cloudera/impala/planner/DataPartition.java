@@ -37,12 +37,12 @@ import com.google.common.collect.Lists;
  * DataStreamSender/DataStreamMgr/DataStreamRecvr).
  */
 public class DataPartition {
-  private final static Logger LOG = LoggerFactory.getLogger(DataPartition.class);
+  protected final static Logger LOG = LoggerFactory.getLogger(DataPartition.class);
 
-  private final TPartitionType type_;
+  protected final TPartitionType type_;
 
   // for hash partition: exprs used to compute hash value
-  private List<Expr> partitionExprs_;
+  protected List<Expr> partitionExprs_;
 
   public DataPartition(TPartitionType type, List<Expr> exprs) {
     Preconditions.checkNotNull(exprs);
@@ -112,7 +112,7 @@ public class DataPartition {
     return str.toString();
   }
 
-  private String getPartitionShortName(TPartitionType partition) {
+  protected String getPartitionShortName(TPartitionType partition) {
     switch (partition) {
       case RANDOM: return "RANDOM";
       case HASH_PARTITIONED: return "HASH";
