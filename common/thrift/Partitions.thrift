@@ -38,6 +38,7 @@ enum TPartitionType {
 // boundaries), which need to be specified by the enclosing structure/context.
 struct TDataPartition {
   1: required TPartitionType type
-  2: optional list<Exprs.TExpr> partition_exprs
-  3: optional map<string, list<string>> intersected_partitions
+  2: required bool isSpatial
+  3: optional list<Exprs.TExpr> partition_exprs
+  4: optional map<string, list<string>> intersected_partitions
 }
