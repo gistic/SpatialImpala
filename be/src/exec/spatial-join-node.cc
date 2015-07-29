@@ -40,7 +40,7 @@ SpatialJoinNode::SpatialJoinNode(
 
 Status SpatialJoinNode::Init(const TPlanNode& tnode) {
   RETURN_IF_ERROR(BlockingJoinNode::Init(tnode));
-  DCHECK(tnode.__isset.hash_join_node);
+  DCHECK(tnode.__isset.spatial_join_node);
 
   RETURN_IF_ERROR(
       Expr::CreateExprTree(pool_, tnode.spatial_join_node.spatial_join_expr,

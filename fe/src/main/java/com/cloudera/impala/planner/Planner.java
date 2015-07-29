@@ -279,6 +279,7 @@ public class Planner {
           (HashJoinNode) root, childFragments.get(1), childFragments.get(0),
           perNodeMemLimit, fragments, analyzer);
     } else if (root instanceof SpatialJoinNode) {
+    	LOG.debug("Creating spatial join fragment");
       Preconditions.checkState(childFragments.size() == 2);
       result = createSpatialJoinFragment(
           (SpatialJoinNode) root, childFragments.get(1), childFragments.get(0),
@@ -1217,9 +1218,11 @@ public class Planner {
     PlanNode result;
     for (Pair<TableRef, Long> candidate: candidates) {
       if (candidate.first.getTable() instanceof SpatialHdfsTable) {
+    	  LOG.debug("Creating spatial join plan");
     	  result = createSpatialJoinPlan(analyzer, candidate.first, refPlans);
       }
       else {
+    	  LOG.debug("Creating normal join plan");
     	  result = createJoinPlan(analyzer, candidate.first, refPlans);
       }
       if (result != null) return result;
@@ -1971,11 +1974,13 @@ public class Planner {
         joinEquivClasses.add(id1);
       }
 
-      // e is a non-redundant join predicate
-      Preconditions.checkState(lhsExpr != rhsExpr);
-      joinPredicates.add(e);
-      joinConjuncts.add(new BinaryPredicate(((BinaryPredicate)e).getOp(), lhsExpr,
-          rhsExpr));
+      if (!(e instanceof OverlapQueryPredicate)) {
+	      // e is a non-redundant join predicate
+	      Preconditions.checkState(lhsExpr != rhsExpr);
+	      joinPredicates.add(e);
+	      joinConjuncts.add(new BinaryPredicate(((BinaryPredicate)e).getOp(), lhsExpr,
+	          rhsExpr));
+      }
     }
     if (!joinPredicates.isEmpty()) return;
     Preconditions.checkState(joinConjuncts.isEmpty());
@@ -2165,13 +2170,17 @@ public class Planner {
       otherJoinConjuncts.add(conjunct);
       it.remove();
     }
-    
-    ArrayList<Expr> bindingPredicates = analyzer.getBoundPredicates(tblRef.getAllTupleIds().get(0));
+    List<Expr> candidates;
+    if (innerRef.getJoinOp().isOuterJoin()) {
+    	candidates = analyzer.getEqJoinConjuncts(innerRef.getId(), innerRef);
+	} else {
+	    candidates = analyzer.getEqJoinConjuncts(innerRef.getId(), null);
+	}
     
     Predicate predicate;
     OverlapQueryPredicate overlapPredicate = null;
-    for (int i = 0 ; i < bindingPredicates.size(); i++) {
-      predicate = (Predicate)bindingPredicates.get(i);
+    for (int i = 0 ; i < candidates.size(); i++) {
+      predicate = (Predicate)candidates.get(i);
       if (predicate instanceof OverlapQueryPredicate) {
     	  overlapPredicate = (OverlapQueryPredicate)predicate; 
       }

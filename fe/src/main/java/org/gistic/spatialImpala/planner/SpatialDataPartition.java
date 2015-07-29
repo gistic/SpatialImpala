@@ -36,6 +36,7 @@ public class SpatialDataPartition extends DataPartition {
 
   @Override
   public TDataPartition toThrift() {
+	LOG.debug("Creating spatial TDataPartition");
     TDataPartition result = new TDataPartition(type_, true);
     if (partitionExprs_ != null) {
       result.setPartition_exprs(Expr.treesToThrift(partitionExprs_));

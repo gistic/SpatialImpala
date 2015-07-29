@@ -283,16 +283,16 @@ public class SpatialJoinNode extends PlanNode {
 	TExpr spatialJoinCond = overlapPredicate_.treeToThrift();
     msg.spatial_join_node.spatial_join_expr = spatialJoinCond;
     
-    TExpr exprBuild = overlapPredicate_.getChild(0).treeToThrift();
-	TExpr exprProbe = overlapPredicate_.getChild(1).treeToThrift();
+    TExpr exprBuild = overlapPredicate_.getChild(1).treeToThrift();
+	TExpr exprProbe = overlapPredicate_.getChild(0).treeToThrift();
 	msg.spatial_join_node.build_expr = exprBuild; 
 	msg.spatial_join_node.probe_expr = exprProbe;
 	
 	for (Expr e: otherJoinConjuncts_) {
-      msg.hash_join_node.addToOther_join_conjuncts(e.treeToThrift());
+      msg.spatial_join_node.addToOther_join_conjuncts(e.treeToThrift());
     }
 	
-	msg.hash_join_node.setAdd_probe_filters(addProbeFilters_);
+	msg.spatial_join_node.setAdd_probe_filters(addProbeFilters_);
   }
 
   @Override

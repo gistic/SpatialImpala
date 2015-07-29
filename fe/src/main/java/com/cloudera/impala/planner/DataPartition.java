@@ -76,6 +76,7 @@ public class DataPartition {
   }
 
   public TDataPartition toThrift() {
+	  LOG.debug("Creating normal TDataPartition");
     TDataPartition result = new TDataPartition(type_, false);
     if (partitionExprs_ != null) {
       result.setPartition_exprs(Expr.treesToThrift(partitionExprs_));
