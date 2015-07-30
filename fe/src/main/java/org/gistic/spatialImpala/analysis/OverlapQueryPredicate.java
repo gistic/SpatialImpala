@@ -80,6 +80,7 @@ public class OverlapQueryPredicate extends Predicate {
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
 	
+	  LOG.info("Analysis of the overlapqurypredicate");
 	Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
 	Iterator itr = tupleDescs.iterator();
 	children_.clear();
@@ -120,7 +121,7 @@ public class OverlapQueryPredicate extends Predicate {
     
     GlobalIndex globalIndexLeft, globalIndexRight;
     
-    LOG.debug("Before checking if spatialtabl1 and spatialTable2 are same");
+    LOG.info("Before checking if spatialtabl1 and spatialTable2 are same");
     
     if (spatialTable1 != spatialTable2) {
     	globalIndexLeft = spatialTable1.getGlobalIndexIfAny();
@@ -130,14 +131,14 @@ public class OverlapQueryPredicate extends Predicate {
     	HashMap<String, GlobalIndexRecord> globalIndexMapRight = globalIndexRight.getGlobalIndexMap();
 		
     	int index;
-    	LOG.debug("Before checking the intersections between partitions");
+    	LOG.info("Before checking the intersections between partitions");
 		for (GlobalIndexRecord gIRecordRight : globalIndexMapRight.values()) {
 			index = 0;
 			List<String> tmpIntersected = new ArrayList<String>();
 			for (GlobalIndexRecord gIRecordLeft : globalIndexMapLeft.values()) {
 				if (gIRecordRight.getMBR().intersects(gIRecordLeft.getMBR())) {
 					tmpIntersected.add(gIRecordLeft.getTag());
-					LOG.debug("intersection found between "+gIRecordLeft.getTag()+" and "+gIRecordRight.getTag());
+					LOG.info("intersection found between "+gIRecordLeft.getTag()+" and "+gIRecordRight.getTag());
 				}
 				index++;
 			}
@@ -145,7 +146,7 @@ public class OverlapQueryPredicate extends Predicate {
 				intersectedPartitions_.put(gIRecordRight.getTag(), tmpIntersected);
 			}
 			else {
-				LOG.debug("no intersections for partition "+gIRecordRight.getTag());
+				LOG.info("no intersections for partition "+gIRecordRight.getTag());
 			}
 		}
     }

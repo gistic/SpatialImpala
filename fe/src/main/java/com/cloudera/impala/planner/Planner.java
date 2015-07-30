@@ -1217,15 +1217,30 @@ public class Planner {
 
     PlanNode result;
     for (Pair<TableRef, Long> candidate: candidates) {
-      if (candidate.first.getTable() instanceof SpatialHdfsTable) {
-    	  LOG.debug("Creating spatial join plan");
+    	List<Expr> conjs;
+        if (candidate.first.getJoinOp().isOuterJoin()) {
+        	conjs = analyzer.getEqJoinConjuncts(candidate.first.getId(), candidate.first);
+    	} else {
+    		conjs = analyzer.getEqJoinConjuncts(candidate.first.getId(), null);
+    	}
+        
+        Predicate predicate;
+        OverlapQueryPredicate overlapPredicate = null;
+        for (int i = 0 ; i < conjs.size(); i++) {
+          predicate = (Predicate)conjs.get(i);
+          if (predicate instanceof OverlapQueryPredicate) {
+        	  overlapPredicate = (OverlapQueryPredicate)predicate; 
+          }
+        }
+        if (overlapPredicate != null){
+    	  LOG.info("Creating spatial join plan");
     	  result = createSpatialJoinPlan(analyzer, candidate.first, refPlans);
-      }
-      else {
-    	  LOG.debug("Creating normal join plan");
+        }
+        else {
+    	  LOG.info("Creating normal join plan");
     	  result = createJoinPlan(analyzer, candidate.first, refPlans);
-      }
-      if (result != null) return result;
+        }
+        if (result != null) return result;
     }
     return null;
   }
