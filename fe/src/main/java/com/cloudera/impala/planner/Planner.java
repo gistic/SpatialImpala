@@ -1217,7 +1217,7 @@ public class Planner {
 
     PlanNode result;
     for (Pair<TableRef, Long> candidate: candidates) {
-    	List<Expr> conjs;
+    	List<Expr> conjs = null;
         if (candidate.first.getJoinOp().isOuterJoin()) {
         	conjs = analyzer.getEqJoinConjuncts(candidate.first.getId(), candidate.first);
     	} else {
@@ -1226,11 +1226,13 @@ public class Planner {
         
         Predicate predicate;
         OverlapQueryPredicate overlapPredicate = null;
-        for (int i = 0 ; i < conjs.size(); i++) {
-          predicate = (Predicate)conjs.get(i);
-          if (predicate instanceof OverlapQueryPredicate) {
-        	  overlapPredicate = (OverlapQueryPredicate)predicate; 
-          }
+        if (conjs != null) {
+	        for (int i = 0 ; i < conjs.size(); i++) {
+	          predicate = (Predicate)conjs.get(i);
+	          if (predicate instanceof OverlapQueryPredicate) {
+	        	  overlapPredicate = (OverlapQueryPredicate)predicate; 
+	          }
+	        }
         }
         if (overlapPredicate != null){
     	  LOG.info("Creating spatial join plan");
