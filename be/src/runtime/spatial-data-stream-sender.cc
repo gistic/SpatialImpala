@@ -69,8 +69,8 @@ Status SpatialDataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool 
   } else {
     // hash-partition batch's rows across channels
     int num_channels = channels_.size();
-    for (int i = 0; i < batch->num_rows(); ++i) {
-      TupleRow* row = batch->GetRow(i);
+    for (int r = 0; r < batch->num_rows(); ++r) {
+      TupleRow* row = batch->GetRow(r);
       // It should be only one partition expr.
       for (int i = 0; i < partition_expr_ctxs_.size(); ++i) {
         ExprContext* ctx = partition_expr_ctxs_[i];
@@ -80,7 +80,7 @@ Status SpatialDataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool 
         if (it == partitions_.end()) break;
         std::vector<std::string> partitions_values = it->second;
         for (int j = 0; j < partitions_values.size(); j++) {
-          StringVal v(reinterpret_cast<uint8_t*>(const_cast<char*>(partitions_values[j].c_str())),
+          StringValue v(const_cast<char*>(partitions_values[j].c_str()),
               partitions_values[j].size());
           // We can't use the crc hash function here because it does not result
           // in uncorrelated hashes with different seeds.  Instead we must use

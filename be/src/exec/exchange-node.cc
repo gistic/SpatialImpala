@@ -46,6 +46,7 @@ ExchangeNode::ExchangeNode(
     num_rows_skipped_(0) {
   DCHECK_GE(offset_, 0);
   DCHECK(is_merging_ || (offset_ == 0));
+  input_batch_ = NULL;
 }
 
 Status ExchangeNode::Init(const TPlanNode& tnode) {
@@ -120,9 +121,8 @@ Status ExchangeNode::GetNext(RuntimeState* state, RowBatch* output_batch, bool* 
   } else {
     *eos = false;
   }
-
+  
   if (is_merging_) return GetNextMerging(state, output_batch, eos);
-
   while (true) {
     {
       SCOPED_TIMER(convert_row_batch_timer_);
@@ -145,6 +145,7 @@ Status ExchangeNode::GetNext(RuntimeState* state, RowBatch* output_batch, bool* 
         ++num_rows_returned_;
       }
       COUNTER_SET(rows_returned_counter_, num_rows_returned_);
+
 
       if (ReachedLimit()) {
         stream_recvr_->TransferAllResources(output_batch);
