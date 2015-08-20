@@ -79,6 +79,8 @@ Status SpatialDataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool 
             = partitions_.find(partition_val);
         if (it == partitions_.end()) break;
         std::vector<std::string> partitions_values = it->second;
+        std::set<int> channel_values_set;
+        std::set<int>::iterator set_it;
         for (int j = 0; j < partitions_values.size(); j++) {
           StringValue v(const_cast<char*>(partitions_values[j].c_str()),
               partitions_values[j].size());
@@ -87,8 +89,13 @@ Status SpatialDataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool 
           // fnv hash.
           // TODO: fix crc hash/GetHashValue()
           uint32_t hash_val = RawValue::GetHashValueFnv(&v, ctx->root()->type(), HashUtil::FNV_SEED);
-          RETURN_IF_ERROR(channels_[hash_val % num_channels]->AddRow(row));
+          channel_values_set.insert(hash_val % num_channels);
         }
+
+        for (set_it = channel_values_set.begin(); set_it != channel_values_set.end(); set_it++) {
+          RETURN_IF_ERROR(channels_[*set_it]->AddRow(row));
+        }
+        channel_values_set.clear();
       }
     }
   }

@@ -4,6 +4,7 @@
 #define IMPALA_RUNTIME_SPATIAL_DATA_STREAM_SENDER_H
 
 #include <vector>
+#include <set>
 #include <string>
 
 #include "runtime/data-stream-sender.h"

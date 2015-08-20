@@ -25,7 +25,7 @@ struct RowsX1Comparator {
     this->expr_ctx = expr_ctx;
   }
 
-  bool operator() (TupleRow* first_row, TupleRow* second_row) {   
+  bool operator() (TupleRow* first_row, TupleRow* second_row) {
     return GET_X1(first_row, expr_ctx) < GET_X1(second_row, expr_ctx);
   }
 
@@ -67,11 +67,11 @@ void SpatialJoinNode::ProcessBuildBatch(RowBatchList* build_batch) {
 
   // Sort the rows on the X Axis value
   RowsX1Comparator rowsX1Comparator(build_expr_ctx_);
-  std::sort(build_rows.begin(), build_rows.end(), rowsX1Comparator);    
+  std::sort(build_rows.begin(), build_rows.end(), rowsX1Comparator);
 }
 
 int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batch, int max_added_rows) {
-  std::vector<TupleRow*> *probe_sorted_list = NULL;
+  std::vector<TupleRow*> probe_sorted_list;
 
   // ensure that we can add enough the required rows
   int row_idx = out_batch->AddRows(max_added_rows);
@@ -80,20 +80,19 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
 
   // First time to enter for this probe patch, prepare the lists, and sort the probe batch
   if(probe_batch_pos_ == 0){
-    probe_sorted_list = new std::vector<TupleRow*>();
 
     for(int i = 0; i < probe_batch->num_rows() ; i++){
-      probe_sorted_list->push_back(probe_batch->GetRow(i));
+      probe_sorted_list.push_back(probe_batch->GetRow(i));
     }         
 
     // Sort the rows on the X Axis value
     RowsX1Comparator rowsX1Comparator(probe_expr_ctx_);
-    std::sort(probe_sorted_list->begin(), probe_sorted_list->end(), rowsX1Comparator);    
+    std::sort(probe_sorted_list.begin(), probe_sorted_list.end(), rowsX1Comparator);    
 
     build_batch_pos_ = 0;
   } else {
     probe_sorted_list = lastest_probe_batch;
-  }         
+  }
 
   // Probing the build batch    
   int rows_added = 0;   
@@ -102,7 +101,7 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
   int j = probe_batch_pos_;
 
   std::vector<TupleRow*> *R = &build_rows;
-  std::vector<TupleRow*> *S = probe_sorted_list;
+  std::vector<TupleRow*> *S = &probe_sorted_list;
 
   int R_length = R->size();
   int S_length = S->size();
@@ -111,15 +110,15 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
   while(i < R_length && j < S_length && rows_added < max_added_rows) {     
     TupleRow* r;
     TupleRow* s;
-
     if (GET_X1(R->at(i), build_expr_ctx_) < GET_X1(S->at(j), probe_expr_ctx_)) {
       r = R->at(i);
       int jj = (last_jj_ > 0) ? last_jj_ : j;
       last_jj_ = -1; 
 
       while ((jj < S_length) && (GET_X1((s = S->at(jj)), probe_expr_ctx_) <= GET_X2(r, build_expr_ctx_))) {
-        if (IsIntersected(r, s, build_expr_ctx_, probe_expr_ctx_))
+        if (IsIntersected(r, s, build_expr_ctx_, probe_expr_ctx_)) {
           AddOutputRow(out_batch, &rows_added, &out_row_mem, r, s, max_added_rows);
+        }
 
         jj++;
 
@@ -129,16 +128,22 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
         }
       }
 
-      if(rows_added < max_added_rows) i++;
+      if(jj == S_length && i == R_length - 1) { // then we're done
+        j = jj;
+        i++;
+      } else if(rows_added < max_added_rows) {
+        i++;
+      }
+
     } else {
       s = S->at(j);
       int ii = (last_ii_ > 0) ? last_ii_ : i;
       last_ii_ = -1;
 
       while ((ii < R_length) && (GET_X1((r = R->at(ii) ), build_expr_ctx_) <= GET_X2(s, probe_expr_ctx_))) {
-        if (IsIntersected(r, s, build_expr_ctx_, probe_expr_ctx_))
+        if (IsIntersected(r, s, build_expr_ctx_, probe_expr_ctx_)) {
           AddOutputRow(out_batch, &rows_added, &out_row_mem, r, s, max_added_rows);
-
+        }
         ii++;         
 
         if(rows_added == max_added_rows) {
@@ -147,16 +152,27 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
         }
       }
 
-      if(rows_added < max_added_rows) j++;
+      if(ii == R_length && j == S_length - 1) {
+        i = ii;
+        j++;
+      }
+      else if(rows_added < max_added_rows) {
+        j++;
+      }
     }
+  }
+
+  if(i >= R_length || j >= S_length) {
+    i = R_length;
+    j = S_length;
   }
 
   build_batch_pos_ = i;
   probe_batch_pos_ = j;
 
   // Free the memory if not needed anymore
-  if(probe_batch_pos_ == probe_batch->num_rows()){      
-    delete lastest_probe_batch;
+  if(probe_batch_pos_ == probe_batch->num_rows()){
+    lastest_probe_batch.clear();
   }
 
   if(lastest_probe_batch != probe_sorted_list ){      

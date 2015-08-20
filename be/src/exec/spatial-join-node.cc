@@ -34,6 +34,8 @@ SpatialJoinNode::SpatialJoinNode(
   DCHECK_NE(join_op_, TJoinOp::RIGHT_ANTI_JOIN);
 
   build_batch_pos_ = 0;
+  last_ii_ = -1;
+  last_jj_ = -1;
   can_add_probe_filters_ = tnode.spatial_join_node.add_probe_filters;
   can_add_probe_filters_ &= FLAGS_enable_spatial_probe_side_filtering;
 }
@@ -77,8 +79,18 @@ Status SpatialJoinNode::Prepare(RuntimeState* state) {
   return Status::OK;
 }
 
+
+Status SpatialJoinNode::Open(RuntimeState* state) {
+  Status status = BlockingJoinNode::Open(state);
+  // Initializing Probing position.
+  probe_batch_pos_ = 0;
+  return status;
+}
+
 void SpatialJoinNode::Close(RuntimeState* state) {
   if (is_closed()) return;
+  build_batches.Reset();
+  build_batch_pool.reset();
   build_expr_ctx_->Close(state);
   probe_expr_ctx_->Close(state);
   spatial_join_conjunct_ctx_->Close(state);
@@ -97,8 +109,6 @@ Status SpatialJoinNode::ConstructBuildSide(RuntimeState* state) {
   // The hash join node needs to keep in memory all build tuples, including the tuple
   // row ptrs.  The row ptrs are copied into the hash table's internal structure so they
   // don't need to be stored in the build_pool_.
-  RowBatchList build_batches;
-  boost::scoped_ptr<ObjectPool> build_batch_pool;
   build_batch_pool.reset(new ObjectPool());
   while (true) {
     RowBatch* batch = build_batch_pool->Add(
@@ -130,7 +140,7 @@ Status SpatialJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch, bool* 
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   RETURN_IF_CANCELLED(state);
   RETURN_IF_ERROR(state->QueryMaintenance());
-
+  
   if (ReachedLimit()) {
     *eos = true;
     return Status::OK;
@@ -168,6 +178,10 @@ Status SpatialJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch, bool* 
         COUNTER_ADD(probe_row_counter_, probe_batch_->num_rows());
       }
     }
+  }
+
+  if (eos_) {
+    *eos = true;
   }
 
   return Status::OK;

@@ -36,6 +36,7 @@ class SpatialJoinNode : public BlockingJoinNode {
   virtual Status Init(const TPlanNode& tnode);
   virtual Status Prepare(RuntimeState* state);
   // Open() implemented in BlockingJoinNode
+  virtual Status Open(RuntimeState* state);
   virtual Status GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos);
   virtual void Close(RuntimeState* state);
 
@@ -52,13 +53,16 @@ class SpatialJoinNode : public BlockingJoinNode {
   int build_batch_pos_;
 
   std::vector<TupleRow*> build_rows;
-  std::vector<TupleRow*> *lastest_probe_batch;  
+  std::vector<TupleRow*> lastest_probe_batch;  
 
   TupleRow** built_rows_;
   TupleRow** lastest_probe_batch_;
 
   int last_ii_;
   int last_jj_;
+
+  RowBatchList build_batches;
+  boost::scoped_ptr<ObjectPool> build_batch_pool;
 
   // our predicate is separated into
   // build_expr_ (over child(1)) and probe_expr_ (over child(0))
