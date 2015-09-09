@@ -184,8 +184,11 @@ inline int DictEncoder<T>::Put(const T& value) {
   typename ValuesIndex::iterator it = dict_index_.find(value);
   int bytes_added = 0;
   if (it == dict_index_.end()) {
+    LOG(INFO) << "Column was not found in the dict";
     bytes_added = AddToDict(value, &index);
+    LOG(INFO) << "Columns with size = "<<bytes_added<<" was added at the index = "<<index;
   } else {
+    LOG(INFO) << "Column was found in the dict";
     index = it->second;
   }
   buffered_indices_.push_back(index);
@@ -215,8 +218,10 @@ inline int DictEncoder<StringValue>::AddToDict(const StringValue& value, int* in
   return bytes_added;
 }
 
+
 template<typename T>
 inline bool DictDecoder<T>::GetValue(T* value) {
+  LOG(INFO) << "Decoding a dictionary entry";
   DCHECK(data_decoder_.get() != NULL);
   int index;
   bool result = data_decoder_->Get(&index);
@@ -243,6 +248,7 @@ inline bool DictDecoder<Decimal16Value>::GetValue(Decimal16Value* value) {
 
 template<typename T>
 inline void DictEncoder<T>::WriteDict(uint8_t* buffer) {
+  LOG(INFO) << "Writing dectionary, dictionary size = "<<dict_.size();
   BOOST_FOREACH(const T& value, dict_) {
     buffer += ParquetPlainEncoder::Encode(buffer, encoded_value_size_, value);
   }

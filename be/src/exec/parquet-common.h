@@ -22,6 +22,13 @@
 #include "runtime/string-value.h"
 #include "util/bit-util.h"
 
+#include "exec/rectangle.h"
+#include "exec/point.h"
+#include "exec/line.h"
+
+using namespace spatialimpala;
+
+
 // This file contains common elements between the parquet Writer and Scanner.
 namespace impala {
 
@@ -50,6 +57,9 @@ const parquet::Type::type IMPALA_TO_PARQUET_TYPES[] = {
   parquet::Type::FIXED_LEN_BYTE_ARRAY, // Decimal
   parquet::Type::BYTE_ARRAY,  // VARCHAR(N)
   parquet::Type::BYTE_ARRAY,  // CHAR(N)
+  parquet::Type::BYTE_ARRAY,  // Rectangle
+  parquet::Type::BYTE_ARRAY,  // Point
+  parquet::Type::BYTE_ARRAY,  // Line
 };
 
 // Mapping of Parquet codec enums to Impala enums
@@ -104,6 +114,11 @@ class ParquetPlainEncoder {
         return 12;
       case TYPE_DECIMAL:
         return DecimalSize(t);
+      case TYPE_POINT:
+        return 16;
+      case TYPE_RECTANGLE:
+      case TYPE_LINE:
+        return 32;
       case TYPE_NULL:
       case TYPE_BOOLEAN: // These types are not plain encoded.
       default:
@@ -227,6 +242,21 @@ inline int ParquetPlainEncoder::ByteSize(const TimestampValue& v) {
 }
 
 template<>
+inline int ParquetPlainEncoder::ByteSize(const Rectangle& v) {
+  return 32;
+}
+
+template<>
+inline int ParquetPlainEncoder::ByteSize(const Point& v) {
+  return 16;
+}
+
+template<>
+inline int ParquetPlainEncoder::ByteSize(const Line& v) {
+  return 32;
+}
+
+template<>
 inline int ParquetPlainEncoder::Decode(uint8_t* buffer, int fixed_len_size, int8_t* v) {
   *v = *buffer;
   return ByteSize(*v);
@@ -260,6 +290,75 @@ inline int ParquetPlainEncoder::Encode(
   memcpy(buffer + sizeof(int32_t), v.ptr, v.len);
   return ByteSize(v);
 }
+
+template<>
+inline int ParquetPlainEncoder::Encode(
+    uint8_t* buffer, int fixed_len_size, const Rectangle& v) {
+
+  memcpy(buffer, &v.x1_, 8);
+  memcpy(buffer + 8, &v.y1_, 8);
+  memcpy(buffer + 16, &v.x2_, 8);
+  memcpy(buffer + 24, &v.y2_, 8);
+  int bytesize = ByteSize(v);
+  return bytesize;
+}
+
+template<>
+inline int ParquetPlainEncoder::Decode(
+    uint8_t* buffer, int fixed_len_size, Rectangle* v) {
+  
+  memcpy(&v->x1_, buffer, 8);
+  memcpy(&v->y1_, buffer + 8, 8);
+  memcpy(&v->x2_, buffer + 16, 8);
+  memcpy(&v->y2_, buffer + 24, 8);
+  int bytesize = ByteSize(*v);
+  return bytesize;
+}
+
+template<>
+inline int ParquetPlainEncoder::Encode(
+    uint8_t* buffer, int fixed_len_size, const Line& v) {
+
+  memcpy(buffer, &v.x1_, 8);
+  memcpy(buffer + 8, &v.y1_, 8);
+  memcpy(buffer + 16, &v.x2_, 8);
+  memcpy(buffer + 24, &v.y2_, 8);
+  int bytesize = ByteSize(v);
+  return bytesize;
+}
+
+template<>
+inline int ParquetPlainEncoder::Decode(
+    uint8_t* buffer, int fixed_len_size, Line* v) {
+  
+  memcpy(&v->x1_, buffer, 8);
+  memcpy(&v->y1_, buffer + 8, 8);
+  memcpy(&v->x2_, buffer + 16, 8);
+  memcpy(&v->y2_, buffer + 24, 8);
+  int bytesize = ByteSize(*v);
+  return bytesize;
+}
+
+template<>
+inline int ParquetPlainEncoder::Encode(
+    uint8_t* buffer, int fixed_len_size, const Point& v) {
+
+  memcpy(buffer, &v.x_, 8);
+  memcpy(buffer + 8, &v.y_, 8);
+  int bytesize = ByteSize(v);
+  return bytesize;
+}
+
+template<>
+inline int ParquetPlainEncoder::Decode(
+    uint8_t* buffer, int fixed_len_size, Point* v) {
+  
+  memcpy(&v->x_, buffer, 8);
+  memcpy(&v->y_, buffer + 8, 8);
+  int bytesize = ByteSize(*v);
+  return bytesize;
+}
+
 
 template<>
 inline int ParquetPlainEncoder::Decode(

@@ -36,9 +36,6 @@ enum PrimitiveType {
   TYPE_DOUBLE,
   TYPE_TIMESTAMP,
   TYPE_STRING,
-  TYPE_RECTANGLE,
-  TYPE_POINT,
-  TYPE_LINE,
   TYPE_DATE,        // Not implemented
   TYPE_DATETIME,    // Not implemented
   TYPE_BINARY,      // Not implemented
@@ -48,7 +45,10 @@ enum PrimitiveType {
   // parsed from scan nodes. It can be returned from exprs and must be consumable
   // by exprs.
   TYPE_CHAR,
-  TYPE_VARCHAR
+  TYPE_VARCHAR,
+  TYPE_RECTANGLE,
+  TYPE_POINT,
+  TYPE_LINE
 };
 
 PrimitiveType ThriftToType(TPrimitiveType::type ttype);

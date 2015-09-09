@@ -40,6 +40,11 @@
 #include "util/runtime-profile.h"
 #include "rpc/thrift-util.h"
 
+#include "exec/rectangle.h"
+#include "exec/point.h"
+#include "exec/line.h"
+
+
 using namespace std;
 using namespace boost;
 using namespace boost::algorithm;
@@ -480,6 +485,15 @@ HdfsParquetScanner::BaseColumnReader* HdfsParquetScanner::CreateReader(
           break;
       }
       break;
+    case TYPE_RECTANGLE:
+        reader = new ColumnReader<Rectangle>(this, desc, file_idx);
+        break;
+    case TYPE_POINT:
+        reader = new ColumnReader<Point>(this, desc, file_idx);
+        break;
+    case TYPE_LINE:
+        reader = new ColumnReader<Line>(this, desc, file_idx);
+        break;
     default:
       DCHECK(false);
   }

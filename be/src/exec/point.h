@@ -7,6 +7,8 @@
 #include "exec/shape.h"
 #include "udf/udf.h"
 
+#include "util/hash-util.h"
+
 using namespace impala;
 using namespace impala_udf;
 
@@ -22,12 +24,27 @@ class Point : public Shape {
     virtual bool Contains(Shape* other);
     virtual void GetMBR(Shape* mbr);
 
+
+    bool operator==(const Point& other) const { return (x_ == other.x_ && y_ == other.y_); }
+    bool operator!=(const Point& other) const { return (x_ != other.x_ || y_ != other.y_); }
+    bool operator<=(const Point& other) const { return true; }
+    bool operator>=(const Point& other) const { return true; }
+    bool operator<(const Point& other) const { return true; }
+    bool operator>(const Point& other) const { return true; }
+
     static Point FromPointVal(PointVal& pv);
 
 //  private:
     double x_;
     double y_;
 };
+
+// This function must be called 'hash_value' to be picked up by boost.
+inline std::size_t hash_value(const Point& v) {
+    const char* temp = "any";
+    const int len = 3;
+    return HashUtil::Hash(temp, len, 0);
+}
 
 std::ostream& operator<< (std::ostream& out, Point const &value);
 
