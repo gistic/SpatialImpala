@@ -38,6 +38,8 @@ import com.cloudera.impala.thrift.TTableStats;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
+import org.gistic.spatialImpala.catalog.SpatialHdfsTable;
+
 /**
  * Base class for table metadata.
  *
@@ -108,7 +110,7 @@ public abstract class Table implements CatalogObject {
    */
   public abstract void load(Table oldValue, HiveMetaStoreClient client,
       org.apache.hadoop.hive.metastore.api.Table msTbl) throws TableLoadingException;
-
+  
   public void addColumn(Column col) {
     colsByPos_.add(col);
     colsByName_.put(col.getName().toLowerCase(), col);
@@ -195,7 +197,11 @@ public abstract class Table implements CatalogObject {
       // data source.
       table = new DataSourceTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
     } else if (HdfsFileFormat.isHdfsFormatClass(msTbl.getSd().getInputFormat())) {
-      table = new HdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
+    	// Checking if the table is Spatial or not.
+    	if (SpatialHdfsTable.isSpatial(msTbl))
+    		table = new SpatialHdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
+    	else
+    		table = new HdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
     }
     return table;
   }

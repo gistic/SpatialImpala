@@ -32,6 +32,7 @@ enum TCatalogObjectType {
   TABLE,
   VIEW,
   FUNCTION,
+  GLOBAL_INDEX,
   DATA_SOURCE,
   ROLE,
   PRIVILEGE,
@@ -265,6 +266,41 @@ struct TDataSourceTable {
   2: required string init_string
 }
 
+// Represents a point
+struct TPoint {
+  1: required double x
+  2: required double y
+}
+
+// Represents a rectangle used in a global index record for spatial tables.
+struct TRectangle {
+  1: required double x1
+  2: required double y1
+  3: required double x2
+  4: required double y2
+}
+
+// Represents a global index record for spatial tables.
+struct TGlobalIndexRecord {
+  // Id of the record.
+  1: required i32 id
+
+  // Tag of the record.
+  2: required string tag
+
+  // MBR of the record.
+  3: required TRectangle mbr
+}
+
+// Represents a global index used for spatial tables.
+struct TGlobalIndex {
+  // Name of the table that this global index belongs to.
+  1: required string tbl_name
+
+  // Map of global indexes' records.
+  2: required map<string, TGlobalIndexRecord> globalIndexMap
+}
+
 // Represents a table or view.
 struct TTable {
   // Name of the parent database. Case insensitive, expected to be stored as lowercase.
@@ -309,6 +345,9 @@ struct TTable {
 
   // Set iff this is a table from an external data source
   13: optional TDataSourceTable data_source_table
+
+  // Set iff this table is spatial with initialized global index.
+  14: optional TGlobalIndex globalIndex;
 }
 
 // Represents a database.

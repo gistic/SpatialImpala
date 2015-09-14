@@ -37,6 +37,8 @@ import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
+import org.gistic.spatialImpala.catalog.GlobalIndex;
+
 /**
  * Represents a CREATE TABLE statement.
  */
@@ -205,7 +207,15 @@ public class CreateTableStmt extends StatementBase {
     }
 
     if (location_ != null) location_.analyze(analyzer, Privilege.ALL);
-
+    
+    // If the table is Spatial, ensure that the global index path exists
+    // and is valid.
+    if (tblProperties_ != null) {
+      String globalIndexPathIfAny = tblProperties_.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
+      if (globalIndexPathIfAny != null)
+        (new HdfsUri(globalIndexPathIfAny)).analyze(analyzer, Privilege.ALL);
+    }
+    
     analyzeRowFormatValue(rowFormat_.getFieldDelimiter());
     analyzeRowFormatValue(rowFormat_.getLineDelimiter());
     analyzeRowFormatValue(rowFormat_.getEscapeChar());

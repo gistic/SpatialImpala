@@ -23,7 +23,7 @@ import com.google.common.base.Preconditions;
 /**
  * Combination of limit and offset expressions.
  */
-class LimitElement {
+public class LimitElement {
   private final Expr limitExpr_;
   private final Expr offsetExpr_;
   private long limit_;
