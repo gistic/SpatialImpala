@@ -29,6 +29,7 @@
 #include "exec/point.h"
 #include "exec/line.h"
 #include "exec/rectangle.h"
+#include "exec/polygon.h"
 
 using namespace spatialimpala;
 
@@ -232,7 +233,6 @@ inline void RawValue::PrintValue(const void* value, const ColumnType& type, int 
     *stream << "NULL";
     return;
   }
-
   int old_precision = stream->precision();
   std::ios_base::fmtflags old_flags = stream->flags();
   if (scale > -1) {
@@ -325,6 +325,12 @@ inline void RawValue::PrintValue(const void* value, const ColumnType& type, int 
       break;
     case TYPE_RECTANGLE:
       (*stream) << (*reinterpret_cast<const Rectangle*>(value));
+      break;
+    case TYPE_POLYGON: {
+        string_val = reinterpret_cast<const StringValue*>(value);
+        Polygon tempPol(string_val->ptr, string_val->len);
+        (*stream) << tempPol;
+      } 																																																																																																																																																																																																					
       break;
     default:
       DCHECK(false);

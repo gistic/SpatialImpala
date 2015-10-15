@@ -44,6 +44,9 @@ public enum PrimitiveType {
   LINE("LINE", 48, TPrimitiveType.LINE),
   POINT("POINT", 32, TPrimitiveType.POINT),
   RECTANGLE("RECTANGLE", 48, TPrimitiveType.RECTANGLE),
+  //8-byte pointer and 4-byte length indicator (12 bytes total).
+  // Aligning to 8 bytes so 16 total.
+  POLYGON("POLYGON", 16, TPrimitiveType.POLYGON),
   
   // Unsupported scalar type.
   BINARY("BINARY", -1, TPrimitiveType.BINARY),
@@ -89,6 +92,7 @@ public enum PrimitiveType {
       case RECTANGLE: return RECTANGLE;
       case POINT: return POINT;
       case LINE: return LINE;
+      case POLYGON: return POLYGON;
     }
     return INVALID_TYPE;
   }

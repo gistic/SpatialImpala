@@ -54,6 +54,7 @@ class SlotRef : public Expr {
   virtual impala_udf::PointVal GetPointVal(ExprContext* context, TupleRow*);
   virtual impala_udf::LineVal GetLineVal(ExprContext* context, TupleRow*);
   virtual impala_udf::RectangleVal GetRectangleVal(ExprContext* context, TupleRow*);
+  virtual impala_udf::PolygonVal GetPolygonVal(ExprContext* context, TupleRow*);
 
  protected:
   int tuple_idx_;  // within row

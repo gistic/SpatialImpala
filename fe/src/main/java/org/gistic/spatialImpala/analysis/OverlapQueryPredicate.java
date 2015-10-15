@@ -131,22 +131,21 @@ public class OverlapQueryPredicate extends Predicate {
     	HashMap<String, GlobalIndexRecord> globalIndexMapRight = globalIndexRight.getGlobalIndexMap();
 		
     	int index;
-    	LOG.info("Before checking the intersections between partitions");
 		for (GlobalIndexRecord gIRecordRight : globalIndexMapRight.values()) {
 			index = 0;
 			List<String> tmpIntersected = new ArrayList<String>();
 			for (GlobalIndexRecord gIRecordLeft : globalIndexMapLeft.values()) {
 				if (gIRecordRight.getMBR().intersects(gIRecordLeft.getMBR())) {
 					tmpIntersected.add(gIRecordLeft.getTag());
-					LOG.info("intersection found between "+gIRecordLeft.getTag()+" and "+gIRecordRight.getTag());
 				}
 				index++;
 			}
 			if (tmpIntersected.size() > 0) {
+				LOG.info("Right hand side: "+gIRecordRight.getTag() + " intesect with the following partitions from left hand side:");
+				for (String str : tmpIntersected) {
+					LOG.info(str);
+				}
 				intersectedPartitions_.put(gIRecordRight.getTag(), tmpIntersected);
-			}
-			else {
-				LOG.info("no intersections for partition "+gIRecordRight.getTag());
 			}
 		}
     }

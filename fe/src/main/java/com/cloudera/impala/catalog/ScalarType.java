@@ -72,6 +72,7 @@ public class ScalarType extends Type {
       case RECTANGLE: return RECTANGLE;
       case POINT: return POINT;
       case LINE: return LINE;
+      case POLYGON: return POLYGON;
       case DECIMAL: return (ScalarType) createDecimalType();
       default:
         Preconditions.checkState(false);
@@ -375,7 +376,7 @@ public class ScalarType extends Type {
   }
   
   public boolean isShapeType() {
-	  if (type_ == PrimitiveType.RECTANGLE || type_ == PrimitiveType.POINT || type_ == PrimitiveType.LINE) {
+	  if (type_ == PrimitiveType.RECTANGLE || type_ == PrimitiveType.POINT || type_ == PrimitiveType.LINE || type_ == PrimitiveType.POLYGON) {
 		  return true;
 	  }
 	  return false;

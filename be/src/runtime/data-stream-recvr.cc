@@ -117,6 +117,7 @@ Status DataStreamRecvr::SenderQueue::GetBatch(RowBatch** next_batch) {
     data_arrival_cv_.wait(l);
   }
 
+
   // cur_batch_ must be replaced with the returned batch.
   current_batch_.reset();
   *next_batch = NULL;

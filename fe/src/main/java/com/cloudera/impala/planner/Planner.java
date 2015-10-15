@@ -544,6 +544,8 @@ public class Planner {
       doBroadcast = false;
     }
 
+    doBroadcast = false;
+    
     if (doBroadcast) {
       node.setDistributionMode(HashJoinNode.DistributionMode.BROADCAST);
       // Doesn't create a new fragment, but modifies leftChildFragment to execute

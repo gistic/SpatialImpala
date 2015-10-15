@@ -33,6 +33,7 @@
 #include "exec/point.h"
 #include "exec/line.h"
 #include "exec/rectangle.h"
+#include "exec/polygon.h"
 
 using namespace std;
 using namespace spatialimpala;
@@ -122,79 +123,162 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
         StringParser::StringToFloat<double>(data, len, &parse_result);
       break;
     case TYPE_POINT: {
-      string encoded_data(data, len);
-      string decoded_data;
-
-      if (! Base64Decode(encoded_data, &decoded_data, 16)) {
-        VLOG_QUERY << "Point data couldn't be decoded from Base64.";
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
-      }
-
-      if (decoded_data.length() != 16) {
-        VLOG_QUERY << "Point data length is not correct: " << decoded_data.length();
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
-      }
+      string point_str(data, len);
+      boost::algorithm::to_lower(point_str);
       
-      const char* p_data = decoded_data.c_str();
-      double x = Shape::ConvertToDouble(p_data);
-      double y = Shape::ConvertToDouble(p_data + 8);
+      std::size_t startingField = point_str.find("point(");
+      if (startingField == std::string::npos) {
+        VLOG_QUERY << "Error in the well know text format of the point";
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      std::size_t startingData = startingField + 6;
+      std::string delimiter = " ";
+      std::string Xtoken = point_str.substr(startingData, point_str.find(delimiter, startingData));
+      std::string Ytoken = point_str.substr(startingData + Xtoken.size() + 1, point_str.find(")", startingData));
+      double x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
+      double y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
+      
       Point point_data(x, y);
       Point* point_slot = reinterpret_cast<Point*>(slot);
       *point_slot = point_data;
       break;
     }
     case TYPE_LINE: {
-      string encoded_data(data, len);
-      string decoded_data;
-
-      if (! Base64Decode(encoded_data, &decoded_data, 32)) {
-        VLOG_QUERY << "Line data couldn't be decoded from Base64.";
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
-      }
-
-      if (decoded_data.length() != 32) {
-        VLOG_QUERY << "Line data length is not correct: " << decoded_data.length();
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
-      }
+      string line_str(data, len);
+      boost::algorithm::to_lower(line_str);
       
-      const char* l_data = decoded_data.c_str();
-      double x1 = Shape::ConvertToDouble(l_data);
-      double y1 = Shape::ConvertToDouble(l_data + 8);
-      double x2 = Shape::ConvertToDouble(l_data + 16);
-      double y2 = Shape::ConvertToDouble(l_data + 24);
+      std::size_t startingField = line_str.find("line(");
+      if (startingField == std::string::npos) {
+        VLOG_QUERY << "Error in the well know text format of the line";
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      std::size_t prefix = startingField + 5;
+      std::string delimiter = " ";
+      std::string X1token = line_str.substr(prefix, line_str.find(delimiter, prefix));
+      prefix += X1token.size() + 1;
+      std::string Y1token = line_str.substr(prefix, line_str.find(delimiter, prefix));
+      prefix += Y1token.size() + 1;
+      std::string X2token = line_str.substr(prefix, line_str.find(delimiter, prefix));
+      prefix += X2token.size() + 1;
+      std::string Y2token = line_str.substr(prefix, line_str.find(")", prefix));
+      double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(), &parse_result);
+      double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(), &parse_result);
+      double x2 = StringParser::StringToFloat<double>(X2token.c_str(), X2token.size(), &parse_result);
+      double y2 = StringParser::StringToFloat<double>(Y2token.c_str(), Y2token.size(), &parse_result);
+
       Line line_data(x1, y1, x2, y2);
       Line* line_slot = reinterpret_cast<Line*>(slot);
       *line_slot = line_data;
       break;
     }
     case TYPE_RECTANGLE: {
-      string encoded_data(data, len);
-      string decoded_data;
-
-      if (! Base64Decode(encoded_data, &decoded_data, 32)) {
-        VLOG_QUERY << "Rectangle data couldn't be decoded from Base64.";
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
-      }
-
-      if (decoded_data.length() != 32) {
-        VLOG_QUERY << "Rectangle data length is not correct: " << decoded_data.length();
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
-      }
+      string rect_str(data, len);
+      boost::algorithm::to_lower(rect_str);
       
-      const char* r_data = decoded_data.c_str();
-      double x1 = Shape::ConvertToDouble(r_data);
-      double y1 = Shape::ConvertToDouble(r_data + 8);
-      double x2 = Shape::ConvertToDouble(r_data + 16);
-      double y2 = Shape::ConvertToDouble(r_data + 24);
+      std::size_t startingField = rect_str.find("rectangle(");
+      if (startingField == std::string::npos) {
+        VLOG_QUERY << "Error in the well know text format of the rectangle";
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      std::size_t prefix = startingField + 10;
+      std::string delimiter = " ";
+      std::string X1token = rect_str.substr(prefix, rect_str.find(delimiter, prefix));
+      prefix += X1token.size() + 1;
+      std::string Y1token = rect_str.substr(prefix, rect_str.find(delimiter, prefix));
+      prefix += Y1token.size() + 1;
+      std::string X2token = rect_str.substr(prefix, rect_str.find(delimiter, prefix));
+      prefix += X2token.size() + 1;
+      std::string Y2token = rect_str.substr(prefix, rect_str.find(")", prefix));
+      
+      double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(), &parse_result);
+      double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(), &parse_result);
+      double x2 = StringParser::StringToFloat<double>(X2token.c_str(), X2token.size(), &parse_result);
+      double y2 = StringParser::StringToFloat<double>(Y2token.c_str(), Y2token.size(), &parse_result);
+      
       Rectangle rect_data(x1, y1, x2, y2);
       Rectangle* rect_slot = reinterpret_cast<Rectangle*>(slot);
       *rect_slot = rect_data;
+      break;
+    }
+    case TYPE_POLYGON: {
+      string poly_str(data, len);
+      boost::algorithm::to_lower(poly_str);
+      
+      std::size_t startingField = poly_str.find("polygon (");
+      if (startingField == std::string::npos) {
+        VLOG_QUERY << "Error in the well know text format of the polygon";
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      std::size_t lineStringPrefix = startingField + 9;
+      int lineStringCount = std::count(poly_str.begin() + lineStringPrefix, poly_str.end(), '(');
+      if (lineStringCount == 0) {
+        VLOG_QUERY << "Error in the well know text format of the polygon";
+        tuple->SetNull(slot_desc->null_indicator_offset());
+        return true;
+      }
+      std::string lineStringToken, Xtoken, Ytoken;
+      double x, y;
+      int memoryNeeded = sizeof(int32_t);
+      for (int i = 0; i < lineStringCount; i++) {
+        if (i > 0) {
+          lineStringPrefix +=2; //skip the ", " seperator between lineStrings
+        }
+        memoryNeeded += sizeof(int32_t);
+        lineStringPrefix++; //skip the '(' character
+        lineStringToken = poly_str.substr(lineStringPrefix, poly_str.find(")", lineStringPrefix) - lineStringPrefix);
+        lineStringPrefix += lineStringToken.size() + 1;
+        int pointsCount = std::count(lineStringToken.begin(), lineStringToken.end(), ',') + 1;
+        memoryNeeded += pointsCount * 2 * sizeof(double);
+      }
+      Polygon poly_data;
+      poly_data.serializedData_ = reinterpret_cast<char*>(pool->Allocate(memoryNeeded));
+      poly_data.len_ = memoryNeeded;
+      int serializedDataIndex = 0;
+      memcpy(poly_data.serializedData_ + serializedDataIndex, &lineStringCount, sizeof(int32_t));
+      serializedDataIndex += sizeof(int32_t);
+      lineStringPrefix = startingField + 9;
+      for (int i = 0; i < lineStringCount; i++) {
+        if (i > 0) {
+          lineStringPrefix +=2; //skip the ", " seperator between lineStrings
+        }
+        lineStringPrefix++; //skip the '(' character
+        lineStringToken = poly_str.substr(lineStringPrefix, poly_str.find(")", lineStringPrefix) - lineStringPrefix);
+        lineStringPrefix += lineStringToken.size() + 1;
+        int pointsCount = std::count(lineStringToken.begin(), lineStringToken.end(), ',') + 1;
+        memcpy(poly_data.serializedData_ + serializedDataIndex, &pointsCount, sizeof(int32_t));
+        serializedDataIndex += sizeof(int32_t);
+        std::size_t pointsPrefix = 0;
+        for (int j = 0; j < pointsCount; j++) {
+          int position = lineStringToken.find(" ", pointsPrefix);
+          Xtoken = lineStringToken.substr(pointsPrefix, position - pointsPrefix);
+          pointsPrefix += Xtoken.size() + 1;
+          if (j == pointsCount - 1) {
+            Ytoken = lineStringToken.substr(pointsPrefix, lineStringToken.find(')', pointsPrefix) - pointsPrefix);
+          }
+          else {
+            int position = lineStringToken.find(", ", pointsPrefix);
+            Ytoken = lineStringToken.substr(pointsPrefix, position - pointsPrefix);
+          }
+          pointsPrefix += Ytoken.size() + 2;
+          x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
+          y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
+          memcpy(poly_data.serializedData_ + serializedDataIndex, &x, sizeof(double));
+          serializedDataIndex += sizeof(double);
+          memcpy(poly_data.serializedData_ + serializedDataIndex, &y, sizeof(double));
+          serializedDataIndex += sizeof(double);
+        }
+      }
+      StringValue str;
+      str.len = poly_data.len_;
+      str.ptr = poly_data.serializedData_;
+      StringValue* str_slot = reinterpret_cast<StringValue*>(slot);
+      *str_slot = str;
+      /*Polygon* poly_slot = reinterpret_cast<Polygon*>(slot);
+      *poly_slot = poly_data;*/
       break;
     }
     case TYPE_TIMESTAMP: {

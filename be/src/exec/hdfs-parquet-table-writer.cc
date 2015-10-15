@@ -35,6 +35,7 @@
 #include "exec/rectangle.h"
 #include "exec/point.h"
 #include "exec/line.h"
+#include "exec/polygon.h"
 
 
 #include <sstream>
@@ -255,16 +256,13 @@ class HdfsParquetTableWriter::ColumnWriter :
 
  protected:
   virtual bool EncodeValue(void* value, int64_t* bytes_needed) {
-    LOG(INFO) << "Encoding value ...";
     if (current_encoding_ == Encoding::PLAIN_DICTIONARY) {
       *bytes_needed = dict_encoder_->Put(*CastValue(value));
-      LOG(INFO) << "Bytes needed = "<<*bytes_needed;
       parent_->file_size_estimate_ += *bytes_needed;
 
       // If the dictionary contains the maximum number of values, switch to plain
       // encoding.  The current dictionary encoded page is written out.
       if (dict_encoder_->num_entries() == MAX_DICTIONARY_ENTRIES) {
-        LOG(INFO) << "Maximum dictionary entries";
         FinalizeCurrentPage();
         current_encoding_ = Encoding::PLAIN;
         return false;
@@ -332,52 +330,6 @@ inline StringValue* HdfsParquetTableWriter::ColumnWriter<StringValue>::CastValue
   }
   return reinterpret_cast<StringValue*>(value);
 }
-
-/*template<>
-inline Rectangle* HdfsParquetTableWriter::ColumnWriter<Rectangle>::CastValue(
-    void* value) {
-  Rectangle* rect = reinterpret_cast<Rectangle*>(value);
-  LOG(INFO) << "Casting rectangle ...";
-  LOG(INFO) << "x1 = "<< (double)rect->x1_;
-  
-  return rect;
-}
-/*
-template<>
-inline StringValue* HdfsParquetTableWriter::ColumnWriter<Line>::CastValue(
-    void* value) {
-  
-  char* x1 = reinterpret_cast<double*>(value.x1_);
-  char* y1 = reinterpret_cast<double*>(value.y1_);
-  char* x2 = reinterpret_cast<double*>(value.x2_);
-  char* y2 = reinterpret_cast<double*>(value.y2_);
- 
-  char* fullLine = new char[32];
-  memcpy(fullLine, x1, 8);
-  memcpy(fullLine + 8, y1, 8);
-  memcpy(fullLine + 16, x2, 8);
-  memcpy(fullLine + 24, y2, 8);
-
-  StringValue sv(fullLine, 32);
-  
-  return sv;
-}
-
-template<>
-inline StringValue* HdfsParquetTableWriter::ColumnWriter<Point>::CastValue(
-    void* value) {
-  
-  char* x = reinterpret_cast<double*>(value.x_);
-  char* y = reinterpret_cast<double*>(value.y_);
- 
-  char* fullPoint = new char[16];
-  memcpy(fullPoint, x, 8);
-  memcpy(fullPoint + 8, y, 8);
-  
-  StringValue sv(fullPoint, 16);
-  
-  return sv;
-}*/
 
 // Bools are encoded a bit differently so subclass it explicitly.
 class HdfsParquetTableWriter::BoolColumnWriter :
@@ -774,6 +726,10 @@ Status HdfsParquetTableWriter::Init() {
         break;
       case TYPE_LINE:
         writer = new ColumnWriter<Line>(
+            this, output_expr_ctxs_[i], codec);
+        break;
+      case TYPE_POLYGON:
+        writer = new ColumnWriter<Polygon>(
             this, output_expr_ctxs_[i], codec);
         break;
       default:

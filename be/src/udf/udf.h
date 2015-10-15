@@ -18,6 +18,7 @@
 
 #include <boost/cstdint.hpp>
 #include <string.h>
+#include <vector>
 
 // This is the only Impala header required to develop UDFs and UDAs. This header
 // contains the types that need to be used and the FunctionContext object. The context
@@ -39,6 +40,11 @@ struct IntVal;
 struct BigIntVal;
 struct StringVal;
 struct TimestampVal;
+struct PointVal;
+struct LineVal;
+struct RectangleVal;
+struct PolygonVal;
+struct LineStringVal;
 
 // A FunctionContext is passed to every UDF/UDA and is the interface for the UDF to the
 // rest of the system. It contains APIs to examine the system state, report errors and
@@ -67,7 +73,8 @@ class FunctionContext {
     TYPE_VARCHAR,
     TYPE_POINT,
     TYPE_LINE,
-    TYPE_RECTANGLE
+    TYPE_RECTANGLE,
+    TYPE_POLYGON
   };
 
   struct TypeDesc {
@@ -609,6 +616,60 @@ struct RectangleVal : public AnyVal {
   }
 
   bool operator!=(const RectangleVal& other) const { return !(*this == other); }
+};
+
+struct LineStringVal : public AnyVal {
+  std::vector<PointVal> pList;
+
+  LineStringVal(std::vector<PointVal> pList) {
+    this->pList = pList;
+  }
+
+  LineStringVal() {
+  }
+
+  static LineStringVal null() {
+    LineStringVal result;
+    result.is_null = true;
+    return result;
+  }
+
+  bool operator==(const LineStringVal& other) const {
+    if (is_null && other.is_null) return true;
+    if (is_null || other.is_null) return false;
+    return pList == other.pList;
+  }
+
+  bool operator!=(const LineStringVal& other) const { return !(*this == other); }
+};
+
+struct PolygonVal : public AnyVal {
+  int len;
+  char *serializedData;
+  RectangleVal mbr;
+
+  PolygonVal(char *serializedDat, int len) {
+    this->len = len;
+    this->serializedData = new char[len];
+    memcpy(this->serializedData, serializedData, len);
+  }
+
+  PolygonVal() {
+  }
+
+  static PolygonVal null() {
+    PolygonVal result;
+    result.is_null = true;
+    return result;
+  }
+
+  bool operator==(const PolygonVal& other) const {
+    if (is_null && other.is_null) return true;
+    if (is_null || other.is_null) return false;
+    return false;
+  }
+
+  bool operator!=(const PolygonVal& other) const { return !(*this == other); }
 };
 
 // Note: there is a difference between a NULL string (is_null == true) and an

@@ -64,11 +64,20 @@ void Tuple::DeepCopy(const TupleDescriptor& desc, char** data, int* offset,
        i != desc.string_slots().end(); ++i) {
     DCHECK((*i)->type().IsVarLen());
     if (!dst->IsNull((*i)->null_indicator_offset())) {
-      StringValue* string_v = dst->GetStringSlot((*i)->tuple_offset());
-      memcpy(*data, string_v->ptr, string_v->len);
-      string_v->ptr = (convert_ptrs ? reinterpret_cast<char*>(*offset) : *data);
-      *data += string_v->len;
-      *offset += string_v->len;
+      /*if ((*i)->type().type == TYPE_POLYGON) {
+      	Polygon* polygon_v = dst->GetPolygonSlot((*i)->tuple_offset());
+      	memcpy(*data, polygon_v->serializedData_, polygon_v->len_);
+      	polygon_v->serializedData_ = (convert_ptrs ? reinterpret_cast<char*>(*offset) : *data);
+      	*data += polygon_v->len_;
+      	*offset += polygon_v->len_;
+      }
+      else {*/
+      	StringValue* string_v = dst->GetStringSlot((*i)->tuple_offset());
+      	memcpy(*data, string_v->ptr, string_v->len);
+      	string_v->ptr = (convert_ptrs ? reinterpret_cast<char*>(*offset) : *data);
+      	*data += string_v->len;
+      	*offset += string_v->len;
+      //}
     }
   }
 }

@@ -57,6 +57,9 @@ Status Channel::Init(RuntimeState* state) {
 Status Channel::SendBatch(TRowBatch* batch) {
   VLOG_ROW << "Channel::SendBatch() instance_id=" << fragment_instance_id_
            << " dest_node=" << dest_node_id_ << " #rows=" << batch->num_rows;
+
+  LOG(INFO) << "Channel::SendBatch() instance_id=" << fragment_instance_id_
+           << " dest_node=" << dest_node_id_ << " #rows=" << batch->num_rows;
   // return if the previous batch saw an error
   RETURN_IF_ERROR(GetSendStatus());
   {
@@ -85,6 +88,9 @@ void Channel::TransmitDataHelper(const TRowBatch* batch) {
   DCHECK(batch != NULL);
   try {
     VLOG_ROW << "Channel::TransmitData() instance_id=" << fragment_instance_id_
+             << " dest_node=" << dest_node_id_
+             << " #rows=" << batch->num_rows;
+    LOG(INFO) << "Channel::TransmitData() instance_id=" << fragment_instance_id_
              << " dest_node=" << dest_node_id_
              << " #rows=" << batch->num_rows;
     TTransmitDataParams params;
@@ -174,6 +180,9 @@ Status Channel::SendCurrentBatch() {
 Status Channel::GetSendStatus() {
   WaitForRpc();
   if (!rpc_status_.ok()) {
+    LOG(INFO) << "GetSendStatus is not ok instance_id=" << fragment_instance_id_
+           << " dest_node=" << dest_node_id_
+           << " #rows= " << batch_->num_rows();
     LOG(ERROR) << "channel send status: " << rpc_status_.GetErrorMsg();
   }
   return rpc_status_;

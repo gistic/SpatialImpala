@@ -43,7 +43,7 @@
 #include "exec/rectangle.h"
 #include "exec/point.h"
 #include "exec/line.h"
-
+#include "exec/polygon.h"
 
 using namespace std;
 using namespace boost;
@@ -493,6 +493,9 @@ HdfsParquetScanner::BaseColumnReader* HdfsParquetScanner::CreateReader(
         break;
     case TYPE_LINE:
         reader = new ColumnReader<Line>(this, desc, file_idx);
+        break;
+    case TYPE_POLYGON:
+        reader = new ColumnReader<Polygon>(this, desc, file_idx);
         break;
     default:
       DCHECK(false);

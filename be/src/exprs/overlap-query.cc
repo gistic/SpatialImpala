@@ -63,6 +63,11 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
       first_shape = new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2);
       break;
     }
+    case TYPE_POLYGON: {
+      PolygonVal p_val = children()[0]->GetPolygonVal(NULL, row);
+      first_shape = new Polygon(p_val.serializedData, p_val.len);
+      break;
+    }
     default:
       return BooleanVal::null();
   }
@@ -81,6 +86,11 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
     case TYPE_RECTANGLE: {
       RectangleVal r_val = children()[1]->GetRectangleVal(NULL, row);
       second_shape = new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2);
+      break;
+    }
+    case TYPE_POLYGON: {
+      PolygonVal p_val = children()[1]->GetPolygonVal(NULL, row);
+      second_shape = new Polygon(p_val.serializedData, p_val.len);
       break;
     }
     default: {

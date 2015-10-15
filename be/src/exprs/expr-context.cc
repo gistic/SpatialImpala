@@ -299,6 +299,13 @@ void* ExprContext::GetValue(Expr* e, TupleRow* row) {
       result_.rectangle_val = Rectangle::FromRectangleVal(v);
       return &result_.rectangle_val;
     }
+    case TYPE_POLYGON: {
+      impala_udf::StringVal v = e->GetStringVal(this, row);
+      if (v.is_null) return NULL;
+      result_.string_val.ptr = reinterpret_cast<char*>(v.ptr);
+      result_.string_val.len = v.len;
+      return &result_.string_val;
+    }
     default:
       DCHECK(false) << "Type not implemented: " << e->type_.DebugString();
       return NULL;
@@ -356,4 +363,7 @@ LineVal ExprContext::GetLineVal(TupleRow* row) {
 }
 RectangleVal ExprContext::GetRectangleVal(TupleRow* row) {
   return root_->GetRectangleVal(this, row);
+}
+PolygonVal ExprContext::GetPolygonVal(TupleRow* row) {
+  return root_->GetPolygonVal(this, row);
 }

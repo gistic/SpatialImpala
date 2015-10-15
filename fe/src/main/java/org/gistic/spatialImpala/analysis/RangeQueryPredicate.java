@@ -152,6 +152,9 @@ public class RangeQueryPredicate extends Predicate {
 		prunedDataRatio = GIsIntersectAndFully.size() * 1.0 /  globalIndexMap.size();
 		LOG.info("Pruned data ratio is : " + Double.toString(prunedDataRatio));
     }
+    else {
+    	LOG.info("The query is on non-indexed column");
+    }
   }
   
   public boolean getRangeQueryColsAreIndexed() {

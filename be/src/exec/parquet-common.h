@@ -25,6 +25,8 @@
 #include "exec/rectangle.h"
 #include "exec/point.h"
 #include "exec/line.h"
+#include "exec/polygon.h"
+
 
 using namespace spatialimpala;
 
@@ -60,6 +62,7 @@ const parquet::Type::type IMPALA_TO_PARQUET_TYPES[] = {
   parquet::Type::BYTE_ARRAY,  // Rectangle
   parquet::Type::BYTE_ARRAY,  // Point
   parquet::Type::BYTE_ARRAY,  // Line
+  parquet::Type::BYTE_ARRAY,  // Polygon
 };
 
 // Mapping of Parquet codec enums to Impala enums
@@ -119,6 +122,8 @@ class ParquetPlainEncoder {
       case TYPE_RECTANGLE:
       case TYPE_LINE:
         return 32;
+      case TYPE_POLYGON:
+        return -1;
       case TYPE_NULL:
       case TYPE_BOOLEAN: // These types are not plain encoded.
       default:
@@ -257,6 +262,11 @@ inline int ParquetPlainEncoder::ByteSize(const Line& v) {
 }
 
 template<>
+inline int ParquetPlainEncoder::ByteSize(const Polygon& v) {
+  return v.len_ + sizeof(int32_t);
+}
+
+template<>
 inline int ParquetPlainEncoder::Decode(uint8_t* buffer, int fixed_len_size, int8_t* v) {
   *v = *buffer;
   return ByteSize(*v);
@@ -355,6 +365,26 @@ inline int ParquetPlainEncoder::Decode(
   
   memcpy(&v->x_, buffer, 8);
   memcpy(&v->y_, buffer + 8, 8);
+  int bytesize = ByteSize(*v);
+  return bytesize;
+}
+
+
+template<>
+inline int ParquetPlainEncoder::Encode(
+    uint8_t* buffer, int fixed_len_size, const Polygon& v) {
+  memcpy(buffer, &v.len_, sizeof(int32_t));
+  memcpy(buffer + sizeof(int32_t), v.serializedData_, v.len_);
+  int bytesize = ByteSize(v);
+  return bytesize;
+}
+
+template<>
+inline int ParquetPlainEncoder::Decode(
+    uint8_t* buffer, int fixed_len_size, Polygon* v) {
+  memcpy(&v->len_, buffer, sizeof(int32_t));
+  v->serializedData_ = new char[v->len_];
+  memcpy(v->serializedData_, buffer + sizeof(int32_t), v->len_);
   int bytesize = ByteSize(*v);
   return bytesize;
 }

@@ -550,6 +550,10 @@ AnyVal* Expr::GetConstVal(ExprContext* context) {
       constant_val_.reset(new RectangleVal(GetRectangleVal(context, NULL)));
       break;
     }
+    case TYPE_POLYGON: {
+      constant_val_.reset(new StringVal(GetStringVal(context, NULL)));
+      break;
+    }
     default:
       DCHECK(false) << "Type not implemented: " << type();
   }
@@ -635,4 +639,8 @@ LineVal Expr::GetLineVal(ExprContext* context, TupleRow*) {
 RectangleVal Expr::GetRectangleVal(ExprContext* context, TupleRow*) {
   DCHECK(false) << DebugString();
   return RectangleVal::null();
+}
+PolygonVal Expr::GetPolygonVal(ExprContext* context, TupleRow*) {
+  DCHECK(false) << DebugString();
+  return PolygonVal::null();
 }

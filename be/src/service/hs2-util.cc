@@ -20,6 +20,7 @@
 #include "exec/point.h"
 #include "exec/line.h"
 #include "exec/rectangle.h"
+#include "exec/polygon.h"
 
 using namespace apache::hive::service::cli;
 using namespace impala;
@@ -207,6 +208,14 @@ void impala::ExprValueToHS2TColumn(const void* value, const TColumnType& type,
       if (value != NULL) {
         stringstream ss;
         ss << (*reinterpret_cast<const Rectangle*>(value));
+        column->stringVal.values.push_back(ss.str());
+      }
+      nulls = &column->stringVal.nulls;
+      break;
+    case TPrimitiveType::POLYGON:
+      if (value != NULL) {
+        stringstream ss;
+        ss << (*reinterpret_cast<const Polygon*>(value));
         column->stringVal.values.push_back(ss.str());
       }
       nulls = &column->stringVal.nulls;

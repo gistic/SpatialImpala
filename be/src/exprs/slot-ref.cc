@@ -21,6 +21,7 @@
 #include "gen-cpp/Exprs_types.h"
 #include "runtime/runtime-state.h"
 #include "exec/point.h"
+#include "exec/polygon.h"
 #include "exec/line.h"
 #include "exec/rectangle.h"
 
@@ -161,7 +162,7 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
     return Status("Codegen for Char not supported.");
   }
   if (type_.type == TYPE_POINT || type_.type == TYPE_LINE
-    || type_.type == TYPE_RECTANGLE) {
+    || type_.type == TYPE_RECTANGLE || type_.type == TYPE_POLYGON) {
     *fn = NULL;
     return Status("Codegen for Shapes not supported.");
   }
@@ -490,6 +491,14 @@ RectangleVal SlotRef::GetRectangleVal(ExprContext* context, TupleRow* row) {
   if (t == NULL || t->IsNull(null_indicator_offset_)) return RectangleVal::null();
   Rectangle* rv = reinterpret_cast<Rectangle*>(t->GetSlot(slot_offset_));
   return RectangleVal(rv->x1_, rv->y1_, rv->x2_, rv->y2_);
+}
+
+PolygonVal SlotRef::GetPolygonVal(ExprContext* context, TupleRow* row) {
+  DCHECK_EQ(type_.type, TYPE_POLYGON);
+  Tuple* t = row->GetTuple(tuple_idx_);
+  if (t == NULL || t->IsNull(null_indicator_offset_)) return PolygonVal::null();
+  Polygon* pv = reinterpret_cast<Polygon*>(t->GetSlot(slot_offset_));
+  return PolygonVal(pv->serializedData_, pv->len_);
 }
 
 }

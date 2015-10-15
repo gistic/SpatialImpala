@@ -6,7 +6,9 @@ namespace java com.cloudera.impala.thrift
 enum TShapeType {
   POINT,
   LINE,
-  RECTANGLE
+  RECTANGLE,
+  POLYGON,
+  LINE_STRING
 }
 
 // Represents a 2D point.
@@ -32,10 +34,22 @@ struct TRectangle {
   4: required double y2
 }
 
+//Represents a line string
+struct TLineString {
+  1: required list<TPoint> pList
+}
+
+//Represents a polygon
+struct TPolygon {
+  1: string serializedData
+}
+
 // Represents a 2D shape
 struct TShape {
   1: required TShapeType type
   2: optional TPoint point
   3: optional TLine line
   4: optional TRectangle rectangle
+  5: optional TPolygon polygon
+  6: optional TLineString lineString
 }

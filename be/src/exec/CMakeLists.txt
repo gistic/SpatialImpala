@@ -38,6 +38,7 @@ add_library(Exec
   external-data-source-executor.cc
   hash-join-node.cc
   hash-join-node-ir.cc
+  line-string.cc
   old-hash-table.cc
   hash-table.cc
   hbase-table-sink.cc
@@ -67,6 +68,7 @@ add_library(Exec
   partitioned-hash-join-node.cc
   partitioned-hash-join-node-ir.cc
   point.cc
+  polygon.cc
   read-write-util.cc
   rectangle.cc
   r-tree.cc

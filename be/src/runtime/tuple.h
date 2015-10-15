@@ -21,12 +21,16 @@
 #include "gutil/macros.h"
 #include "runtime/descriptors.h"
 #include "runtime/mem-pool.h"
+#include "exec/polygon.h"
+
+using namespace spatialimpala;
 
 namespace impala {
 
 struct StringValue;
 class TupleDescriptor;
 class TupleRow;
+
 
 // A tuple is stored as a contiguous sequence of bytes containing a fixed number
 // of fixed-size slots. The slots are arranged in order of increasing byte length;
@@ -128,6 +132,11 @@ class Tuple {
   StringValue* GetStringSlot(int offset) {
     DCHECK(offset != -1);  // -1 offset indicates non-materialized slot
     return reinterpret_cast<StringValue*>(reinterpret_cast<char*>(this) + offset);
+  }
+
+  Polygon* GetPolygonSlot(int offset) {
+    DCHECK(offset != -1);  // -1 offset indicates non-materialized slot
+    return reinterpret_cast<Polygon*>(reinterpret_cast<char*>(this) + offset);
   }
 
   // For C++/IR interop, we need to be able to look up types by name.

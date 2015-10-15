@@ -38,6 +38,7 @@ enum TPrimitiveType {
   RECTANGLE,
   POINT,
   LINE,
+  POLYGON,
   // Unsupported types
   BINARY,
   DECIMAL,

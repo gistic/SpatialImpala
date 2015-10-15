@@ -120,6 +120,7 @@ class ExprContext {
   PointVal GetPointVal(TupleRow* row);
   LineVal GetLineVal(TupleRow* row);
   RectangleVal GetRectangleVal(TupleRow* row);
+  PolygonVal GetPolygonVal(TupleRow* row);
 
   // Frees all local allocations made by fn_contexts_. This can be called when result data
   // from this context is no longer needed.

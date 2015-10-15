@@ -43,6 +43,7 @@ PrimitiveType ThriftToType(TPrimitiveType::type ttype) {
     case TPrimitiveType::POINT: return TYPE_POINT;
     case TPrimitiveType::LINE: return TYPE_LINE;
     case TPrimitiveType::RECTANGLE: return TYPE_RECTANGLE;
+    case TPrimitiveType::POLYGON: return TYPE_POLYGON;
     default: return INVALID_TYPE;
   }
 }
@@ -69,6 +70,7 @@ TPrimitiveType::type ToThrift(PrimitiveType ptype) {
     case TYPE_POINT: return TPrimitiveType::POINT;
     case TYPE_LINE: return TPrimitiveType::LINE;
     case TYPE_RECTANGLE: return TPrimitiveType::RECTANGLE;
+    case TYPE_POLYGON: return TPrimitiveType::POLYGON;
     default: return TPrimitiveType::INVALID_TYPE;
   }
 }
@@ -95,6 +97,7 @@ string TypeToString(PrimitiveType t) {
     case TYPE_POINT: return "POINT";
     case TYPE_LINE: return "LINE";
     case TYPE_RECTANGLE: return "RECTANGLE";
+    case TYPE_POLYGON: return "POLYGON";
   };
   return "";
 }
@@ -122,6 +125,7 @@ string TypeToOdbcString(PrimitiveType t) {
     case TYPE_POINT: return "point";
     case TYPE_LINE: return "line";
     case TYPE_RECTANGLE: return "rectangle";
+    case TYPE_POLYGON: return "polygon";
   };
   return "unknown";
 }
