@@ -3,6 +3,7 @@
 #include "exec/polygon.h"
 #include "exec/point.h"
 #include "exec/rectangle.h"
+#include "exec/line.h"
 
 using namespace spatialimpala;
 
@@ -29,36 +30,11 @@ Polygon Polygon::FromPolygonVal(PolygonVal& pv) {
 }
 
 Polygon::Polygon(char* str, int length) {
+  type_ = TShapeType::POLYGON;
   len_ = length;
   serializedData_ = str;
 }
 
-
-Polygon::Polygon(std::vector<LineString> lList) {
-  type_ = TShapeType::POLYGON;
-  int32_t lineListSize, pointsListSize;
-  lineListSize = lList.size();
-  int32_t index = 0;
-  len_ = sizeof(int32_t);
-  for (int i = 0; i < lineListSize; i++) {
-    len_ += sizeof(int32_t);
-    len_ += lList[i].pList_.size() * 2 * sizeof(double);
-  }
-  serializedData_ = new char[len_];
-  memcpy(serializedData_ + index, &lineListSize, sizeof(int32_t));
-  index += sizeof(int32_t);
-  for (int i = 0; i < lineListSize; i++) {
-    pointsListSize = lList[i].pList_.size();
-    memcpy(serializedData_ + index, &pointsListSize, sizeof(int32_t));
-    index += sizeof(int32_t);
-    for (int j = 0; j < pointsListSize; j++) {
-      memcpy(serializedData_ + index, &lList[i].pList_[j].x_, sizeof(double));
-      index += sizeof(double);
-      memcpy(serializedData_ + index, &lList[i].pList_[j].y_, sizeof(double));
-      index += sizeof(double);
-    }
-  }
-}
 
 Polygon::Polygon() {
 }
@@ -67,6 +43,47 @@ Polygon::~Polygon() {
 }
 
 bool Polygon::Intersects(Shape* other) {
+  int32_t lineStringLen, pointListLen;
+  int index = 4 * sizeof(double);
+  bool intersects = false;
+  memcpy(&lineStringLen, serializedData_ + index, sizeof(int32_t));
+  index += sizeof(int32_t);
+  LOG(INFO)<<"Total number of linestrings = "<<lineStringLen;
+  for (int i = 0; i < lineStringLen; i++) {
+    memcpy(&pointListLen, serializedData_ + index, sizeof(int32_t));
+    index += sizeof(int32_t);
+    LOG(INFO)<<"Total number of points = "<<pointListLen;
+    if (pointListLen > 1) {
+      double x1, y1, x2, y2, firstX, firstY;
+      memcpy(&x1, serializedData_ + index, sizeof(double));
+      index += sizeof(double);
+      memcpy(&y1, serializedData_ + index, sizeof(double));
+      index += sizeof(double);
+      firstX = x1;
+      firstY = y1;
+      for (int j = 1; j < pointListLen ; j++) {
+        memcpy(&x2, serializedData_ + index, sizeof(double));
+        index += sizeof(double);
+        memcpy(&y2, serializedData_ + index, sizeof(double));
+        index += sizeof(double);
+        LOG(INFO)<<"x1 = "<<x1 <<", y1 = "<<y1<<", x2 = "<<x2 <<", y2 = "<<y2;
+        Shape *temp = new Line(x1, y1, x2, y2);
+        if (other->Intersects(temp)) {
+          delete temp;
+          return true;
+        }
+        delete temp;
+        x1 = x2;
+        y1 = y2;
+      }
+      Shape *temp = new Line(x1, y1, firstX, firstY);
+      if (other->Intersects(temp)) {
+        delete temp;
+        return true;
+      }
+      delete temp;
+    }
+  }
   return false;
 }
 
@@ -77,16 +94,16 @@ bool Polygon::Contains(Shape* other) {
 void Polygon::GetMBR(Shape* mbr) {
   Rectangle* mbr_rect = dynamic_cast<Rectangle*>(mbr);
   if (mbr_rect == NULL) return;
-  mbr_rect->x1_ = 0;
-  mbr_rect->y1_ = 0;
-  mbr_rect->x2_ = 0;
-  mbr_rect->y2_ = 0;
+  memcpy(&mbr_rect->x1_, serializedData_, sizeof(double));
+  memcpy(&mbr_rect->y1_, serializedData_ + sizeof(double), sizeof(double));
+  memcpy(&mbr_rect->x2_, serializedData_ + 2 * sizeof(double), sizeof(double));
+  memcpy(&mbr_rect->y2_, serializedData_ + 3 * sizeof(double), sizeof(double));
 }
 
 std::ostream& spatialimpala::operator<< (std::ostream& out, Polygon const &value) {
   out << "Polygon(";
   int32_t lineStringLen, pointListLen;
-  int index = 0;
+  int index = 4 * sizeof(double);
   double x,y;
   memcpy(&lineStringLen, value.serializedData_ + index, sizeof(int32_t));
   index += sizeof(int32_t);
@@ -102,7 +119,7 @@ std::ostream& spatialimpala::operator<< (std::ostream& out, Polygon const &value
       out << x << " " << y;
       out << ", ";
     }
-    out << ")";
+    out << "), ";
   }
   out << ")";
   return out;

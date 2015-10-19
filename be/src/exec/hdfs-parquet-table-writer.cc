@@ -695,6 +695,7 @@ Status HdfsParquetTableWriter::Init() {
       case TYPE_VARCHAR:
       case TYPE_STRING:
       case TYPE_CHAR:
+      case TYPE_POLYGON:
         writer = new ColumnWriter<StringValue>(
             this, output_expr_ctxs_[i], codec);
         break;
@@ -726,10 +727,6 @@ Status HdfsParquetTableWriter::Init() {
         break;
       case TYPE_LINE:
         writer = new ColumnWriter<Line>(
-            this, output_expr_ctxs_[i], codec);
-        break;
-      case TYPE_POLYGON:
-        writer = new ColumnWriter<Polygon>(
             this, output_expr_ctxs_[i], codec);
         break;
       default:

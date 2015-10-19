@@ -470,6 +470,7 @@ HdfsParquetScanner::BaseColumnReader* HdfsParquetScanner::CreateReader(
     case TYPE_STRING:
     case TYPE_VARCHAR:
     case TYPE_CHAR:
+    case TYPE_POLYGON:
       reader = new ColumnReader<StringValue>(this, desc, file_idx);
       break;
     case TYPE_DECIMAL:
@@ -493,9 +494,6 @@ HdfsParquetScanner::BaseColumnReader* HdfsParquetScanner::CreateReader(
         break;
     case TYPE_LINE:
         reader = new ColumnReader<Line>(this, desc, file_idx);
-        break;
-    case TYPE_POLYGON:
-        reader = new ColumnReader<Polygon>(this, desc, file_idx);
         break;
     default:
       DCHECK(false);

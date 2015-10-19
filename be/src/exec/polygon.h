@@ -22,7 +22,6 @@ class Polygon : public Shape {
   public:
     Polygon(TShape& shape);
     Polygon(TPolygon& poly);
-    Polygon(std::vector<LineString> lList);
     Polygon(char* str, int length);
     Polygon();
     virtual ~Polygon();

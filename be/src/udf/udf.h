@@ -650,11 +650,19 @@ struct PolygonVal : public AnyVal {
 
   PolygonVal(char *serializedDat, int len) {
     this->len = len;
-    this->serializedData = new char[len];
-    memcpy(this->serializedData, serializedData, len);
+    this->serializedData = serializedDat;
   }
 
   PolygonVal() {
+  }
+
+  RectangleVal GetMBR() {
+    RectangleVal mbr_rect;
+    memcpy(&mbr_rect.x1, serializedData, sizeof(double));
+    memcpy(&mbr_rect.y1, serializedData + sizeof(double), sizeof(double));
+    memcpy(&mbr_rect.x2, serializedData + 2 * sizeof(double), sizeof(double));
+    memcpy(&mbr_rect.y2, serializedData + 3 * sizeof(double), sizeof(double));
+    return mbr_rect;
   }
 
   static PolygonVal null() {

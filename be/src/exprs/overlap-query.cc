@@ -64,8 +64,9 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
       break;
     }
     case TYPE_POLYGON: {
-      PolygonVal p_val = children()[0]->GetPolygonVal(NULL, row);
-      first_shape = new Polygon(p_val.serializedData, p_val.len);
+      StringVal p_val = children()[0]->GetStringVal(NULL, row);
+      LOG(INFO)<< "The polygon lenght =" <<p_val.len;
+      first_shape = new Polygon(reinterpret_cast<char*>(p_val.ptr), p_val.len);
       break;
     }
     default:
@@ -89,8 +90,9 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
       break;
     }
     case TYPE_POLYGON: {
-      PolygonVal p_val = children()[1]->GetPolygonVal(NULL, row);
-      second_shape = new Polygon(p_val.serializedData, p_val.len);
+      StringVal p_val = children()[1]->GetStringVal(NULL, row);
+      LOG(INFO)<< "The polygon lenght =" <<p_val.len;
+      second_shape = new Polygon(reinterpret_cast<char*>(p_val.ptr), p_val.len);
       break;
     }
     default: {

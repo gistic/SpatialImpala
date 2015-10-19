@@ -222,7 +222,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       }
       std::string lineStringToken, Xtoken, Ytoken;
       double x, y;
-      int memoryNeeded = sizeof(int32_t);
+      int memoryNeeded = 4 * sizeof(double) + sizeof(int32_t);
       for (int i = 0; i < lineStringCount; i++) {
         if (i > 0) {
           lineStringPrefix +=2; //skip the ", " seperator between lineStrings
@@ -237,7 +237,8 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       Polygon poly_data;
       poly_data.serializedData_ = reinterpret_cast<char*>(pool->Allocate(memoryNeeded));
       poly_data.len_ = memoryNeeded;
-      int serializedDataIndex = 0;
+      double minX, minY, maxX, maxY;
+      int serializedDataIndex = 4 * sizeof(double);
       memcpy(poly_data.serializedData_ + serializedDataIndex, &lineStringCount, sizeof(int32_t));
       serializedDataIndex += sizeof(int32_t);
       lineStringPrefix = startingField + 9;
@@ -270,8 +271,31 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
           serializedDataIndex += sizeof(double);
           memcpy(poly_data.serializedData_ + serializedDataIndex, &y, sizeof(double));
           serializedDataIndex += sizeof(double);
+          if (j == 0 && i == 0) {
+            minX = maxX = x;
+            minY = maxY = y;
+          }
+          else {
+            if (x < minX) {
+              minX = x;
+            }
+            else if (x > maxX) {
+              maxX = x;
+            }
+            if (y < minY) {
+              minY = y;
+            }
+            else if (y > maxY) {
+              maxY = y;
+            }
+          }
         }
       }
+      memcpy(poly_data.serializedData_, &minX, sizeof(double));
+      memcpy(poly_data.serializedData_ + sizeof(double), &minY, sizeof(double));
+      memcpy(poly_data.serializedData_ + 2 * sizeof(double), &maxX, sizeof(double));
+      memcpy(poly_data.serializedData_ + 3 * sizeof(double), &maxY, sizeof(double));
+      
       StringValue str;
       str.len = poly_data.len_;
       str.ptr = poly_data.serializedData_;
