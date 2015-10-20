@@ -171,6 +171,30 @@ bool Base64Decode(const string& in, string* out) {
   return true;
 }
 
+bool Base64Decode(const string& in, string* out, int size) {
+  typedef transform_width<
+      binary_from_base64<string::const_iterator> , 8, 6> base64_decode;
+  string tmp = in;
+  // Replace padding with base64 encoded NULL
+  replace(tmp.begin(), tmp.end(), '=', 'A');
+  try {
+    *out = string(base64_decode(tmp.begin()), base64_decode(tmp.end()));
+  } catch(std::exception& e) {
+    return false;
+  }
+
+  // Remove trailing '\0' that were added as padding.  Since \0 is special,
+  // the boost functions get confused so do this manually.
+  int num_padded_chars = 0;
+  for (int i = out->size() - 1; i >= 0; --i) {
+    if ((*out)[i] != '\0') break;
+    if (i < size) break;
+    ++num_padded_chars;
+  }
+  out->resize(out->size() - num_padded_chars);
+  return true;
+}
+
 void EscapeForHtml(const string& in, stringstream* out) {
   DCHECK(out != NULL);
   BOOST_FOREACH(const char& c, in) {

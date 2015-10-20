@@ -125,7 +125,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       string encoded_data(data, len);
       string decoded_data;
 
-      if (! Base64Decode(encoded_data, &decoded_data)) {
+      if (! Base64Decode(encoded_data, &decoded_data, 16)) {
         VLOG_QUERY << "Point data couldn't be decoded from Base64.";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
@@ -149,7 +149,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       string encoded_data(data, len);
       string decoded_data;
 
-      if (! Base64Decode(encoded_data, &decoded_data)) {
+      if (! Base64Decode(encoded_data, &decoded_data, 32)) {
         VLOG_QUERY << "Line data couldn't be decoded from Base64.";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
@@ -175,7 +175,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       string encoded_data(data, len);
       string decoded_data;
 
-      if (! Base64Decode(encoded_data, &decoded_data)) {
+      if (! Base64Decode(encoded_data, &decoded_data, 32)) {
         VLOG_QUERY << "Rectangle data couldn't be decoded from Base64.";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;

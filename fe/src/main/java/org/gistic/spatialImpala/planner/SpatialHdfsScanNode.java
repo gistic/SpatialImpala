@@ -52,6 +52,7 @@ import com.cloudera.impala.thrift.TQueryOptions;
 import com.cloudera.impala.thrift.TScanRange;
 import com.cloudera.impala.thrift.TScanRangeLocation;
 import com.cloudera.impala.thrift.TScanRangeLocations;
+import com.cloudera.impala.thrift.THdfsScanNode;
 import com.cloudera.impala.thrift.TSpatialHdfsScanNode;
 import com.google.common.base.Objects;
 import com.google.common.base.Objects.ToStringHelper;
@@ -174,7 +175,8 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
   
   @Override
   protected void toThrift(TPlanNode msg) {
-    msg.spatial_hdfs_scan_node = new TSpatialHdfsScanNode(desc_.getId().asInt(), (rect_ != null));
+    msg.hdfs_scan_node = new THdfsScanNode(desc_.getId().asInt());
+    msg.spatial_hdfs_scan_node = new TSpatialHdfsScanNode((rect_ != null));
 
     if (rect_ != null)
       msg.spatial_hdfs_scan_node.rectangle = rect_.toThrift();
