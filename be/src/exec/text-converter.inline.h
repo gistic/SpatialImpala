@@ -19,6 +19,8 @@
 #include "text-converter.h"
 
 #include <boost/algorithm/string.hpp>
+#include <limits>
+
 
 #include "runtime/runtime-state.h"
 #include "runtime/descriptors.h"
@@ -206,20 +208,17 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
     case TYPE_POLYGON: {
       string poly_str(data, len);
       boost::algorithm::to_lower(poly_str);
-      
       std::size_t startingField = poly_str.find("polygon (");
+      std::size_t lineStringPrefix;
+      int lineStringCount = 0;
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the polygon";
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
       }
-      std::size_t lineStringPrefix = startingField + 9;
-      int lineStringCount = std::count(poly_str.begin() + lineStringPrefix, poly_str.end(), '(');
-      if (lineStringCount == 0) {
-        VLOG_QUERY << "Error in the well know text format of the polygon";
-        tuple->SetNull(slot_desc->null_indicator_offset());
-        return true;
+      else {
+        lineStringPrefix = startingField + 9;
+        lineStringCount = std::count(poly_str.begin() + lineStringPrefix, poly_str.end(), '(');
       }
+      
       std::string lineStringToken, Xtoken, Ytoken;
       double x, y;
       int memoryNeeded = 4 * sizeof(double) + sizeof(int32_t);
@@ -238,6 +237,8 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       poly_data.serializedData_ = reinterpret_cast<char*>(pool->Allocate(memoryNeeded));
       poly_data.len_ = memoryNeeded;
       double minX, minY, maxX, maxY;
+      minX = minY = numeric_limits<double>::max();
+      maxX = maxY = numeric_limits<double>::min();
       int serializedDataIndex = 4 * sizeof(double);
       memcpy(poly_data.serializedData_ + serializedDataIndex, &lineStringCount, sizeof(int32_t));
       serializedDataIndex += sizeof(int32_t);
@@ -271,23 +272,18 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
           serializedDataIndex += sizeof(double);
           memcpy(poly_data.serializedData_ + serializedDataIndex, &y, sizeof(double));
           serializedDataIndex += sizeof(double);
-          if (j == 0 && i == 0) {
-            minX = maxX = x;
-            minY = maxY = y;
+          
+          if (x < minX) {
+            minX = x;
           }
-          else {
-            if (x < minX) {
-              minX = x;
-            }
-            else if (x > maxX) {
-              maxX = x;
-            }
-            if (y < minY) {
-              minY = y;
-            }
-            else if (y > maxY) {
-              maxY = y;
-            }
+          else if (x > maxX) {
+            maxX = x;
+          }
+          if (y < minY) {
+            minY = y;
+          }
+          else if (y > maxY) {
+            maxY = y;
           }
         }
       }
