@@ -49,12 +49,12 @@ public class OverlapQueryPredicate extends Predicate {
   private final static Logger LOG = LoggerFactory.getLogger(OverlapQueryPredicate.class);
   private SlotRef col1;
   private SlotRef col2;
-  private SlotRef leftGlobalIndexSlotRef;
-  private SlotRef rightGlobalIndexSlotRef;
+  private List<Expr> globalIndexSlotRef;
 
   public OverlapQueryPredicate(SlotRef col1, SlotRef col2) {
     this.col1 = col1;
     this.col2 = col2;
+    globalIndexSlotRef = new ArrayList<Expr>();
   }
   private HashMap<String, List<String>> intersectedPartitions_;
   
@@ -63,14 +63,15 @@ public class OverlapQueryPredicate extends Predicate {
     super(overlapPreicate);
     this.col1 = col1;
     this.col2 = col2;
+    globalIndexSlotRef = new ArrayList<Expr>();
   }
   
   public Expr getLeftHandSidePartitionCol() {
-	  return leftGlobalIndexSlotRef;
+	  return globalIndexSlotRef.get(0);
   }
   
   public Expr getRightHandSidePartitionCol() {
-	  return rightGlobalIndexSlotRef;
+	  return globalIndexSlotRef.get(1);
   }
   
   public HashMap<String, List<String>> getIntersectedPartitions() {
@@ -108,12 +109,14 @@ public class OverlapQueryPredicate extends Predicate {
     	spatialTable2 = (SpatialHdfsTable) ((SlotRef)children_.get(1)).getDesc().getParent().getTable(); 
 	}
     
-    leftGlobalIndexSlotRef = new SlotRef(((SlotRef)children_.get(0)).getTableName(), "tag");
-    rightGlobalIndexSlotRef = new SlotRef(((SlotRef)children_.get(1)).getTableName(), "tag");
+    SlotRef leftSlotRef = new SlotRef(((SlotRef)children_.get(0)).getTableName(), "tag");
+    SlotRef rightSlotRef = new SlotRef(((SlotRef)children_.get(1)).getTableName(), "tag");
     
-    leftGlobalIndexSlotRef.analyze(analyzer);
-    rightGlobalIndexSlotRef.analyze(analyzer);
-    
+    leftSlotRef.analyze(analyzer);
+    rightSlotRef.analyze(analyzer);
+    globalIndexSlotRef.add(0, leftSlotRef);
+    globalIndexSlotRef.add(1, rightSlotRef);
+    analyzer.materializeSlots(globalIndexSlotRef);
     if ((spatialTable1 == null) || (spatialTable2 == null))
     {
 	   	throw new AnalysisException("Overlap predicate should only be used with spatial tables");
