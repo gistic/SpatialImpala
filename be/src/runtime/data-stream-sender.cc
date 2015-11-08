@@ -55,11 +55,6 @@ Status Channel::Init(RuntimeState* state) {
 }
 
 Status Channel::SendBatch(TRowBatch* batch) {
-  VLOG_ROW << "Channel::SendBatch() instance_id=" << fragment_instance_id_
-           << " dest_node=" << dest_node_id_ << " #rows=" << batch->num_rows;
-
-  LOG(INFO) << "Channel::SendBatch() instance_id=" << fragment_instance_id_
-           << " dest_node=" << dest_node_id_ << " #rows=" << batch->num_rows;
   // return if the previous batch saw an error
   RETURN_IF_ERROR(GetSendStatus());
   {
@@ -88,9 +83,6 @@ void Channel::TransmitDataHelper(const TRowBatch* batch) {
   DCHECK(batch != NULL);
   try {
     VLOG_ROW << "Channel::TransmitData() instance_id=" << fragment_instance_id_
-             << " dest_node=" << dest_node_id_
-             << " #rows=" << batch->num_rows;
-    LOG(INFO) << "Channel::TransmitData() instance_id=" << fragment_instance_id_
              << " dest_node=" << dest_node_id_
              << " #rows=" << batch->num_rows;
     TTransmitDataParams params;

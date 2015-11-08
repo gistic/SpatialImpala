@@ -238,7 +238,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       poly_data.len_ = memoryNeeded;
       double minX, minY, maxX, maxY;
       minX = minY = numeric_limits<double>::max();
-      maxX = maxY = numeric_limits<double>::min();
+      maxX = maxY = -1.0 * numeric_limits<double>::max();
       int serializedDataIndex = 4 * sizeof(double);
       memcpy(poly_data.serializedData_ + serializedDataIndex, &lineStringCount, sizeof(int32_t));
       serializedDataIndex += sizeof(int32_t);
@@ -287,6 +287,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
           }
         }
       }
+      
       memcpy(poly_data.serializedData_, &minX, sizeof(double));
       memcpy(poly_data.serializedData_ + sizeof(double), &minY, sizeof(double));
       memcpy(poly_data.serializedData_ + 2 * sizeof(double), &maxX, sizeof(double));
