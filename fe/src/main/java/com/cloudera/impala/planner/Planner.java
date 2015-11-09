@@ -1474,6 +1474,12 @@ public class Planner {
             invertJoin = true;
           }
         }*/
+        SpatialHdfsTable rightTable = (SpatialHdfsTable)((SpatialHdfsScanNode)rhsPlan).getTupleDesc().getTable();
+        SpatialHdfsTable leftTable = (SpatialHdfsTable)((SpatialHdfsScanNode)root).getTupleDesc().getTable();
+        if(rightTable.getGlobalIndexIfAny().getGlobalIndexMap().size() > 
+           leftTable.getGlobalIndexIfAny().getGlobalIndexMap().size()) {
+          invertJoin = true;
+        }
         PlanNode candidate = null;
         if (invertJoin) {
           ref.setJoinOp(ref.getJoinOp().invert());

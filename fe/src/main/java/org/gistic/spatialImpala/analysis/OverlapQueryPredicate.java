@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.math.BigDecimal;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 
 import org.slf4j.Logger;
@@ -81,20 +82,19 @@ public class OverlapQueryPredicate extends Predicate {
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
 	
-	  LOG.info("Analysis of the overlapqurypredicate");
-	Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
-	Iterator itr = tupleDescs.iterator();
-	children_.clear();
-	children_.add(col1);
-	children_.add(col2);
+    LOG.info("Analysis of the overlapqurypredicate");
+    Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
+    Iterator itr = tupleDescs.iterator();
+    children_.clear();
+    children_.add(col1);
+    children_.add(col2);
 	
-	intersectedPartitions_ = new HashMap<String, List<String>>();
+    intersectedPartitions_ = new HashMap<String, List<String>>();
 	
-	SpatialHdfsTable spatialTable1, spatialTable2;
+    SpatialHdfsTable spatialTable1, spatialTable2;
 	
     super.analyze(analyzer);
-    
-  //Make sure that the columns type is shape
+    //Make sure that the columns type is shape
     if (!((ScalarType)children_.get(0).getType()).isShapeType() || !((ScalarType)children_.get(1).getType()).isShapeType())
     {
 	   	throw new AnalysisException("Error: Overlaps predicate shoud take 2 columns from shapes data type ");
@@ -104,11 +104,21 @@ public class OverlapQueryPredicate extends Predicate {
     
     if(((SlotRef)children_.get(0)).getDesc().getParent().getTable() instanceof SpatialHdfsTable) {
     	spatialTable1 = (SpatialHdfsTable) ((SlotRef)children_.get(0)).getDesc().getParent().getTable(); 
-	}
+    }
     if(((SlotRef)children_.get(1)).getDesc().getParent().getTable() instanceof SpatialHdfsTable) {
     	spatialTable2 = (SpatialHdfsTable) ((SlotRef)children_.get(1)).getDesc().getParent().getTable(); 
-	}
+    }
     
+    if ((spatialTable1 == null) || (spatialTable2 == null))
+    {
+                throw new AnalysisException("Overlap predicate should only be used with spatial tables");
+    }
+
+    if (spatialTable2.getGlobalIndexIfAny().getGlobalIndexMap().size() > spatialTable1.getGlobalIndexIfAny().getGlobalIndexMap().size()) {
+      Collections.swap(children_, 0, 1);
+      spatialTable1 = (SpatialHdfsTable) ((SlotRef)children_.get(0)).getDesc().getParent().getTable();
+      spatialTable2 = (SpatialHdfsTable) ((SlotRef)children_.get(1)).getDesc().getParent().getTable();
+    } 
     SlotRef leftSlotRef = new SlotRef(((SlotRef)children_.get(0)).getTableName(), "tag");
     SlotRef rightSlotRef = new SlotRef(((SlotRef)children_.get(1)).getTableName(), "tag");
     
@@ -117,10 +127,7 @@ public class OverlapQueryPredicate extends Predicate {
     globalIndexSlotRef.add(0, leftSlotRef);
     globalIndexSlotRef.add(1, rightSlotRef);
     analyzer.materializeSlots(globalIndexSlotRef);
-    if ((spatialTable1 == null) || (spatialTable2 == null))
-    {
-	   	throw new AnalysisException("Overlap predicate should only be used with spatial tables");
-    }
+    
     
     GlobalIndex globalIndexLeft, globalIndexRight;
     
