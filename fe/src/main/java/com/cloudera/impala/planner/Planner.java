@@ -2194,10 +2194,10 @@ public class Planner {
       it.remove();
     }
     List<Expr> candidates;
-    if (innerRef.getJoinOp().isOuterJoin()) {
-    	candidates = analyzer.getEqJoinConjuncts(innerRef.getId(), innerRef);
+    if (tblRef.getJoinOp().isOuterJoin()) {
+    	candidates = analyzer.getEqJoinConjuncts(tblRef.getId(), innerRef);
 	} else {
-	    candidates = analyzer.getEqJoinConjuncts(innerRef.getId(), null);
+	    candidates = analyzer.getEqJoinConjuncts(tblRef.getId(), null);
 	}
     
     Predicate predicate;
