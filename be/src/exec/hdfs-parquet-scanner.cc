@@ -44,6 +44,7 @@
 #include "exec/point.h"
 #include "exec/line.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 
 using namespace std;
 using namespace boost;
@@ -471,6 +472,7 @@ HdfsParquetScanner::BaseColumnReader* HdfsParquetScanner::CreateReader(
     case TYPE_VARCHAR:
     case TYPE_CHAR:
     case TYPE_POLYGON:
+    case TYPE_LINESTRING:
       reader = new ColumnReader<StringValue>(this, desc, file_idx);
       break;
     case TYPE_DECIMAL:

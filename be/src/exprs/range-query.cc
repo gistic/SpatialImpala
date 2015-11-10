@@ -21,7 +21,8 @@ RangeQuery::~RangeQuery() {
 
 Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   if (GetNumChildren() == 1 && (children()[0]->type().type == TYPE_POINT
-    || children()[0]->type().type == TYPE_LINE || children()[0]->type().type == TYPE_RECTANGLE || children()[0]->type().type == TYPE_POLYGON)) {
+    || children()[0]->type().type == TYPE_LINE || children()[0]->type().type == TYPE_RECTANGLE 
+    || children()[0]->type().type == TYPE_POLYGON || children()[0]->type().type == TYPE_LINESTRING)) {
     *fn = NULL;
     return Status("Codegen for Shapes not supported.");
   }
@@ -147,6 +148,12 @@ BooleanVal RangeQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
         StringVal strval = children()[0]->GetStringVal(NULL, row);
         PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
         RectangleVal r_val = poly.GetMBR();
+        return BooleanVal(range_->Contains(new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
+      }
+      case TYPE_LINESTRING: {
+        StringVal strval = children()[0]->GetStringVal(NULL, row);
+        LineStringVal line = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
+        RectangleVal r_val = line.GetMBR();
         return BooleanVal(range_->Contains(new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
       }
       default:

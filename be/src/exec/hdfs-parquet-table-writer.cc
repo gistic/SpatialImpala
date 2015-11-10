@@ -696,6 +696,7 @@ Status HdfsParquetTableWriter::Init() {
       case TYPE_STRING:
       case TYPE_CHAR:
       case TYPE_POLYGON:
+      case TYPE_LINESTRING:
         writer = new ColumnWriter<StringValue>(
             this, output_expr_ctxs_[i], codec);
         break;

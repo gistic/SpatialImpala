@@ -299,6 +299,7 @@ void* ExprContext::GetValue(Expr* e, TupleRow* row) {
       result_.rectangle_val = Rectangle::FromRectangleVal(v);
       return &result_.rectangle_val;
     }
+    case TYPE_LINESTRING:
     case TYPE_POLYGON: {
       impala_udf::StringVal v = e->GetStringVal(this, row);
       if (v.is_null) return NULL;
@@ -366,4 +367,7 @@ RectangleVal ExprContext::GetRectangleVal(TupleRow* row) {
 }
 PolygonVal ExprContext::GetPolygonVal(TupleRow* row) {
   return root_->GetPolygonVal(this, row);
+}
+LineStringVal ExprContext::GetLineStringVal(TupleRow* row) {
+  return root_->GetLineStringVal(this, row);
 }

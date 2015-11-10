@@ -22,6 +22,7 @@
 #include "runtime/descriptors.h"
 #include "runtime/mem-pool.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 
 using namespace spatialimpala;
 
@@ -137,6 +138,11 @@ class Tuple {
   Polygon* GetPolygonSlot(int offset) {
     DCHECK(offset != -1);  // -1 offset indicates non-materialized slot
     return reinterpret_cast<Polygon*>(reinterpret_cast<char*>(this) + offset);
+  }
+
+  LineString* GetLineStringSlot(int offset) {
+    DCHECK(offset != -1);  // -1 offset indicates non-materialized slot
+    return reinterpret_cast<LineString*>(reinterpret_cast<char*>(this) + offset);
   }
 
   // For C++/IR interop, we need to be able to look up types by name.

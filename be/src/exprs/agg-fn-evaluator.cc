@@ -21,6 +21,7 @@
 #include "exec/aggregation-node.h"
 #include "exec/point.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 #include "exec/line.h"
 #include "exec/rectangle.h"
 #include "exprs/aggregate-functions.h"
@@ -319,6 +320,10 @@ inline void AggFnEvaluator::SetDstSlot(FunctionContext* ctx, const AnyVal* src,
     case TYPE_POLYGON:
       *reinterpret_cast<Polygon*>(slot)
          = Polygon::FromPolygonVal(*const_cast<PolygonVal*>(reinterpret_cast<const PolygonVal*>(src)));
+      return;
+    case TYPE_LINESTRING:
+      *reinterpret_cast<LineString*>(slot)
+         = LineString::FromLineStringVal(*const_cast<LineStringVal*>(reinterpret_cast<const LineStringVal*>(src)));
       return;
     default:
       DCHECK(false) << "NYI: " << dst_slot_desc->type();

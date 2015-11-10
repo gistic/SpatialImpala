@@ -22,6 +22,7 @@
 #include "runtime/runtime-state.h"
 #include "exec/point.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 #include "exec/line.h"
 #include "exec/rectangle.h"
 
@@ -162,7 +163,7 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
     return Status("Codegen for Char not supported.");
   }
   if (type_.type == TYPE_POINT || type_.type == TYPE_LINE
-    || type_.type == TYPE_RECTANGLE || type_.type == TYPE_POLYGON) {
+    || type_.type == TYPE_RECTANGLE || type_.type == TYPE_POLYGON || type_.type == TYPE_LINESTRING) {
     *fn = NULL;
     return Status("Codegen for Shapes not supported.");
   }
@@ -499,6 +500,14 @@ PolygonVal SlotRef::GetPolygonVal(ExprContext* context, TupleRow* row) {
   if (t == NULL || t->IsNull(null_indicator_offset_)) return PolygonVal::null();
   Polygon* pv = reinterpret_cast<Polygon*>(t->GetSlot(slot_offset_));
   return PolygonVal(pv->serializedData_, pv->len_);
+}
+
+LineStringVal SlotRef::GetLineStringVal(ExprContext* context, TupleRow* row) {
+  DCHECK_EQ(type_.type, TYPE_LINESTRING);
+  Tuple* t = row->GetTuple(tuple_idx_);
+  if (t == NULL || t->IsNull(null_indicator_offset_)) return LineStringVal::null();
+  LineString* pv = reinterpret_cast<LineString*>(t->GetSlot(slot_offset_));
+  return LineStringVal(pv->serializedData_, pv->len_);
 }
 
 }

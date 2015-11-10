@@ -533,7 +533,8 @@ StructType* TupleDescriptor::GenerateLlvmStruct(LlvmCodeGen* codegen) {
     if (slot_desc->type().type == TYPE_POINT
       || slot_desc->type().type == TYPE_LINE
       || slot_desc->type().type == TYPE_RECTANGLE
-      || slot_desc->type().type == TYPE_POLYGON) {
+      || slot_desc->type().type == TYPE_POLYGON
+      || slot_desc->type().type == TYPE_LINESTRING) {
       return NULL;
     }
     if (slot_desc->is_materialized()) {

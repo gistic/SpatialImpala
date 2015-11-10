@@ -139,6 +139,7 @@ import com.cloudera.impala.analysis.SqlParserSymbols;
     keywordMap.put("limit", new Integer(SqlParserSymbols.KW_LIMIT));
     keywordMap.put("line", new Integer(SqlParserSymbols.KW_LINE));
     keywordMap.put("lines", new Integer(SqlParserSymbols.KW_LINES));
+    keywordMap.put("linestring", new Integer(SqlParserSymbols.KW_LINESTRING));
     keywordMap.put("load", new Integer(SqlParserSymbols.KW_LOAD));
     keywordMap.put("location", new Integer(SqlParserSymbols.KW_LOCATION));
     keywordMap.put("map", new Integer(SqlParserSymbols.KW_MAP));

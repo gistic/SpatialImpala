@@ -36,6 +36,7 @@
 #include "exec/line.h"
 #include "exec/rectangle.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 
 using namespace std;
 using namespace spatialimpala;
@@ -128,16 +129,16 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       string point_str(data, len);
       boost::algorithm::to_lower(point_str);
       
-      std::size_t startingField = point_str.find("point(");
+      std::size_t startingField = point_str.find("point (");
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the point";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
       }
-      std::size_t startingData = startingField + 6;
+      std::size_t startingData = startingField + 7;
       std::string delimiter = " ";
-      std::string Xtoken = point_str.substr(startingData, point_str.find(delimiter, startingData));
-      std::string Ytoken = point_str.substr(startingData + Xtoken.size() + 1, point_str.find(")", startingData));
+      std::string Xtoken = point_str.substr(startingData, point_str.find(delimiter, startingData) - startingData);
+      std::string Ytoken = point_str.substr(startingData + Xtoken.size() + 1, point_str.find(")", startingData) - startingData);
       double x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
       double y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
       
@@ -300,6 +301,78 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       *str_slot = str;
       /*Polygon* poly_slot = reinterpret_cast<Polygon*>(slot);
       *poly_slot = poly_data;*/
+      break;
+    }
+    case TYPE_LINESTRING: {
+      string line_str(data, len);
+      boost::algorithm::to_lower(line_str);
+      std::size_t startingField = line_str.find("linestring (");
+      std::size_t lineStringPrefix;
+      int pointsCount = 0;
+      if (startingField == std::string::npos) {
+        VLOG_QUERY << "Error in the well know text format of the polygon";
+      }
+      else {
+        lineStringPrefix = startingField + 12;
+        pointsCount = std::count(line_str.begin() + lineStringPrefix,line_str.end(), ',') + 1;
+      }
+
+      std::string Xtoken, Ytoken;
+      double x, y;
+      int memoryNeeded = 4 * sizeof(double) + sizeof(int32_t) + pointsCount * 2 * sizeof(double);
+      
+      LineString line_data;
+      line_data.serializedData_ = reinterpret_cast<char*>(pool->Allocate(memoryNeeded));
+      line_data.len_ = memoryNeeded;
+      double minX, minY, maxX, maxY;
+      minX = minY = numeric_limits<double>::max();
+      maxX = maxY = -1.0 * numeric_limits<double>::max();
+      int serializedDataIndex = 4 * sizeof(double);
+      memcpy(line_data.serializedData_ + serializedDataIndex, &pointsCount, sizeof(int32_t));
+      serializedDataIndex += sizeof(int32_t);
+      lineStringPrefix = startingField + 12;
+      for (int i = 0; i < pointsCount; i++) {
+        int position = line_str.find(" ", lineStringPrefix);
+        Xtoken = line_str.substr(lineStringPrefix, position - lineStringPrefix);
+        lineStringPrefix += Xtoken.size() + 1;
+        if (i == pointsCount - 1) {
+          Ytoken = line_str.substr(lineStringPrefix, line_str.find(')', lineStringPrefix) - lineStringPrefix);
+        }
+        else {
+          int position = line_str.find(", ", lineStringPrefix);
+          Ytoken = line_str.substr(lineStringPrefix, position - lineStringPrefix);
+        }
+        lineStringPrefix += Ytoken.size() + 2;
+        x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
+        y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
+        memcpy(line_data.serializedData_ + serializedDataIndex, &x, sizeof(double));
+        serializedDataIndex += sizeof(double);
+        memcpy(line_data.serializedData_ + serializedDataIndex, &y, sizeof(double));
+        serializedDataIndex += sizeof(double);
+
+        if (x < minX) {
+          minX = x;
+        }
+        else if (x > maxX) {
+          maxX = x;
+        }
+        if (y < minY) {
+          minY = y;
+        }
+        else if (y > maxY) {
+          maxY = y;
+        }
+      }
+
+      memcpy(line_data.serializedData_, &minX, sizeof(double));
+      memcpy(line_data.serializedData_ + sizeof(double), &minY, sizeof(double));
+      memcpy(line_data.serializedData_ + 2 * sizeof(double), &maxX, sizeof(double));
+      memcpy(line_data.serializedData_ + 3 * sizeof(double), &maxY, sizeof(double));
+      StringValue str;
+      str.len = line_data.len_;
+      str.ptr = line_data.serializedData_;
+      StringValue* str_slot = reinterpret_cast<StringValue*>(slot);
+      *str_slot = str;
       break;
     }
     case TYPE_TIMESTAMP: {

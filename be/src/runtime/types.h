@@ -49,7 +49,8 @@ enum PrimitiveType {
   TYPE_RECTANGLE,
   TYPE_POINT,
   TYPE_LINE,
-  TYPE_POLYGON
+  TYPE_POLYGON,
+  TYPE_LINESTRING
 };
 
 PrimitiveType ThriftToType(TPrimitiveType::type ttype);
@@ -152,7 +153,7 @@ struct ColumnType {
     node.__set_scalar_type(TScalarType());
     TScalarType& scalar_type = node.scalar_type;
     scalar_type.__set_type(impala::ToThrift(type));
-    if (type == TYPE_CHAR || type == TYPE_VARCHAR || type == TYPE_POLYGON) {
+    if (type == TYPE_CHAR || type == TYPE_VARCHAR || type == TYPE_POLYGON || type == TYPE_LINESTRING) {
       DCHECK_NE(len, -1);
       scalar_type.__set_len(len);
     } else if (type == TYPE_DECIMAL) {
@@ -165,11 +166,11 @@ struct ColumnType {
   }
 
   inline bool IsStringType() const {
-    return type == TYPE_STRING || type == TYPE_VARCHAR || type == TYPE_CHAR || type == TYPE_POLYGON;
+    return type == TYPE_STRING || type == TYPE_VARCHAR || type == TYPE_CHAR || type == TYPE_POLYGON || type == TYPE_LINESTRING;
   }
 
   inline bool IsVarLen() const {
-    return type == TYPE_STRING || type == TYPE_VARCHAR || type == TYPE_POLYGON ||
+    return type == TYPE_STRING || type == TYPE_VARCHAR || type == TYPE_POLYGON || type == TYPE_LINESTRING ||
         (type == TYPE_CHAR && len > MAX_CHAR_INLINE_LENGTH);
   }
 
@@ -201,6 +202,7 @@ struct ColumnType {
         return 32;
       case TYPE_LINE:
         return 48;
+      case TYPE_LINESTRING:
       case TYPE_POLYGON:
         return 0;
       case TYPE_RECTANGLE:
@@ -221,6 +223,7 @@ struct ColumnType {
       case TYPE_STRING:
       case TYPE_VARCHAR:
       case TYPE_POLYGON:
+      case TYPE_LINESTRING:
         return 16;
       case TYPE_CHAR:
         if (IsVarLen()) return 16;

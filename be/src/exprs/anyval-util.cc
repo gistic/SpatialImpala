@@ -39,6 +39,7 @@ AnyVal* CreateAnyVal(const ColumnType& type) {
     case TYPE_STRING:
     case TYPE_VARCHAR:
     case TYPE_CHAR:
+    case TYPE_LINESTRING:
     case TYPE_POLYGON:
       return new StringVal;
     case TYPE_TIMESTAMP: return new TimestampVal;
@@ -108,6 +109,10 @@ FunctionContext::TypeDesc AnyValUtil::ColumnTypeToTypeDesc(const ColumnType& typ
       out.type = FunctionContext::TYPE_POLYGON;
       out.len = type.len;
       break;
+    case TYPE_LINESTRING:
+      out.type = FunctionContext::TYPE_LINESTRING;
+      out.len = type.len;
+      break;
     default:
       DCHECK(false) << "Unknown type: " << type;
   }
@@ -135,6 +140,7 @@ ColumnType AnyValUtil::TypeDescToColumnType(const FunctionContext::TypeDesc& typ
     case FunctionContext::TYPE_LINE: return ColumnType(TYPE_LINE);
     case FunctionContext::TYPE_RECTANGLE: return ColumnType(TYPE_RECTANGLE);
     case FunctionContext::TYPE_POLYGON:
+    case FunctionContext::TYPE_LINESTRING:
       return ColumnType::CreateVarcharType(type.len);
     default:
       DCHECK(false) << "Unknown type: " << type.type;

@@ -65,8 +65,12 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
     }
     case TYPE_POLYGON: {
       StringVal p_val = children()[0]->GetStringVal(NULL, row);
-      LOG(INFO)<< "The polygon lenght =" <<p_val.len;
       first_shape = new Polygon(reinterpret_cast<char*>(p_val.ptr), p_val.len);
+      break;
+    }
+    case TYPE_LINESTRING: {
+      StringVal p_val = children()[0]->GetStringVal(NULL, row);
+      first_shape = new LineString(reinterpret_cast<char*>(p_val.ptr), p_val.len);
       break;
     }
     default:
@@ -91,8 +95,12 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
     }
     case TYPE_POLYGON: {
       StringVal p_val = children()[1]->GetStringVal(NULL, row);
-      LOG(INFO)<< "The polygon lenght =" <<p_val.len;
       second_shape = new Polygon(reinterpret_cast<char*>(p_val.ptr), p_val.len);
+      break;
+    }
+    case TYPE_LINESTRING: {
+      StringVal p_val = children()[1]->GetStringVal(NULL, row);
+      second_shape = new LineString(reinterpret_cast<char*>(p_val.ptr), p_val.len);
       break;
     }
     default: {

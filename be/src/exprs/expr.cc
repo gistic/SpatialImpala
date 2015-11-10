@@ -550,6 +550,7 @@ AnyVal* Expr::GetConstVal(ExprContext* context) {
       constant_val_.reset(new RectangleVal(GetRectangleVal(context, NULL)));
       break;
     }
+    case TYPE_LINESTRING:
     case TYPE_POLYGON: {
       constant_val_.reset(new StringVal(GetStringVal(context, NULL)));
       break;
@@ -643,4 +644,8 @@ RectangleVal Expr::GetRectangleVal(ExprContext* context, TupleRow*) {
 PolygonVal Expr::GetPolygonVal(ExprContext* context, TupleRow*) {
   DCHECK(false) << DebugString();
   return PolygonVal::null();
+}
+LineStringVal Expr::GetLineStringVal(ExprContext* context, TupleRow*) {
+  DCHECK(false) << DebugString();
+  return LineStringVal::null();
 }

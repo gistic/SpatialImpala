@@ -22,6 +22,7 @@
 #include "exec/line.h"
 #include "exec/rectangle.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 
 using namespace spatialimpala;
 
@@ -45,6 +46,7 @@ struct ExprValue {
   Line line_val;
   Rectangle rectangle_val;
   Polygon polygon_val;
+  LineString linestring_val;
 
   ExprValue()
     : bool_val(false),
@@ -62,6 +64,7 @@ struct ExprValue {
       point_val(),
       line_val(),
       rectangle_val(),
+      linestring_val(),
       polygon_val() {
   }
 
@@ -85,6 +88,7 @@ struct ExprValue {
   ExprValue(Line l) { line_val = l; }
   ExprValue(Rectangle r) { rectangle_val = r; }
   ExprValue(Polygon pl) { polygon_val = pl; }
+  ExprValue(LineString pl) { linestring_val = pl; }
 
   // Sets the value for type to '0' and returns a pointer to the data
   void* SetToZero(const ColumnType& type) {

@@ -78,6 +78,7 @@ void RawValue::PrintValueAsBytes(const void* value, const ColumnType& type,
       (*stream) << (*reinterpret_cast<const Rectangle*>(value));
       break;
     case TYPE_POLYGON:
+    case TYPE_LINESTRING:
       string_val = reinterpret_cast<const StringValue*>(value);
       stream->write(static_cast<char*>(string_val->ptr), string_val->len);
       break;
@@ -108,6 +109,7 @@ void RawValue::PrintValue(const void* value, const ColumnType& type, int scale,
     case TYPE_STRING:
     case TYPE_VARCHAR:
     case TYPE_POLYGON:
+    case TYPE_LINESTRING:
       string_val = reinterpret_cast<const StringValue*>(value);
       tmp.assign(static_cast<char*>(string_val->ptr), string_val->len);
       str->swap(tmp);
@@ -319,6 +321,7 @@ void RawValue::Write(const void* value, const ColumnType& type,
     case TYPE_RECTANGLE:
       *reinterpret_cast<Rectangle*>(dst) = *reinterpret_cast<const Rectangle*>(value);
       break;
+    case TYPE_LINESTRING:
     case TYPE_POLYGON: {
       const StringValue* src = reinterpret_cast<const StringValue*>(value);
       StringValue* dest = reinterpret_cast<StringValue*>(dst);

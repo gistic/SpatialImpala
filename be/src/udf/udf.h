@@ -74,7 +74,8 @@ class FunctionContext {
     TYPE_POINT,
     TYPE_LINE,
     TYPE_RECTANGLE,
-    TYPE_POLYGON
+    TYPE_POLYGON,
+    TYPE_LINESTRING
   };
 
   struct TypeDesc {
@@ -619,13 +620,25 @@ struct RectangleVal : public AnyVal {
 };
 
 struct LineStringVal : public AnyVal {
-  std::vector<PointVal> pList;
+  int len;
+  char *serializedData;
+  RectangleVal mbr;
 
-  LineStringVal(std::vector<PointVal> pList) {
-    this->pList = pList;
+  LineStringVal(char *serializedDat, int len) {
+    this->len = len;
+    this->serializedData = serializedDat;
   }
 
   LineStringVal() {
+  }
+
+  RectangleVal GetMBR() {
+    RectangleVal mbr_rect;
+    memcpy(&mbr_rect.x1, serializedData, sizeof(double));
+    memcpy(&mbr_rect.y1, serializedData + sizeof(double), sizeof(double));
+    memcpy(&mbr_rect.x2, serializedData + 2 * sizeof(double), sizeof(double));
+    memcpy(&mbr_rect.y2, serializedData + 3 * sizeof(double), sizeof(double));
+    return mbr_rect;
   }
 
   static LineStringVal null() {
@@ -637,10 +650,11 @@ struct LineStringVal : public AnyVal {
   bool operator==(const LineStringVal& other) const {
     if (is_null && other.is_null) return true;
     if (is_null || other.is_null) return false;
-    return pList == other.pList;
+    return false;
   }
 
   bool operator!=(const LineStringVal& other) const { return !(*this == other); }
+
 };
 
 struct PolygonVal : public AnyVal {

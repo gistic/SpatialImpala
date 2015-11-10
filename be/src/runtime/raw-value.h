@@ -30,6 +30,7 @@
 #include "exec/line.h"
 #include "exec/rectangle.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 
 using namespace spatialimpala;
 
@@ -330,7 +331,12 @@ inline void RawValue::PrintValue(const void* value, const ColumnType& type, int 
         string_val = reinterpret_cast<const StringValue*>(value);
         Polygon tempPol(string_val->ptr, string_val->len);
         (*stream) << tempPol;
-      } 																																																																																																																																																																																																					
+      } 																			    break;
+    case TYPE_LINESTRING: {
+        string_val = reinterpret_cast<const StringValue*>(value);
+        LineString tempLine(string_val->ptr, string_val->len);
+        (*stream) << tempLine;     
+      }                                                                                                                              
       break;
     default:
       DCHECK(false);

@@ -2,52 +2,39 @@
 
 #include "exec/polygon.h"
 #include "exec/point.h"
+#include "exec/line.h"
 #include "exec/rectangle.h"
 
 using namespace spatialimpala;
 
-LineString::LineString(TLineString& lString) {
-  type_ = TShapeType::LINE_STRING;
-  int len = lString.pList.size();
-  this->pList_ = std::vector<Point>(len);
-  for (int i = 0; i < len; i++) {
-    this->pList_[i] = Point(lString.pList[i].x, lString.pList[i].y);
-  }
-}
-
-LineString& LineString::operator=( const LineString& other ) {
-  int pointsListSize;
-  pointsListSize = other.pList_.size();
-  pList_ = std::vector<Point>(pointsListSize);
-  for (int i = 0; i < pointsListSize; i++) {
-    pList_[i] = other.pList_[i];
-  }
-  return *this;
+LineString::LineString(TLineString& line) {
+  type_ = TShapeType::LINESTRING;
+  len_ = line.serializedData.size();
+  this->serializedData_ = new char[len_];
+  memcpy(serializedData_, line.serializedData.c_str(), len_);
 }
 
 LineString::LineString(TShape& shape) : Shape(shape) {
-  TLineString lString = shape.lineString;
-  int len = lString.pList.size();
-  this->pList_ = std::vector<Point>(len);
-  for (int i = 0; i < len; i++) {
-    this->pList_[i] = Point(lString.pList[i].x, lString.pList[i].y);
-  }
+  TLineString line = shape.linestring;
+  len_ = line.serializedData.size();
+  this->serializedData_ = new char[len_];
+  memcpy(serializedData_, line.serializedData.c_str(), len_);
 }
 
 LineString LineString::FromLineStringVal(LineStringVal& pv) {
-  int listSize = pv.pList.size();
-  std::vector<Point> tempList(listSize);
-  for (int i = 0; i < listSize; i++) {
-    tempList[i] = Point::FromPointVal(pv.pList[i]);
-  }
-  LineString p(tempList);
+  LineString p;
+  p.len_ = pv.len;
+  p.serializedData_ = new char[p.len_];
+  memcpy(p.serializedData_, pv.serializedData, p.len_);
   return p;
 }
 
-LineString::LineString(std::vector<Point> pList) {
-  type_ = TShapeType::LINE_STRING;
-  this->pList_ = pList;
+LineString::LineString(char* str, int length) {
+  type_ = TShapeType::POLYGON;
+  len_ = length;
+  serializedData_ = str;
 }
+
 
 LineString::LineString() {
 }
@@ -56,6 +43,33 @@ LineString::~LineString() {
 }
 
 bool LineString::Intersects(Shape* other) {
+  int32_t pointsCount;
+  int index = 4 * sizeof(double);
+  bool intersects = false;
+  memcpy(&pointsCount, serializedData_ + index, sizeof(int32_t));
+  index += sizeof(int32_t);
+  if (pointsCount > 1) {
+    double x1, y1, x2, y2;
+    memcpy(&x1, serializedData_ + index, sizeof(double));
+    index += sizeof(double);
+    memcpy(&y1, serializedData_ + index, sizeof(double));
+    index += sizeof(double);
+   
+    for (int i = 1; i < pointsCount ; i++) {
+      memcpy(&x2, serializedData_ + index, sizeof(double));
+      index += sizeof(double);
+      memcpy(&y2, serializedData_ + index, sizeof(double));
+      index += sizeof(double);
+      Shape *temp = new Line(x1, y1, x2, y2);
+      if (other->Intersects(temp)) {
+         delete temp;
+         return true;
+      }
+      delete temp;
+      x1 = x2;
+      y1 = y2;
+    }
+  }
   return false;
 }
 
@@ -66,17 +80,26 @@ bool LineString::Contains(Shape* other) {
 void LineString::GetMBR(Shape* mbr) {
   Rectangle* mbr_rect = dynamic_cast<Rectangle*>(mbr);
   if (mbr_rect == NULL) return;
-  mbr_rect->x1_ = 0;
-  mbr_rect->y1_ = 0;
-  mbr_rect->x2_ = 0;
-  mbr_rect->y2_ = 0;
+  memcpy(&mbr_rect->x1_, serializedData_, sizeof(double));
+  memcpy(&mbr_rect->y1_, serializedData_ + sizeof(double), sizeof(double));
+  memcpy(&mbr_rect->x2_, serializedData_ + 2 * sizeof(double), sizeof(double));
+  memcpy(&mbr_rect->y2_, serializedData_ + 3 * sizeof(double), sizeof(double));
 }
 
 std::ostream& spatialimpala::operator<< (std::ostream& out, LineString const &value) {
-  out << "LineString(";
-  int len = value.pList_.size();
-  for (int i = 0; i < len; i++) {
-    out << value.pList_[i];
+  out << "LineString (";
+  int32_t pointsCount;
+  int index = 4 * sizeof(double);
+  double x,y;
+  memcpy(&pointsCount, value.serializedData_ + index, sizeof(int32_t));
+  index += sizeof(int32_t);
+  
+  for (int j = 0; j < pointsCount ; j++) {
+    memcpy(&x, value.serializedData_ + index, sizeof(double));
+    index += sizeof(double);
+    memcpy(&y, value.serializedData_ + index, sizeof(double));
+    index += sizeof(double);
+    out << x << " " << y;
     out << ", ";
   }
   out << ")";

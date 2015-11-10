@@ -20,6 +20,7 @@
 #include "exec/point.h"
 #include "exec/rectangle.h"
 #include "exec/polygon.h"
+#include "exec/line-string.h"
 #include "runtime/timestamp-value.h"
 #include "udf/udf-internal.h"
 #include "util/hash-util.h"
@@ -163,6 +164,7 @@ class AnyValUtil {
       case TYPE_LINE: return sizeof(LineVal);
       case TYPE_RECTANGLE: return sizeof(RectangleVal);
       case TYPE_POLYGON: return sizeof(StringVal);
+      case TYPE_LINESTRING: return sizeof(StringVal);
       default:
         DCHECK(false) << t;
         return 0;
@@ -293,6 +295,7 @@ class AnyValUtil {
         rect_val->y2 = rv->y2_;
         return;
       }
+      case TYPE_LINESTRING:
       case TYPE_POLYGON: {
         reinterpret_cast<const StringValue*>(slot)->ToStringVal(
               reinterpret_cast<StringVal*>(dst));

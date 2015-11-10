@@ -175,6 +175,7 @@ Status SpatialJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch, bool* 
         probe_timer.Stop();
         RETURN_IF_ERROR(child(0)->GetNext(state, probe_batch_.get(), &probe_side_eos_));
         probe_timer.Start();
+        LOG(INFO) <<"Processing a new probe batch with rows = " <<probe_batch_->num_rows();
         COUNTER_ADD(probe_row_counter_, probe_batch_->num_rows());
       }
     }

@@ -15,6 +15,11 @@ double GET_X1(TupleRow* tupleRow, ExprContext* expr_ctx) {
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().x1);
   }
+  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+    StringVal strval = expr_ctx->GetStringVal(tupleRow);
+    LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
+    return (poly.GetMBR().x1);
+  }
   else {
     return expr_ctx->GetRectangleVal(tupleRow).x1;
   }
@@ -24,6 +29,11 @@ double GET_Y1(TupleRow* tupleRow, ExprContext* expr_ctx) {
   if(expr_ctx->root()->type().type == TYPE_POLYGON) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
+    return (poly.GetMBR().y1);
+  }
+  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+    StringVal strval = expr_ctx->GetStringVal(tupleRow);
+    LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().y1);
   }
   else {
@@ -37,6 +47,11 @@ double GET_X2(TupleRow* tupleRow, ExprContext* expr_ctx) {
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().x2);
   }
+  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+    StringVal strval = expr_ctx->GetStringVal(tupleRow);
+    LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
+    return (poly.GetMBR().x2);
+  }
   else {
     return expr_ctx->GetRectangleVal(tupleRow).x2;
   }
@@ -48,6 +63,11 @@ double GET_Y2(TupleRow* tupleRow, ExprContext* expr_ctx) {
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().y2);
   }
+  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+    StringVal strval = expr_ctx->GetStringVal(tupleRow);
+    LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
+    return (poly.GetMBR().y2);
+  }
   else {
     return expr_ctx->GetRectangleVal(tupleRow).y2;
   }
@@ -55,12 +75,18 @@ double GET_Y2(TupleRow* tupleRow, ExprContext* expr_ctx) {
 
 bool IsIntersected(TupleRow* row1, TupleRow* row2, ExprContext* build, ExprContext* probe) {
   if(build->root()->type().type == TYPE_POLYGON && probe->root()->type().type == TYPE_POLYGON) {
-    LOG(INFO) <<"Both shapes are polygons";
     StringVal strval1 = build->GetStringVal(row1);
     StringVal strval2 = probe->GetStringVal(row2);
     PolygonVal poly1 = PolygonVal(reinterpret_cast<char*>(strval1.ptr), strval1.len);
     PolygonVal poly2 = PolygonVal(reinterpret_cast<char*>(strval2.ptr), strval2.len);
     return poly1.GetMBR().isOverlappedWith(poly2.GetMBR());
+  }
+  else if(build->root()->type().type == TYPE_LINESTRING && probe->root()->type().type == TYPE_LINESTRING) {
+    StringVal strval1 = build->GetStringVal(row1);
+    StringVal strval2 = probe->GetStringVal(row2);
+    LineStringVal line1 = LineStringVal(reinterpret_cast<char*>(strval1.ptr), strval1.len);
+    LineStringVal line2 = LineStringVal(reinterpret_cast<char*>(strval2.ptr), strval2.len);
+    return line1.GetMBR().isOverlappedWith(line2.GetMBR());
   }
   else {
     RectangleVal rect1 = build->GetRectangleVal(row1);
