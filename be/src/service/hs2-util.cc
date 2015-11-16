@@ -216,7 +216,9 @@ void impala::ExprValueToHS2TColumn(const void* value, const TColumnType& type,
     case TPrimitiveType::POLYGON:
       if (value != NULL) {
         stringstream ss;
-        ss << (*reinterpret_cast<const Polygon*>(value));
+        const StringValue* string_val = reinterpret_cast<const StringValue*>(value);
+        Polygon tempPol(string_val->ptr, string_val->len);
+        ss << tempPol;
         column->stringVal.values.push_back(ss.str());
       }
       nulls = &column->stringVal.nulls;
@@ -224,7 +226,9 @@ void impala::ExprValueToHS2TColumn(const void* value, const TColumnType& type,
     case TPrimitiveType::LINESTRING:
       if (value != NULL) {
         stringstream ss;
-        ss << (*reinterpret_cast<const LineString*>(value));
+        const StringValue* string_val = reinterpret_cast<const StringValue*>(value);
+        LineString tempLineString(string_val->ptr, string_val->len);
+        ss << tempLineString;
         column->stringVal.values.push_back(ss.str());
       }
       nulls = &column->stringVal.nulls;
@@ -400,6 +404,55 @@ void impala::ExprValueToHS2TColumnValue(const void* value, const TColumnType& ty
       }
       break;
     }
+    case TPrimitiveType::POINT:
+      hs2_col_val->__isset.stringVal = true;
+      hs2_col_val->stringVal.__isset.value = not_null;
+      if (not_null) {
+        stringstream ss;
+        ss << (*reinterpret_cast<const Point*>(value));
+        hs2_col_val->stringVal.value = ss.str();
+      }
+      break;
+    case TPrimitiveType::LINE:
+      hs2_col_val->__isset.stringVal = true;
+      hs2_col_val->stringVal.__isset.value = not_null;
+      if (not_null) {
+        stringstream ss;
+        ss << (*reinterpret_cast<const Line*>(value));
+        hs2_col_val->stringVal.value = ss.str();
+      }
+      break;
+    case TPrimitiveType::RECTANGLE:
+      hs2_col_val->__isset.stringVal = true;
+      hs2_col_val->stringVal.__isset.value = not_null;
+      if (not_null) {
+        stringstream ss;
+        ss << (*reinterpret_cast<const Rectangle*>(value));
+        hs2_col_val->stringVal.value = ss.str();
+      }
+      break;
+    case TPrimitiveType::POLYGON:
+      hs2_col_val->__isset.stringVal = true;
+      hs2_col_val->stringVal.__isset.value = not_null;
+      if (not_null) {
+        stringstream ss;
+        const StringValue* string_val = reinterpret_cast<const StringValue*>(value);
+        Polygon tempPol(string_val->ptr, string_val->len);
+        ss << tempPol;
+        hs2_col_val->stringVal.value = ss.str();
+      }
+      break;
+    case TPrimitiveType::LINESTRING:
+      hs2_col_val->__isset.stringVal = true;
+      hs2_col_val->stringVal.__isset.value = not_null;
+      if (not_null) {
+        stringstream ss;
+        const StringValue* string_val = reinterpret_cast<const StringValue*>(value);
+        LineString tempLineString(string_val->ptr, string_val->len);
+        ss << tempLineString;
+        hs2_col_val->stringVal.value = ss.str();
+      }
+      break;
     default:
       DCHECK(false) << "bad type: "
                      << TypeToString(ThriftToType(type.types[0].scalar_type.type));

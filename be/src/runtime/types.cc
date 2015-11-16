@@ -151,6 +151,11 @@ TTypeId::type TypeToHiveServer2Type(PrimitiveType t) {
     case TYPE_VARCHAR: return TTypeId::STRING_TYPE;
     case TYPE_BINARY: return TTypeId::BINARY_TYPE;
     case TYPE_DECIMAL: return TTypeId::DECIMAL_TYPE;
+    case TYPE_POINT: return TTypeId::STRING_TYPE;
+    case TYPE_LINE: return TTypeId::STRING_TYPE;
+    case TYPE_RECTANGLE: return TTypeId::STRING_TYPE;
+    case TYPE_POLYGON: return TTypeId::STRING_TYPE;
+    case TYPE_LINESTRING: return TTypeId::STRING_TYPE;
     // TODO: update when hs2 has char(n)
     case TYPE_CHAR: return TTypeId::STRING_TYPE;
     default:
