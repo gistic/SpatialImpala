@@ -17,34 +17,35 @@
 #include <sstream>
 
 #include "codegen/llvm-codegen.h"
+#include "gen-cpp/ImpalaInternalService.h"
 #include "rpc/thrift-util.h"
 
-using namespace apache::thrift;
-using namespace boost;
-using namespace impala;
-using namespace std;
+#include "common/names.h"
 
-Status ImpalaServer::FragmentExecState::UpdateStatus(const Status& status) {
+using namespace apache::thrift;
+using namespace impala;
+
+Status FragmentMgr::FragmentExecState::UpdateStatus(const Status& status) {
   lock_guard<mutex> l(status_lock_);
   if (!status.ok() && exec_status_.ok()) exec_status_ = status;
   return exec_status_;
 }
 
-Status ImpalaServer::FragmentExecState::Cancel() {
+Status FragmentMgr::FragmentExecState::Cancel() {
   lock_guard<mutex> l(status_lock_);
   RETURN_IF_ERROR(exec_status_);
   executor_.Cancel();
-  return Status::OK;
+  return Status::OK();
 }
 
-Status ImpalaServer::FragmentExecState::Prepare(
+Status FragmentMgr::FragmentExecState::Prepare(
     const TExecPlanFragmentParams& exec_params) {
   exec_params_ = exec_params;
   RETURN_IF_ERROR(executor_.Prepare(exec_params));
-  return Status::OK;
+  return Status::OK();
 }
 
-void ImpalaServer::FragmentExecState::Exec() {
+void FragmentMgr::FragmentExecState::Exec() {
   // Open() does the full execution, because all plan fragments have sinks
   executor_.Open();
   executor_.Close();
@@ -54,7 +55,7 @@ void ImpalaServer::FragmentExecState::Exec() {
 // it is only invoked from the executor's reporting thread.
 // Also, the reported status will always reflect the most recent execution status,
 // including the final status when execution finishes.
-void ImpalaServer::FragmentExecState::ReportStatusCb(
+void FragmentMgr::FragmentExecState::ReportStatusCb(
     const Status& status, RuntimeProfile* profile, bool done) {
   DCHECK(status.ok() || done);  // if !status.ok() => done
   Status exec_status = UpdateStatus(status);
@@ -64,7 +65,7 @@ void ImpalaServer::FragmentExecState::ReportStatusCb(
   if (!coord_status.ok()) {
     stringstream s;
     s << "couldn't get a client for " << coord_address();
-    UpdateStatus(Status(TStatusCode::INTERNAL_ERROR, s.str()));
+    UpdateStatus(Status(ErrorMsg(TErrorCode::INTERNAL_ERROR, s.str())));
     return;
   }
 
@@ -100,32 +101,12 @@ void ImpalaServer::FragmentExecState::ReportStatusCb(
   params.__isset.error_log = (params.error_log.size() > 0);
 
   TReportExecStatusResult res;
-  Status rpc_status;
-  try {
-    try {
-      coord->ReportExecStatus(res, params);
-    } catch (const TException& e) {
-      VLOG_RPC << "Retrying ReportExecStatus: " << e.what();
-      rpc_status = coord.Reopen();
-      if (!rpc_status.ok()) {
-        // we need to cancel the execution of this fragment
-        UpdateStatus(rpc_status);
-        executor_.Cancel();
-        return;
-      }
-      coord->ReportExecStatus(res, params);
-    }
-    rpc_status = Status(res.status);
-  } catch (TException& e) {
-    stringstream msg;
-    msg << "ReportExecStatus() to " << coord_address() << " failed:\n" << e.what();
-    VLOG_QUERY << msg.str();
-    rpc_status = Status(TStatusCode::INTERNAL_ERROR, msg.str());
-  }
-
+  Status rpc_status =
+      coord.DoRpc(&ImpalaInternalServiceClient::ReportExecStatus, params, &res);
+  if (rpc_status.ok()) rpc_status = Status(res.status);
   if (!rpc_status.ok()) {
-    // we need to cancel the execution of this fragment
     UpdateStatus(rpc_status);
+    // we need to cancel the execution of this fragment
     executor_.Cancel();
   }
 }

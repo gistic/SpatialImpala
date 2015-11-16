@@ -16,12 +16,22 @@
 
 #include <sstream>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/algorithm/string.hpp>
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+#include "util/debug-util.h"
+#include "util/uid-util.h"
+
+using boost::algorithm::is_any_of;
+using boost::algorithm::join;
+using boost::algorithm::split;
 using namespace llama;
 
 namespace llama {
+
+string PrintId(const TUniqueId& id, const string& separator) {
+  return PrintId(impala::CastTUniqueId<TUniqueId, impala::TUniqueId>(id), separator);
+}
 
 ostream& operator<<(ostream& os, const TUniqueId& id) {
   os << hex << id.hi << ":" << id.lo;
@@ -122,10 +132,18 @@ impala::TNetworkAddress& operator<<(impala::TNetworkAddress& dest,
 
 impala::Status LlamaStatusToImpalaStatus(const TStatus& status,
     const string& err_prefix) {
-  if (status.status_code == TStatusCode::OK) return impala::Status::OK;
+  if (status.status_code == TStatusCode::OK) return impala::Status::OK();
   stringstream ss;
   ss << err_prefix << " " << join(status.error_msgs, ", ");
   return impala::Status(ss.str());
+}
+
+string GetShortName(const string& user) {
+  if (user.empty() || user[0] == '/' || user[0] == '@') return user;
+
+  vector<string> components;
+  split(components, user, is_any_of("/@"));
+  return components[0];
 }
 
 }

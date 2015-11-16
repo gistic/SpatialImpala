@@ -15,6 +15,7 @@
 package com.cloudera.impala.util;
 
 import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
@@ -24,6 +25,7 @@ import org.apache.log4j.Logger;
 import org.apache.thrift.TException;
 
 import com.cloudera.impala.catalog.HdfsTable;
+import com.cloudera.impala.common.AnalysisException;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
@@ -33,9 +35,24 @@ import com.google.common.collect.Lists;
 public class MetaStoreUtil {
   private static final Logger LOG = Logger.getLogger(MetaStoreUtil.class);
 
+  // Maximum comment length, e.g., for columns, that can be stored in the HMS.
+  // This number is a lower bound of the constraint set in the HMS DB schema,
+  // because the constraint varies among different backing databases, e.g.,
+  // for Postgres it is 4000, but for most other databases it is 256.
+  public static final int CREATE_MAX_COMMENT_LENGTH = 256;
+
+  // Maximum length of the string representation of a type that the HMS can store.
+  public static final int MAX_TYPE_NAME_LENGTH = 4000;
+
+  // The longest strings Hive accepts for [serde] property keys.
+  public static final int MAX_PROPERTY_KEY_LENGTH = 256;
+
+  // The longest strings Hive accepts for [serde] property values.
+  public static final int MAX_PROPERTY_VALUE_LENGTH = 4000;
+
   // The default maximum number of partitions to fetch from the Hive metastore in one
   // RPC.
-  private final static short DEFAULT_MAX_PARTITIONS_PER_RPC = 1000;
+  private static final short DEFAULT_MAX_PARTITIONS_PER_RPC = 1000;
 
   // The maximum number of partitions to fetch from the metastore in one RPC.
   // Read from the 'hive.metastore.batch.retrieve.table.partition.max' Hive configuration
@@ -121,5 +138,32 @@ public class MetaStoreUtil {
           client.getPartitionsByNames(dbName, tblName, partsToFetch));
     }
     return fetchedPartitions;
+  }
+
+  /**
+   * Checks that a given 'property' is short enough for HMS to handle. If not, throws an
+   * 'AnalysisException' with 'name' as its prefix.
+   */
+  public static void checkShortProperty(String name, String property, int length)
+      throws AnalysisException {
+    if (property.length() > length) {
+      throw new AnalysisException(
+          name + " length must be <= " + length + ": " + property.length());
+    }
+  }
+
+  /**
+   * Checks that each key and value in a proprty map is short enough for HMS to handle. If
+   * not, An 'AnalysisException' is thrown with 'mapName' as its prefix.
+   */
+  public static void checkShortPropertyMap(
+      String mapName, Map<String, String> propertyMap) throws AnalysisException {
+    if (null != propertyMap) {
+      for (Map.Entry<String, String> property : propertyMap.entrySet()) {
+        checkShortProperty(mapName + " key", property.getKey(), MAX_PROPERTY_KEY_LENGTH);
+        checkShortProperty(
+            mapName + " value", property.getValue(), MAX_PROPERTY_VALUE_LENGTH);
+      }
+    }
   }
 }

@@ -26,19 +26,22 @@
 #include "exprs/expr.h"
 #include "exec/aggregation-node.h"
 #include "exec/analytic-eval-node.h"
-#include "exec/cross-join-node.h"
 #include "exec/data-source-scan-node.h"
 #include "exec/empty-set-node.h"
 #include "exec/exchange-node.h"
 #include "exec/hash-join-node.h"
-#include "exec/hdfs-scan-node.h"
 #include "exec/hbase-scan-node.h"
-#include "exec/select-node.h"
+#include "exec/hdfs-scan-node.h"
+#include "exec/nested-loop-join-node.h"
 #include "exec/partitioned-aggregation-node.h"
 #include "exec/partitioned-hash-join-node.h"
+#include "exec/select-node.h"
+#include "exec/singular-row-src-node.h"
 #include "exec/sort-node.h"
+#include "exec/subplan-node.h"
 #include "exec/topn-node.h"
 #include "exec/union-node.h"
+#include "exec/unnest-node.h"
 #include "runtime/descriptors.h"
 #include "runtime/mem-tracker.h"
 #include "runtime/mem-pool.h"
@@ -47,9 +50,9 @@
 #include "util/debug-util.h"
 #include "util/runtime-profile.h"
 
+#include "common/names.h"
+
 using namespace llvm;
-using namespace std;
-using namespace boost;
 
 // TODO: remove when we remove hash-join-node.cc and aggregation-node.cc
 DEFINE_bool(enable_partitioned_hash_join, true, "Enable partitioned hash join");
@@ -73,7 +76,7 @@ ExecNode::RowBatchQueue::~RowBatchQueue() {
 
 void ExecNode::RowBatchQueue::AddBatch(RowBatch* batch) {
   if (!BlockingPut(batch)) {
-    ScopedSpinLock l(&lock_);
+    lock_guard<SpinLock> l(lock_);
     cleanup_queue_.push_back(batch);
   }
 }
@@ -93,7 +96,7 @@ int ExecNode::RowBatchQueue::Cleanup() {
     delete batch;
   }
 
-  ScopedSpinLock l(&lock_);
+  lock_guard<SpinLock> l(lock_);
   for (list<RowBatch*>::iterator it = cleanup_queue_.begin();
       it != cleanup_queue_.end(); ++it) {
     num_io_buffers += (*it)->num_io_buffers();
@@ -114,6 +117,7 @@ ExecNode::ExecNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl
     num_rows_returned_(0),
     rows_returned_counter_(NULL),
     rows_returned_rate_(NULL),
+    containing_subplan_(NULL),
     is_closed_(false) {
   InitRuntimeProfile(PrintPlanNodeType(tnode.node_type));
 }
@@ -124,35 +128,44 @@ ExecNode::~ExecNode() {
 Status ExecNode::Init(const TPlanNode& tnode) {
   RETURN_IF_ERROR(
       Expr::CreateExprTrees(pool_, tnode.conjuncts, &conjunct_ctxs_));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ExecNode::Prepare(RuntimeState* state) {
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::PREPARE, state));
   DCHECK(runtime_profile_.get() != NULL);
   rows_returned_counter_ =
-      ADD_COUNTER(runtime_profile_, "RowsReturned", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile_, "RowsReturned", TUnit::UNIT);
   mem_tracker_.reset(new MemTracker(
       runtime_profile_.get(), -1, -1, runtime_profile_->name(),
       state->instance_mem_tracker()));
+  expr_mem_tracker_.reset(new MemTracker(-1, -1, "Exprs", mem_tracker_.get(), false));
 
   rows_returned_rate_ = runtime_profile()->AddDerivedCounter(
-      ROW_THROUGHPUT_COUNTER, TCounterType::UNIT_PER_SECOND,
+      ROW_THROUGHPUT_COUNTER, TUnit::UNIT_PER_SECOND,
       bind<int64_t>(&RuntimeProfile::UnitsPerSecond, rows_returned_counter_,
         runtime_profile()->total_time_counter()));
 
-  RETURN_IF_ERROR(Expr::Prepare(conjunct_ctxs_, state, row_desc()));
-  state->AddExprCtxsToFree(conjunct_ctxs_);
+  RETURN_IF_ERROR(Expr::Prepare(conjunct_ctxs_, state, row_desc(), expr_mem_tracker()));
+  AddExprCtxsToFree(conjunct_ctxs_);
 
   for (int i = 0; i < children_.size(); ++i) {
     RETURN_IF_ERROR(children_[i]->Prepare(state));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ExecNode::Open(RuntimeState* state) {
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::OPEN, state));
   return Expr::Open(conjunct_ctxs_, state);
+}
+
+Status ExecNode::Reset(RuntimeState* state) {
+  num_rows_returned_ = 0;
+  for (int i = 0; i < children_.size(); ++i) {
+    RETURN_IF_ERROR(children_[i]->Reset(state));
+  }
+  return Status::OK();
 }
 
 void ExecNode::Close(RuntimeState* state) {
@@ -165,11 +178,19 @@ void ExecNode::Close(RuntimeState* state) {
   for (int i = 0; i < children_.size(); ++i) {
     children_[i]->Close(state);
   }
-  if (mem_tracker() != NULL) {
-    DCHECK_EQ(mem_tracker()->consumption(), 0)
-        << "Leaked memory." << endl << state->instance_mem_tracker()->LogUsage();
-  }
   Expr::Close(conjunct_ctxs_, state);
+
+  if (mem_tracker() != NULL && mem_tracker()->consumption() != 0) {
+    LOG(WARNING) << "Query " << state->query_id() << " may have leaked memory." << endl
+                 << state->instance_mem_tracker()->LogUsage();
+    // Workaround: Until IMPALA-1867 is fixed, single I/O block MemTracker accounting
+    // leaks are possible.  These are harmless, see IMPALA-1867.
+    // TODO: remove guard when IMPALA-1867 is fixed.
+    if (mem_tracker()->consumption() != state->block_mgr()->max_block_size()) {
+      DCHECK_EQ(mem_tracker()->consumption(), 0)
+          << "Leaked memory." << endl << state->instance_mem_tracker()->LogUsage();
+    }
+  }
 }
 
 void ExecNode::AddRuntimeExecOption(const string& str) {
@@ -187,7 +208,7 @@ Status ExecNode::CreateTree(ObjectPool* pool, const TPlan& plan,
                             const DescriptorTbl& descs, ExecNode** root) {
   if (plan.nodes.size() == 0) {
     *root = NULL;
-    return Status::OK;
+    return Status::OK();
   }
   int node_idx = 0;
   Status status = CreateTreeHelper(pool, plan.nodes, descs, NULL, &node_idx, root);
@@ -213,10 +234,11 @@ Status ExecNode::CreateTreeHelper(
   if (*node_idx >= tnodes.size()) {
     return Status("Failed to reconstruct plan tree from thrift.");
   }
-  int num_children = tnodes[*node_idx].num_children;
+  const TPlanNode& tnode = tnodes[*node_idx];
+
+  int num_children = tnode.num_children;
   ExecNode* node = NULL;
-  RETURN_IF_ERROR(CreateNode(pool, tnodes[*node_idx], descs, &node));
-  // assert(parent != NULL || (node_idx == 0 && root_expr != NULL));
+  RETURN_IF_ERROR(CreateNode(pool, tnode, descs, &node));
   if (parent != NULL) {
     parent->children_.push_back(node);
   } else {
@@ -232,6 +254,9 @@ Status ExecNode::CreateTreeHelper(
     }
   }
 
+  // Call Init() after children have been set and Init()'d themselves
+  RETURN_IF_ERROR(node->Init(tnode));
+
   // build up tree of profiles; add children >0 first, so that when we print
   // the profile, child 0 is printed last (makes the output more readable)
   for (int i = 1; i < node->children_.size(); ++i) {
@@ -241,7 +266,7 @@ Status ExecNode::CreateTreeHelper(
     node->runtime_profile()->AddChild(node->children_[0]->runtime_profile(), false);
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
@@ -270,14 +295,15 @@ Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
       if (tnode.hash_join_node.join_op == TJoinOp::LEFT_ANTI_JOIN ||
           tnode.hash_join_node.join_op == TJoinOp::RIGHT_SEMI_JOIN ||
           tnode.hash_join_node.join_op == TJoinOp::RIGHT_ANTI_JOIN ||
+          tnode.hash_join_node.join_op == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN ||
           FLAGS_enable_partitioned_hash_join) {
         *node = pool->Add(new PartitionedHashJoinNode(pool, tnode, descs));
       } else {
         *node = pool->Add(new HashJoinNode(pool, tnode, descs));
       }
       break;
-    case TPlanNodeType::CROSS_JOIN_NODE:
-      *node = pool->Add(new CrossJoinNode(pool, tnode, descs));
+    case TPlanNodeType::NESTED_LOOP_JOIN_NODE:
+      *node = pool->Add(new NestedLoopJoinNode(pool, tnode, descs));
       break;
     case TPlanNodeType::EMPTY_SET_NODE:
       *node = pool->Add(new EmptySetNode(pool, tnode, descs));
@@ -301,6 +327,22 @@ Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
     case TPlanNodeType::ANALYTIC_EVAL_NODE:
       *node = pool->Add(new AnalyticEvalNode(pool, tnode, descs));
       break;
+    case TPlanNodeType::SINGULAR_ROW_SRC_NODE:
+      *node = pool->Add(new SingularRowSrcNode(pool, tnode, descs));
+      break;
+    case TPlanNodeType::SUBPLAN_NODE:
+      if (!FLAGS_enable_partitioned_hash_join || !FLAGS_enable_partitioned_aggregation) {
+        error_msg << "Query referencing nested types is not supported because the "
+            << "--enable_partitioned_hash_join and/or --enable_partitioned_aggregation "
+            << "Impala Daemon start-up flags are set to false.\nTo enable nested types "
+            << "support please set those flags to true (they are enabled by default).";
+        return Status(error_msg.str());
+      }
+      *node = pool->Add(new SubplanNode(pool, tnode, descs));
+      break;
+    case TPlanNodeType::UNNEST_NODE:
+      *node = pool->Add(new UnnestNode(pool, tnode, descs));
+      break;
     default:
       map<int, const char*>::const_iterator i =
           _TPlanNodeType_VALUES_TO_NAMES.find(tnode.node_type);
@@ -311,8 +353,7 @@ Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
       error_msg << str << " not implemented";
       return Status(error_msg.str());
   }
-  RETURN_IF_ERROR((*node)->Init(tnode));
-  return Status::OK;
+  return Status::OK();
 }
 
 void ExecNode::SetDebugOptions(
@@ -363,15 +404,17 @@ void ExecNode::InitRuntimeProfile(const string& name) {
 
 Status ExecNode::ExecDebugAction(TExecNodePhase::type phase, RuntimeState* state) {
   DCHECK(phase != TExecNodePhase::INVALID);
-  if (debug_phase_ != phase) return Status::OK;
-  if (debug_action_ == TDebugAction::FAIL) return Status(TStatusCode::INTERNAL_ERROR);
+  if (debug_phase_ != phase) return Status::OK();
+  if (debug_action_ == TDebugAction::FAIL) {
+    return Status(TErrorCode::INTERNAL_ERROR, "Debug Action: FAIL");
+  }
   if (debug_action_ == TDebugAction::WAIT) {
     while (!state->is_cancelled()) {
       sleep(1);
     }
     return Status::CANCELLED;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 bool ExecNode::EvalConjuncts(ExprContext* const* ctxs, int num_ctxs, TupleRow* row) {
@@ -380,6 +423,21 @@ bool ExecNode::EvalConjuncts(ExprContext* const* ctxs, int num_ctxs, TupleRow* r
     if (v.is_null || !v.val) return false;
   }
   return true;
+}
+
+Status ExecNode::QueryMaintenance(RuntimeState* state) {
+  ExprContext::FreeLocalAllocations(expr_ctxs_to_free_);
+  return state->CheckQueryState();
+}
+
+void ExecNode::AddExprCtxsToFree(const vector<ExprContext*>& ctxs) {
+  for (int i = 0; i < ctxs.size(); ++i) AddExprCtxToFree(ctxs[i]);
+}
+
+void ExecNode::AddExprCtxsToFree(const SortExecExprs& sort_exec_exprs) {
+  AddExprCtxsToFree(sort_exec_exprs.sort_tuple_slot_expr_ctxs());
+  AddExprCtxsToFree(sort_exec_exprs.lhs_ordering_expr_ctxs());
+  AddExprCtxsToFree(sort_exec_exprs.rhs_ordering_expr_ctxs());
 }
 
 // Codegen for EvalConjuncts.  The generated signature is
@@ -425,7 +483,7 @@ Function* ExecNode::CodegenEvalConjuncts(
     Status status =
         conjunct_ctxs[i]->root()->GetCodegendComputeFn(state, &conjunct_fns[i]);
     if (!status.ok()) {
-      VLOG_QUERY << "Could not codegen EvalConjuncts: " << status.GetErrorMsg();
+      VLOG_QUERY << "Could not codegen EvalConjuncts: " << status.GetDetail();
       return NULL;
     }
   }

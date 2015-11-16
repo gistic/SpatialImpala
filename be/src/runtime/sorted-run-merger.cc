@@ -20,20 +20,19 @@
 #include "runtime/tuple-row.h"
 #include "util/runtime-profile.h"
 
-using namespace boost;
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
-// BatchedRowSupplier returns individual rows in a batch obtained from a sorted input
-// run (a RunBatchSupplier). Used as the heap element in the min heap maintained by the
-// merger.
-// Next() advances the row supplier to the next row in the input batch and retrieves
-// the next batch from the input if the current input batch is exhausted. Transfers
-// ownership from the current input batch to an output batch if requested.
+/// BatchedRowSupplier returns individual rows in a batch obtained from a sorted input
+/// run (a RunBatchSupplier). Used as the heap element in the min heap maintained by the
+/// merger.
+/// Next() advances the row supplier to the next row in the input batch and retrieves
+/// the next batch from the input if the current input batch is exhausted. Transfers
+/// ownership from the current input batch to an output batch if requested.
 class SortedRunMerger::BatchedRowSupplier {
  public:
-  // Construct an instance from a sorted input run.
+  /// Construct an instance from a sorted input run.
   BatchedRowSupplier(SortedRunMerger* parent, const RunBatchSupplier& sorted_run)
     : sorted_run_(sorted_run),
       input_row_batch_(NULL),
@@ -41,21 +40,22 @@ class SortedRunMerger::BatchedRowSupplier {
       parent_(parent) {
   }
 
-  // Retrieves the first batch of sorted rows from the run.
+  /// Retrieves the first batch of sorted rows from the run.
   Status Init(bool* done) {
+    *done = false;
     RETURN_IF_ERROR(sorted_run_(&input_row_batch_));
     if (input_row_batch_ == NULL) {
       *done = true;
-      return Status::OK;
+      return Status::OK();
     }
     RETURN_IF_ERROR(Next(NULL, done));
-    return Status::OK;
+    return Status::OK();
   }
 
-  // Increment the current row index. If the current input batch is exhausted fetch the
-  // next one from the sorted run. Transfer ownership to transfer_batch if not NULL.
+  /// Increment the current row index. If the current input batch is exhausted fetch the
+  /// next one from the sorted run. Transfer ownership to transfer_batch if not NULL.
   Status Next(RowBatch* transfer_batch, bool* done) {
-    DCHECK_NOTNULL(input_row_batch_);
+    DCHECK(input_row_batch_ != NULL);
     ++input_row_batch_index_;
     if (input_row_batch_index_ < input_row_batch_->num_rows()) {
       *done = false;
@@ -70,7 +70,7 @@ class SortedRunMerger::BatchedRowSupplier {
       *done = input_row_batch_ == NULL;
       input_row_batch_index_ = 0;
     }
-    return Status::OK;
+    return Status::OK();
   }
 
   TupleRow* current_row() const {
@@ -80,16 +80,16 @@ class SortedRunMerger::BatchedRowSupplier {
  private:
   friend class SortedRunMerger;
 
-  // The run from which this object supplies rows.
+  /// The run from which this object supplies rows.
   RunBatchSupplier sorted_run_;
 
-  // The current input batch being processed.
+  /// The current input batch being processed.
   RowBatch* input_row_batch_;
 
-  // Index into input_row_batch_ of the current row being processed.
+  /// Index into input_row_batch_ of the current row being processed.
   int input_row_batch_index_;
 
-  // The parent merger instance.
+  /// The parent merger instance.
   SortedRunMerger* parent_;
 };
 
@@ -130,25 +130,25 @@ Status SortedRunMerger::Prepare(const vector<RunBatchSupplier>& input_runs) {
   min_heap_.reserve(input_runs.size());
   BOOST_FOREACH(const RunBatchSupplier& input_run, input_runs) {
     BatchedRowSupplier* new_elem = pool_.Add(new BatchedRowSupplier(this, input_run));
+    DCHECK(new_elem != NULL);
     bool empty;
     RETURN_IF_ERROR(new_elem->Init(&empty));
     if (!empty) min_heap_.push_back(new_elem);
   }
 
   // Construct the min heap from the sorted runs.
-  int last_parent = (min_heap_.size() / 2) - 1;
+  const int last_parent = (min_heap_.size() / 2) - 1;
   for (int i = last_parent; i >= 0; --i) {
     Heapify(i);
   }
-
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SortedRunMerger::GetNext(RowBatch* output_batch, bool* eos) {
   ScopedTimer<MonotonicStopWatch> timer(get_next_timer_);
   if (min_heap_.empty()) {
     *eos = true;
-    return Status::OK;
+    return Status::OK();
   }
 
   while (!output_batch->AtCapacity()) {
@@ -166,7 +166,7 @@ Status SortedRunMerger::GetNext(RowBatch* output_batch, bool* eos) {
 
     output_batch->CommitLastRow();
 
-    bool min_run_complete;
+    bool min_run_complete = false;
     // Advance to the next element in min. output_batch is supplied to transfer
     // resource ownership if the input batch in min is exhausted.
     RETURN_IF_ERROR(min->Next(deep_copy_input_ ? NULL : output_batch,
@@ -182,7 +182,7 @@ Status SortedRunMerger::GetNext(RowBatch* output_batch, bool* eos) {
   }
 
   *eos = min_heap_.empty();
-  return Status::OK;
+  return Status::OK();
 }
 
 }

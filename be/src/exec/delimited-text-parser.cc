@@ -17,8 +17,9 @@
 #include "exec/hdfs-scanner.h"
 #include "util/cpu-info.h"
 
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 DelimitedTextParser::DelimitedTextParser(
     int num_cols, int num_partition_keys, const bool* is_materialized_col,
@@ -35,7 +36,8 @@ DelimitedTextParser::DelimitedTextParser(
       num_cols_(num_cols),
       num_partition_keys_(num_partition_keys),
       is_materialized_col_(is_materialized_col),
-      column_idx_(0) {
+      column_idx_(0),
+      unfinished_tuple_(false){
   // Escape character should not be the same as tuple or col delim unless it is the
   // empty delimiter.
   DCHECK(escape_char == '\0' || escape_char != tuple_delim);
@@ -117,12 +119,13 @@ Status DelimitedTextParser::ParseFieldLocations(int max_tuples, int64_t remainin
     }
   }
 
-  if (*num_tuples == max_tuples) return Status::OK;
+  if (*num_tuples == max_tuples) return Status::OK();
 
   // Handle the remaining characters
   while (remaining_len > 0) {
     bool new_tuple = false;
     bool new_col = false;
+    unfinished_tuple_ = true;
 
     if (!last_char_is_escape_) {
       if (tuple_delim_ != '\0' && (**byte_buffer_ptr == tuple_delim_ ||
@@ -154,12 +157,13 @@ Status DelimitedTextParser::ParseFieldLocations(int max_tuples, int64_t remainin
         row_end_locations[*num_tuples] = *byte_buffer_ptr;
         ++(*num_tuples);
       }
+      unfinished_tuple_ = false;
       last_row_delim_offset_ = **byte_buffer_ptr == '\r' ? remaining_len - 1 : -1;
       if (*num_tuples == max_tuples) {
         ++*byte_buffer_ptr;
         --remaining_len;
         if (last_row_delim_offset_ == remaining_len) last_row_delim_offset_ = 0;
-        return Status::OK;
+        return Status::OK();
       }
     } else if (new_col) {
       AddColumn<true>(*byte_buffer_ptr - *next_column_start,
@@ -179,8 +183,9 @@ Status DelimitedTextParser::ParseFieldLocations(int max_tuples, int64_t remainin
     FillColumns<false>(0, NULL, num_fields, field_locations);
     column_idx_ = num_partition_keys_;
     ++(*num_tuples);
+    unfinished_tuple_ = false;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 // Find the first instance of the tuple delimiter.  This will
@@ -207,10 +212,8 @@ restart:
       // Load the next 16 bytes into the xmm register and do strchr for the
       // tuple delimiter.
       xmm_buffer = _mm_loadu_si128(reinterpret_cast<const __m128i*>(buffer));
-      // This differs from ParseSse by using the slower cmpestrm instruction which
-      // takes a chr_count and can search less than 16 bytes at a time.
-      xmm_tuple_mask = _mm_cmpestrm(xmm_tuple_search_, 1, xmm_buffer,
-          SSEUtil::CHARS_PER_128_BIT_REGISTER, SSEUtil::STRCHR_MODE);
+      xmm_tuple_mask = SSE4_cmpestrm<SSEUtil::STRCHR_MODE>(xmm_tuple_search_, 1,
+          xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER);
       int tuple_mask = _mm_extract_epi16(xmm_tuple_mask, 0);
       if (tuple_mask != 0) {
         found = true;
@@ -249,6 +252,9 @@ restart:
     // unlikely.
     int num_escape_chars = 0;
     int before_tuple_end = tuple_start - 2;
+    // TODO: If scan range is split between escape character and tuple delimiter,
+    // before_tuple_end will be -1. Need to scan previous range for escape characters
+    // in this case.
     for (; before_tuple_end >= 0; --before_tuple_end) {
       if (buffer_start[before_tuple_end] == escape_char_) {
         ++num_escape_chars;
@@ -285,4 +291,3 @@ restart:
   }
   return tuple_start;
 }
-

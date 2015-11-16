@@ -22,6 +22,7 @@ set(EXECUTABLE_OUTPUT_PATH "${BUILD_OUTPUT_ROOT_DIRECTORY}/resourcebroker")
 add_library(ResourceBroker
   resource-broker.cc
 )
+add_dependencies(ResourceBroker thrift-deps)
 
 # TODO: Add resource broker BE test
 # ADD_BE_TEST(resource-broker-test)

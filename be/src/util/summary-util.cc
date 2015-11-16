@@ -18,12 +18,13 @@
 #include <boost/lexical_cast.hpp>
 
 #include "common/logging.h"
-#include "util/debug-util.h"
+#include "util/pretty-printer.h"
+#include "util/redactor.h"
 #include "util/table-printer.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 // Helper function for PrintExecSummary() that walks the exec summary recursively.
 // Output for this node is appended to *result. Each value in *result should contain
@@ -42,7 +43,7 @@ void PrintExecSummary(const TExecSummary& exec_summary, int indent_level,
 
 #define COMPUTE_MAX_SUM_STATS(NAME)\
   agg_stats.NAME += node.exec_stats[i].NAME;\
-  max_stats.NAME = max(max_stats.NAME, node.exec_stats[i].NAME)
+  max_stats.NAME = std::max(max_stats.NAME, node.exec_stats[i].NAME)
 
   // Compute avg and max of each used stat (cpu_time_ns is unused in the summary output).
   for (int i = 0; i < node.exec_stats.size(); ++i) {
@@ -70,15 +71,16 @@ void PrintExecSummary(const TExecSummary& exec_summary, int indent_level,
   vector<string> row;
   row.push_back(label_ss.str());
   row.push_back(lexical_cast<string>(node.exec_stats.size())); // Num instances
-  row.push_back(PrettyPrinter::Print(avg_time, TCounterType::TIME_NS));
-  row.push_back(PrettyPrinter::Print(max_stats.latency_ns, TCounterType::TIME_NS));
+  row.push_back(PrettyPrinter::Print(avg_time, TUnit::TIME_NS));
+  row.push_back(PrettyPrinter::Print(max_stats.latency_ns, TUnit::TIME_NS));
   row.push_back(PrettyPrinter::Print(
       node.is_broadcast ? max_stats.cardinality : agg_stats.cardinality,
-      TCounterType::UNIT));
-  row.push_back(PrettyPrinter::Print(est_stats.cardinality, TCounterType::UNIT));
-  row.push_back(PrettyPrinter::Print(max_stats.memory_used, TCounterType::BYTES));
-  row.push_back(PrettyPrinter::Print(est_stats.memory_used, TCounterType::BYTES));
-  row.push_back(node.label_detail);
+      TUnit::UNIT));
+  row.push_back(PrettyPrinter::Print(est_stats.cardinality, TUnit::UNIT));
+  row.push_back(PrettyPrinter::Print(max_stats.memory_used, TUnit::BYTES));
+  row.push_back(PrettyPrinter::Print(est_stats.memory_used, TUnit::BYTES));
+  // Node "details" may contain exprs which should be redacted.
+  row.push_back(RedactCopy(node.label_detail));
   result->push_back(row);
 
   map<int, int>::const_iterator child_fragment_idx_it =

@@ -37,8 +37,9 @@
 #include "gen-cpp/ImpalaInternalService.h"
 #include "gen-cpp/ImpalaInternalService_types.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
+using boost::condition_variable;
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
@@ -152,7 +153,7 @@ Status DataStreamSender::Channel::Init(RuntimeState* state) {
   // TODO: figure out how to size batch_
   int capacity = max(1, buffer_size_ / max(row_desc_.GetRowSize(), 1));
   batch_.reset(new RowBatch(row_desc_, capacity, parent_->mem_tracker_.get()));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataStreamSender::Channel::SendBatch(TRowBatch* batch) {
@@ -168,7 +169,7 @@ Status DataStreamSender::Channel::SendBatch(TRowBatch* batch) {
     unique_lock<mutex> l(rpc_thread_lock_);
     rpc_in_flight_ = false;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void DataStreamSender::Channel::TransmitData(int thread_id, const TRowBatch* batch) {
@@ -184,48 +185,34 @@ void DataStreamSender::Channel::TransmitData(int thread_id, const TRowBatch* bat
 
 void DataStreamSender::Channel::TransmitDataHelper(const TRowBatch* batch) {
   DCHECK(batch != NULL);
-  try {
-    VLOG_ROW << "Channel::TransmitData() instance_id=" << fragment_instance_id_
-             << " dest_node=" << dest_node_id_
-             << " #rows=" << batch->num_rows;
-    TTransmitDataParams params;
-    params.protocol_version = ImpalaInternalServiceVersion::V1;
-    params.__set_dest_fragment_instance_id(fragment_instance_id_);
-    params.__set_dest_node_id(dest_node_id_);
-    params.__set_row_batch(*batch);  // yet another copy
-    params.__set_eos(false);
-    params.__set_sender_id(parent_->sender_id_);
+  VLOG_ROW << "Channel::TransmitData() instance_id=" << fragment_instance_id_
+           << " dest_node=" << dest_node_id_
+           << " #rows=" << batch->num_rows;
+  TTransmitDataParams params;
+  params.protocol_version = ImpalaInternalServiceVersion::V1;
+  params.__set_dest_fragment_instance_id(fragment_instance_id_);
+  params.__set_dest_node_id(dest_node_id_);
+  params.__set_row_batch(*batch);  // yet another copy
+  params.__set_eos(false);
+  params.__set_sender_id(parent_->sender_id_);
 
-    ImpalaInternalServiceConnection client(client_cache_, address_, &rpc_status_);
+  ImpalaInternalServiceConnection client(client_cache_, address_, &rpc_status_);
+  if (!rpc_status_.ok()) return;
+
+  TTransmitDataResult res;
+  {
+    SCOPED_TIMER(parent_->thrift_transmit_timer_);
+    rpc_status_ =
+        client.DoRpc(&ImpalaInternalServiceClient::TransmitData, params, &res);
     if (!rpc_status_.ok()) return;
+  }
 
-    TTransmitDataResult res;
-    {
-      SCOPED_TIMER(parent_->thrift_transmit_timer_);
-      try {
-        client->TransmitData(res, params);
-      } catch (const TException& e) {
-        VLOG_RPC << "Retrying TransmitData: " << e.what();
-        rpc_status_ = client.Reopen();
-        if (!rpc_status_.ok()) {
-          return;
-        }
-        client->TransmitData(res, params);
-      }
-    }
-
-    if (res.status.status_code != TStatusCode::OK) {
-      rpc_status_ = res.status;
-    } else {
-      num_data_bytes_sent_ += RowBatch::GetBatchSize(*batch);
-      VLOG_ROW << "incremented #data_bytes_sent="
-               << num_data_bytes_sent_;
-    }
-  } catch (TException& e) {
-    stringstream msg;
-    msg << "TransmitData() to " << address_ << " failed:\n" << e.what();
-    rpc_status_ = Status(msg.str());
-    return;
+  if (res.status.status_code != TErrorCode::OK) {
+    rpc_status_ = res.status;
+  } else {
+    num_data_bytes_sent_ += RowBatch::GetBatchSize(*batch);
+    VLOG_ROW << "incremented #data_bytes_sent="
+             << num_data_bytes_sent_;
   }
 }
 
@@ -259,23 +246,23 @@ Status DataStreamSender::Channel::AddRow(TupleRow* row) {
     }
   }
   batch_->CommitLastRow();
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataStreamSender::Channel::SendCurrentBatch() {
   // make sure there's no in-flight TransmitData() call that might still want to
   // access thrift_batch_
   WaitForRpc();
-  parent_->SerializeBatch(batch_.get(), &thrift_batch_);
+  RETURN_IF_ERROR(parent_->SerializeBatch(batch_.get(), &thrift_batch_));
   batch_->Reset();
   RETURN_IF_ERROR(SendBatch(&thrift_batch_));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataStreamSender::Channel::GetSendStatus() {
   WaitForRpc();
   if (!rpc_status_.ok()) {
-    LOG(ERROR) << "channel send status: " << rpc_status_.GetErrorMsg();
+    LOG(ERROR) << "channel send status: " << rpc_status_.GetDetail();
   }
   return rpc_status_;
 }
@@ -296,36 +283,26 @@ Status DataStreamSender::Channel::CloseInternal() {
   if (!status.ok()) {
     return status;
   }
-  try {
-    TTransmitDataParams params;
-    params.protocol_version = ImpalaInternalServiceVersion::V1;
-    params.__set_dest_fragment_instance_id(fragment_instance_id_);
-    params.__set_dest_node_id(dest_node_id_);
-    params.__set_sender_id(parent_->sender_id_);
-    params.__set_eos(true);
-    TTransmitDataResult res;
-    VLOG_RPC << "calling TransmitData to close channel";
-    try {
-      client->TransmitData(res, params);
-    } catch (const TException& e) {
-      VLOG_RPC << "Retrying TransmitData: " << e.what();
-      rpc_status_ = client.Reopen();
-      if (!rpc_status_.ok()) {
-        return rpc_status_;
-      }
-      client->TransmitData(res, params);
-    }
-    return Status(res.status);
-  } catch (TException& e) {
+  TTransmitDataParams params;
+  params.protocol_version = ImpalaInternalServiceVersion::V1;
+  params.__set_dest_fragment_instance_id(fragment_instance_id_);
+  params.__set_dest_node_id(dest_node_id_);
+  params.__set_sender_id(parent_->sender_id_);
+  params.__set_eos(true);
+  TTransmitDataResult res;
+  VLOG_RPC << "calling TransmitData to close channel";
+  rpc_status_ = client.DoRpc(&ImpalaInternalServiceClient::TransmitData, params, &res);
+  if (!rpc_status_.ok()) {
     stringstream msg;
-    msg << "CloseChannel() to " << address_ << " failed:\n" << e.what();
-    return Status(msg.str());
+    msg << "CloseChannel() to " << address_ << " failed:\n" << rpc_status_.msg().msg();
+    return Status(rpc_status_.code(), msg.str());
   }
-  return Status::OK;
+  return Status(res.status);
 }
 
 void DataStreamSender::Channel::Close(RuntimeState* state) {
-  state->LogError(CloseInternal());
+  Status s = CloseInternal();
+  if (!s.ok()) state->LogError(s.msg());
   rpc_thread_.DrainAndShutdown();
   batch_.reset();
 }
@@ -390,31 +367,31 @@ Status DataStreamSender::Prepare(RuntimeState* state) {
   profile_ = pool_->Add(new RuntimeProfile(pool_, title.str()));
   SCOPED_TIMER(profile_->total_time_counter());
 
-  RETURN_IF_ERROR(Expr::Prepare(partition_expr_ctxs_, state, row_desc_));
-  state->AddExprCtxsToFree(partition_expr_ctxs_);
-
   mem_tracker_.reset(new MemTracker(profile(), -1, -1, "DataStreamSender",
       state->instance_mem_tracker()));
+  RETURN_IF_ERROR(
+      Expr::Prepare(partition_expr_ctxs_, state, row_desc_, mem_tracker_.get()));
+
   bytes_sent_counter_ =
-      ADD_COUNTER(profile(), "BytesSent", TCounterType::BYTES);
+      ADD_COUNTER(profile(), "BytesSent", TUnit::BYTES);
   uncompressed_bytes_counter_ =
-      ADD_COUNTER(profile(), "UncompressedRowBatchSize", TCounterType::BYTES);
+      ADD_COUNTER(profile(), "UncompressedRowBatchSize", TUnit::BYTES);
   serialize_batch_timer_ =
       ADD_TIMER(profile(), "SerializeBatchTime");
   thrift_transmit_timer_ = ADD_TIMER(profile(), "ThriftTransmitTime(*)");
   network_throughput_ =
-      profile()->AddDerivedCounter("NetworkThroughput(*)", TCounterType::BYTES_PER_SECOND,
+      profile()->AddDerivedCounter("NetworkThroughput(*)", TUnit::BYTES_PER_SECOND,
           bind<int64_t>(&RuntimeProfile::UnitsPerSecond, bytes_sent_counter_,
                         thrift_transmit_timer_));
   overall_throughput_ =
-      profile()->AddDerivedCounter("OverallThroughput", TCounterType::BYTES_PER_SECOND,
+      profile()->AddDerivedCounter("OverallThroughput", TUnit::BYTES_PER_SECOND,
            bind<int64_t>(&RuntimeProfile::UnitsPerSecond, bytes_sent_counter_,
                          profile()->total_time_counter()));
 
   for (int i = 0; i < channels_.size(); ++i) {
     RETURN_IF_ERROR(channels_[i]->Init(state));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataStreamSender::Open(RuntimeState* state) {
@@ -423,11 +400,15 @@ Status DataStreamSender::Open(RuntimeState* state) {
 
 Status DataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool eos) {
   SCOPED_TIMER(profile_->total_time_counter());
+  ExprContext::FreeLocalAllocations(partition_expr_ctxs_);
+  RETURN_IF_ERROR(state->CheckQueryState());
   DCHECK(!closed_);
+
+  if (batch->num_rows() == 0) return Status::OK();
   if (broadcast_ || channels_.size() == 1) {
     // current_thrift_batch_ is *not* the one that was written by the last call
     // to Serialize()
-    SerializeBatch(batch, current_thrift_batch_, channels_.size());
+    RETURN_IF_ERROR(SerializeBatch(batch, current_thrift_batch_, channels_.size()));
     // SendBatch() will block if there are still in-flight rpcs (and those will
     // reference the previously written thrift batch)
     for (int i = 0; i < channels_.size(); ++i) {
@@ -440,8 +421,8 @@ Status DataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool eos) {
     // rpc before overwriting its batch.
     Channel* current_channel = channels_[current_channel_idx_];
     current_channel->WaitForRpc();
-    SerializeBatch(batch, current_channel->thrift_batch());
-    current_channel->SendBatch(current_channel->thrift_batch());
+    RETURN_IF_ERROR(SerializeBatch(batch, current_channel->thrift_batch()));
+    RETURN_IF_ERROR(current_channel->SendBatch(current_channel->thrift_batch()));
     current_channel_idx_ = (current_channel_idx_ + 1) % channels_.size();
   } else {
     // hash-partition batch's rows across channels
@@ -463,7 +444,7 @@ Status DataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool eos) {
       RETURN_IF_ERROR(channels_[hash_val % num_channels]->AddRow(row));
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void DataStreamSender::Close(RuntimeState* state) {
@@ -475,14 +456,20 @@ void DataStreamSender::Close(RuntimeState* state) {
   closed_ = true;
 }
 
-void DataStreamSender::SerializeBatch(RowBatch* src, TRowBatch* dest, int num_receivers) {
+Status DataStreamSender::SerializeBatch(RowBatch* src, TRowBatch* dest, int num_receivers) {
   VLOG_ROW << "serializing " << src->num_rows() << " rows";
   {
     SCOPED_TIMER(serialize_batch_timer_);
-    int uncompressed_bytes = src->Serialize(dest);
-    COUNTER_ADD(bytes_sent_counter_, RowBatch::GetBatchSize(*dest) * num_receivers);
+    RETURN_IF_ERROR(src->Serialize(dest));
+    int bytes = RowBatch::GetBatchSize(*dest);
+    int uncompressed_bytes = bytes - dest->tuple_data.size() + dest->uncompressed_size;
+    // The size output_batch would be if we didn't compress tuple_data (will be equal to
+    // actual batch size if tuple_data isn't compressed)
+
+    COUNTER_ADD(bytes_sent_counter_, bytes * num_receivers);
     COUNTER_ADD(uncompressed_bytes_counter_, uncompressed_bytes * num_receivers);
   }
+  return Status::OK();
 }
 
 int64_t DataStreamSender::GetNumDataBytesSent() const {

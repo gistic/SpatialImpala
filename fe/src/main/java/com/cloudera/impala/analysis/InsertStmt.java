@@ -14,11 +14,12 @@
 
 package com.cloudera.impala.analysis;
 
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
+import org.apache.hadoop.fs.Path;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,8 +32,8 @@ import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.catalog.View;
 import com.cloudera.impala.common.AnalysisException;
+import com.cloudera.impala.common.FileSystemUtil;
 import com.cloudera.impala.planner.DataSink;
-import com.cloudera.impala.thrift.THdfsFileFormat;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
@@ -45,18 +46,8 @@ import com.google.common.collect.Sets;
 public class InsertStmt extends StatementBase {
   private final static Logger LOG = LoggerFactory.getLogger(InsertStmt.class);
 
-  // Insert formats currently supported by Impala.
-  private final static EnumSet<THdfsFileFormat> SUPPORTED_INSERT_FORMATS =
-      EnumSet.of(THdfsFileFormat.PARQUET, THdfsFileFormat.TEXT);
-
-  // List of inline views that may be referenced in queryStmt.
-  private final WithClause withClause_;
-
   // Target table name as seen by the parser
   private final TableName originalTableName_;
-
-  // Target table into which to insert. May be qualified by analyze()
-  private TableName targetTableName_;
 
   // Differentiates between INSERT INTO and INSERT OVERWRITE.
   private final boolean overwrite_;
@@ -68,30 +59,9 @@ public class InsertStmt extends StatementBase {
   // User-supplied hints to control hash partitioning before the table sink in the plan.
   private final List<String> planHints_;
 
-  // Select or union whose results are to be inserted. If null, will be set after
-  // analysis.
-  private QueryStmt queryStmt_;
-
   // False if the original insert statement had a query statement, true if we need to
-  // auto-generate one (for insert into tbl();) during analysis.
+  // auto-generate one (for insert into tbl()) during analysis.
   private final boolean needsGeneratedQueryStatement_;
-
-  // Set in analyze(). Contains metadata of target table to determine type of sink.
-  private Table table_;
-
-  // Set in analyze(). Exprs corresponding to the partitionKeyValues,
-  private final List<Expr> partitionKeyExprs_ = new ArrayList<Expr>();
-
-  // True to force re-partitioning before the table sink, false to prevent it. Set in
-  // analyze() based on planHints_. Null if no explicit hint was given (the planner
-  // should decide whether to re-partition or not).
-  private Boolean isRepartition_ = null;
-
-  // Output expressions that produce the final results to write to the target table. May
-  // include casts, and NullLiterals where an output column isn't explicitly mentioned.
-  // Set in prepareExpressions(). The i'th expr produces the i'th column of the target
-  // table.
-  private final ArrayList<Expr> resultExprs_ = new ArrayList<Expr>();
 
   // The column permutation is specified by writing INSERT INTO tbl(col3, col1, col2...)
   //
@@ -113,6 +83,39 @@ public class InsertStmt extends StatementBase {
   // clause, where the static value is specified.
   private final List<String> columnPermutation_;
 
+  /////////////////////////////////////////
+  // BEGIN: Members that need to be reset()
+
+  // List of inline views that may be referenced in queryStmt.
+  private final WithClause withClause_;
+
+  // Target table into which to insert. May be qualified by analyze()
+  private TableName targetTableName_;
+
+  // Select or union whose results are to be inserted. If null, will be set after
+  // analysis.
+  private QueryStmt queryStmt_;
+
+  // Set in analyze(). Contains metadata of target table to determine type of sink.
+  private Table table_;
+
+  // Set in analyze(). Exprs corresponding to the partitionKeyValues,
+  private List<Expr> partitionKeyExprs_ = Lists.newArrayList();
+
+  // True to force re-partitioning before the table sink, false to prevent it. Set in
+  // analyze() based on planHints_. Null if no explicit hint was given (the planner
+  // should decide whether to re-partition or not).
+  private Boolean isRepartition_ = null;
+
+  // Output expressions that produce the final results to write to the target table. May
+  // include casts, and NullLiterals where an output column isn't explicitly mentioned.
+  // Set in prepareExpressions(). The i'th expr produces the i'th column of the target
+  // table.
+  private ArrayList<Expr> resultExprs_ = Lists.newArrayList();
+
+  // END: Members that need to be reset()
+  /////////////////////////////////////////
+
   public InsertStmt(WithClause withClause, TableName targetTable, boolean overwrite,
       List<PartitionKeyValue> partitionKeyValues, List<String> planHints,
       QueryStmt queryStmt, List<String> columnPermutation) {
@@ -131,10 +134,11 @@ public class InsertStmt extends StatementBase {
   /**
    * C'tor used in clone().
    */
-  public InsertStmt(InsertStmt other) {
+  private InsertStmt(InsertStmt other) {
+    super(other);
     withClause_ = other.withClause_ != null ? other.withClause_.clone() : null;
     targetTableName_ = other.targetTableName_;
-    originalTableName_ = other.targetTableName_;
+    originalTableName_ = other.originalTableName_;
     overwrite_ = other.overwrite_;
     partitionKeyValues_ = other.partitionKeyValues_;
     planHints_ = other.planHints_;
@@ -145,11 +149,24 @@ public class InsertStmt extends StatementBase {
   }
 
   @Override
+  public void reset() {
+    super.reset();
+    if (withClause_ != null) withClause_.reset();
+    targetTableName_ = originalTableName_;
+    queryStmt_.reset();
+    table_ = null;
+    partitionKeyExprs_.clear();
+    isRepartition_ = null;
+    resultExprs_.clear();
+  }
+
+  @Override
   public InsertStmt clone() { return new InsertStmt(this); }
 
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
-    if (isExplain_) analyzer.setIsExplain();
+    if (isAnalyzed()) return;
+    super.analyze(analyzer);
     try {
       if (withClause_ != null) withClause_.analyze(analyzer);
     } catch (AnalysisException e) {
@@ -165,16 +182,11 @@ public class InsertStmt extends StatementBase {
         // views and to ignore irrelevant ORDER BYs.
         Analyzer queryStmtAnalyzer = new Analyzer(analyzer);
         queryStmt_.analyze(queryStmtAnalyzer);
-
-        if (analyzer.containsSubquery()) {
-          Preconditions.checkState(queryStmt_ instanceof SelectStmt);
-          StmtRewriter.rewriteStatement((SelectStmt)queryStmt_, queryStmtAnalyzer);
-          queryStmt_ = queryStmt_.clone();
-          queryStmtAnalyzer = new Analyzer(analyzer);
-          queryStmt_.analyze(queryStmtAnalyzer);
-        }
-
-        selectListExprs = Expr.cloneList(queryStmt_.getBaseTblResultExprs());
+        // Subqueries need to be rewritten by the StmtRewriter first.
+        if (analyzer.containsSubquery()) return;
+        // Use getResultExprs() and not getBaseTblResultExprs() here because the final
+        // substitution with TupleIsNullPredicate() wrapping happens in planning.
+        selectListExprs = Expr.cloneList(queryStmt_.getResultExprs());
       } catch (AnalysisException e) {
         if (analyzer.getMissingTbls().isEmpty()) throw e;
       }
@@ -347,7 +359,20 @@ public class InsertStmt extends StatementBase {
             "(%s) because Impala does not have WRITE access to at least one HDFS path" +
             ": %s", targetTableName_, hdfsTable.getFirstLocationWithoutWriteAccess()));
       }
-
+      if (hdfsTable.spansMultipleFileSystems()) {
+        throw new AnalysisException(String.format("Unable to INSERT into target table " +
+            "(%s) because the table spans multiple filesystems.", targetTableName_));
+      }
+      try {
+        if (!FileSystemUtil.isDistributedFileSystem(new Path(hdfsTable.getLocation()))) {
+          throw new AnalysisException(String.format("Unable to INSERT into target " +
+              "table (%s) because %s is not an HDFS filesystem.", targetTableName_,
+               hdfsTable.getLocation()));
+        }
+      } catch (IOException e) {
+        throw new AnalysisException(String.format("Unable to INSERT into target " +
+            "table (%s): %s.", targetTableName_, e.getMessage()), e);
+      }
       for (int colIdx = 0; colIdx < numClusteringCols; ++colIdx) {
         Column col = hdfsTable.getColumns().get(colIdx);
         // Hive has a number of issues handling BOOLEAN partition columns (see HIVE-6590).
@@ -553,18 +578,19 @@ public class InsertStmt extends StatementBase {
     // We don't allow casting to a lower precision type.
     Type colType = column.getType();
     Type exprType = expr.getType();
-    // Trivially compatible.
-    if (colType.equals(exprType)) return expr;
+    // Trivially compatible, unless the type is complex.
+    if (colType.equals(exprType) && !colType.isComplexType()) return expr;
 
     Type compatibleType =
-        Type.getAssignmentCompatibleType(colType, exprType);
+        Type.getAssignmentCompatibleType(colType, exprType, false);
     // Incompatible types.
     if (!compatibleType.isValid()) {
       throw new AnalysisException(
           String.format(
             "Target table '%s' is incompatible with SELECT / PARTITION expressions.\n" +
             "Expression '%s' (type: %s) is not compatible with column '%s' (type: %s)",
-            targetTableName_, expr.toSql(), exprType, column.getName(), colType));
+            targetTableName_, expr.toSql(), exprType.toSql(), column.getName(),
+            colType.toSql()));
     }
     // Loss of precision when inserting into the table.
     if (!compatibleType.equals(colType) && !compatibleType.isNull()) {
@@ -572,8 +598,8 @@ public class InsertStmt extends StatementBase {
           String.format("Possible loss of precision for target table '%s'.\n" +
                         "Expression '%s' (type: %s) would need to be cast to %s" +
                         " for column '%s'",
-                        targetTableName_, expr.toSql(), exprType, colType,
-                        column.getName()));
+                        targetTableName_, expr.toSql(), exprType.toSql(),
+                        colType.toSql(), column.getName()));
     }
     // Add a cast to the selectListExpr to the higher type.
     return expr.castTo(compatibleType);
@@ -624,6 +650,15 @@ public class InsertStmt extends StatementBase {
     // analyze() must have been called before.
     Preconditions.checkState(table_ != null);
     return DataSink.createDataSink(table_, partitionKeyExprs_, overwrite_);
+  }
+
+  /**
+   * Substitutes the result expressions and the partition key expressions with smap.
+   * Preserves the original types of those expressions during the substitution.
+   */
+  public void substituteResultExprs(ExprSubstitutionMap smap, Analyzer analyzer) {
+    resultExprs_ = Expr.substituteList(resultExprs_, smap, analyzer, true);
+    partitionKeyExprs_ = Expr.substituteList(partitionKeyExprs_, smap, analyzer, true);
   }
 
   @Override

@@ -19,8 +19,12 @@
 #include "common/logging.h"
 #include "runtime/multi-precision.h"
 
-using namespace boost::multiprecision;
-using namespace std;
+#include "common/names.h"
+
+namespace mp = boost::multiprecision;
+using std::max;
+using std::min;
+using std::numeric_limits;
 
 namespace impala {
 
@@ -109,8 +113,8 @@ TEST(MultiPrecisionFloatTest, Example) {
   const double r_d(double(123) / 100);
   const double a_d = area_of_a_circle(r_d);
 
-  const cpp_dec_float_50 r_mp(cpp_dec_float_50(123) / 100);
-  const cpp_dec_float_50 a_mp = area_of_a_circle(r_mp);
+  const mp::cpp_dec_float_50 r_mp(mp::cpp_dec_float_50(123) / 100);
+  const mp::cpp_dec_float_50 a_mp = area_of_a_circle(r_mp);
 
   stringstream ss;
 
@@ -126,7 +130,7 @@ TEST(MultiPrecisionFloatTest, Example) {
   EXPECT_EQ(ss.str(), "4.752915525616");
 
   ss.str("");
-  ss << std::setprecision(std::numeric_limits<cpp_dec_float_50>::digits10)
+  ss << std::setprecision(std::numeric_limits<mp::cpp_dec_float_50>::digits10)
      << a_mp;
   EXPECT_EQ(ss.str(), "4.7529155256159981904701331745635599135018975843146");
 }
@@ -137,4 +141,3 @@ int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
-

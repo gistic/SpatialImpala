@@ -276,8 +276,6 @@ public class MetadataOp {
         for (String tabName: fe.getTableNames(db.getName(), "*", user)) {
           if (!tablePattern.matches(tabName)) continue;
           tableList.add(tabName);
-          List<Column> columns = Lists.newArrayList();
-
           Table table = null;
           try {
             table = catalog.getTable(dbName, tabName);
@@ -286,16 +284,13 @@ public class MetadataOp {
           }
           if (table == null) continue;
 
+          List<Column> columns = Lists.newArrayList();
           // If the table is not yet loaded, the columns will be unknown. Add it
           // to the set of missing tables.
           if (!table.isLoaded()) {
             result.missingTbls.add(new TableName(dbName, tabName));
           } else {
-            for (Column column: table.getColumns()) {
-              String colName = column.getName();
-              if (!columnPattern.matches(colName)) continue;
-              columns.add(column);
-            }
+            columns.addAll(fe.getColumns(table, columnPattern, user));
           }
           tablesColumnsList.add(columns);
         }
@@ -350,6 +345,8 @@ public class MetadataOp {
         for (int k = 0; k < dbsMetadata.columns.get(i).get(j).size(); ++k) {
           Column column = dbsMetadata.columns.get(i).get(j).get(k);
           Type colType = column.getType();
+          String colTypeName = getHs2MetadataTypeName(colType);
+
           TResultRow row = new TResultRow();
           row.colVals = Lists.newArrayList();
           row.colVals.add(NULL_COL_VAL); // TABLE_CAT
@@ -357,8 +354,7 @@ public class MetadataOp {
           row.colVals.add(createTColumnValue(tabName)); // TABLE_NAME
           row.colVals.add(createTColumnValue(column.getName())); // COLUMN_NAME
           row.colVals.add(createTColumnValue(colType.getJavaSqlType())); // DATA_TYPE
-          row.colVals.add(
-              createTColumnValue(colType.getPrimitiveType().name())); // TYPE_NAME
+          row.colVals.add(createTColumnValue(colTypeName)); // TYPE_NAME
           row.colVals.add(createTColumnValue(colType.getColumnSize())); // COLUMN_SIZE
           row.colVals.add(NULL_COL_VAL); // BUFFER_LENGTH, unused
           // DECIMAL_DIGITS
@@ -386,6 +382,27 @@ public class MetadataOp {
     }
     LOG.debug("Returning " + result.rows.size() + " table columns");
     return result;
+  }
+
+  /**
+   * Returns the string representation of the given Impala column type to populate the
+   * TYPE_NAME column of the result set returned by a HiveServer2 GetColumns() request.
+   *
+   * To be consistent with Hive's behavior, the TYPE_NAME field is populated with the
+   * primitive type name for scalar types, and with the full toSql() for complex types.
+   * The resulting type names are somewhat inconsistent, because nested types are printed
+   * differently than top-level types, e.g.:
+   * toSql()                     TYPE_NAME
+   * DECIMAL(10,10)         -->  DECIMAL
+   * CHAR(10)               -->  CHAR
+   * VARCHAR(10)            -->  VARCHAR
+   * ARRAY<DECIMAL(10,10)>  -->  ARRAY<DECIMAL(10,10)>
+   * ARRAY<CHAR(10)>        -->  ARRAY<CHAR(10)>
+   * ARRAY<VARCHAR(10)>     -->  ARRAY<VARCHAR(10)>
+   */
+  private static String getHs2MetadataTypeName(Type colType) {
+    if (colType.isScalarType()) return colType.getPrimitiveType().toString();
+    return colType.toSql();
   }
 
   /**

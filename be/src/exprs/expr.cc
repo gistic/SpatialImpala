@@ -30,6 +30,7 @@
 #include "exprs/expr.h"
 #include "exprs/expr-context.h"
 #include "exprs/aggregate-functions.h"
+#include "exprs/bit-byte-functions.h"
 #include "exprs/case-expr.h"
 #include "exprs/cast-functions.h"
 #include "exprs/compound-predicates.h"
@@ -62,12 +63,16 @@
 #include "gen-cpp/Exprs_types.h"
 #include "gen-cpp/ImpalaService_types.h"
 
-using namespace impala;
+#include "common/names.h"
+
 using namespace impala_udf;
-using namespace std;
 using namespace llvm;
 
+namespace impala {
+
 const char* Expr::LLVM_CLASS_NAME = "class.impala::Expr";
+
+const char* Expr::GET_CONSTANT_SYMBOL_PREFIX = "_ZN6impala4Expr11GetConstant";
 
 template<class T>
 bool ParseString(const string& str, T* val) {
@@ -83,8 +88,8 @@ FunctionContext* Expr::RegisterFunctionContext(ExprContext* ctx, RuntimeState* s
   for (int i = 0; i < children_.size(); ++i) {
     arg_types.push_back(AnyValUtil::ColumnTypeToTypeDesc(children_[i]->type_));
   }
-  context_index_ = ctx->Register(state, return_type, arg_types, varargs_buffer_size);
-  return ctx->fn_context(context_index_);
+  fn_context_index_ = ctx->Register(state, return_type, arg_types, varargs_buffer_size);
+  return ctx->fn_context(fn_context_index_);
 }
 
 Expr::Expr(const ColumnType& type, bool is_slotref)
@@ -92,16 +97,16 @@ Expr::Expr(const ColumnType& type, bool is_slotref)
       is_slotref_(is_slotref),
       type_(type),
       output_scale_(-1),
-      context_index_(-1),
+      fn_context_index_(-1),
       ir_compute_fn_(NULL) {
 }
 
 Expr::Expr(const TExprNode& node, bool is_slotref)
     : cache_entry_(NULL),
       is_slotref_(is_slotref),
-      type_(ColumnType(node.type)),
+      type_(ColumnType::FromThrift(node.type)),
       output_scale_(-1),
-      context_index_(-1),
+      fn_context_index_(-1),
       ir_compute_fn_(NULL) {
   if (node.__isset.fn) fn_ = node.fn;
 }
@@ -129,7 +134,7 @@ Status Expr::CreateExprTree(ObjectPool* pool, const TExpr& texpr, ExprContext** 
   // input is empty
   if (texpr.nodes.size() == 0) {
     *ctx = NULL;
-    return Status::OK;
+    return Status::OK();
   }
   int node_idx = 0;
   Expr* e;
@@ -139,7 +144,7 @@ Status Expr::CreateExprTree(ObjectPool* pool, const TExpr& texpr, ExprContext** 
         "Expression tree only partially reconstructed. Not all thrift nodes were used.");
   }
   if (!status.ok()) {
-    LOG(ERROR) << "Could not construct expr tree.\n" << status.GetErrorMsg() << "\n"
+    LOG(ERROR) << "Could not construct expr tree.\n" << status.GetDetail() << "\n"
                << apache::thrift::ThriftDebugString(texpr);
   }
   return status;
@@ -153,7 +158,7 @@ Status Expr::CreateExprTrees(ObjectPool* pool, const vector<TExpr>& texprs,
     RETURN_IF_ERROR(CreateExprTree(pool, texprs[i], &ctx));
     ctxs->push_back(ctx);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status Expr::CreateTreeFromThrift(ObjectPool* pool, const vector<TExprNode>& nodes,
@@ -183,7 +188,7 @@ Status Expr::CreateTreeFromThrift(ObjectPool* pool, const vector<TExprNode>& nod
       return Status("Failed to reconstruct expression tree from thrift.");
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status Expr::CreateExpr(ObjectPool* pool, const TExprNode& texpr_node, Expr** expr) {
@@ -194,13 +199,13 @@ Status Expr::CreateExpr(ObjectPool* pool, const TExprNode& texpr_node, Expr** ex
     case TExprNodeType::STRING_LITERAL:
     case TExprNodeType::DECIMAL_LITERAL:
       *expr = pool->Add(new Literal(texpr_node));
-      return Status::OK;
+      return Status::OK();
     case TExprNodeType::CASE_EXPR:
       if (!texpr_node.__isset.case_expr) {
         return Status("Case expression not set in thrift node");
       }
       *expr = pool->Add(new CaseExpr(texpr_node));
-      return Status::OK;
+      return Status::OK();
     case TExprNodeType::COMPOUND_PRED:
       if (texpr_node.fn.name.function_name == "and") {
         *expr = pool->Add(new AndPredicate(texpr_node));
@@ -210,19 +215,19 @@ Status Expr::CreateExpr(ObjectPool* pool, const TExprNode& texpr_node, Expr** ex
         DCHECK_EQ(texpr_node.fn.name.function_name, "not");
         *expr = pool->Add(new ScalarFnCall(texpr_node));
       }
-      return Status::OK;
+      return Status::OK();
     case TExprNodeType::NULL_LITERAL:
       *expr = pool->Add(new NullLiteral(texpr_node));
-      return Status::OK;
+      return Status::OK();
     case TExprNodeType::SLOT_REF:
       if (!texpr_node.__isset.slot_ref) {
         return Status("Slot reference not set in thrift node");
       }
       *expr = pool->Add(new SlotRef(texpr_node));
-      return Status::OK;
+      return Status::OK();
     case TExprNodeType::TUPLE_IS_NULL_PRED:
       *expr = pool->Add(new TupleIsNullPredicate(texpr_node));
-      return Status::OK;
+      return Status::OK();
     case TExprNodeType::FUNCTION_CALL:
       if (!texpr_node.__isset.fn) {
         return Status("Function not set in thrift node");
@@ -245,7 +250,7 @@ Status Expr::CreateExpr(ObjectPool* pool, const TExprNode& texpr_node, Expr** ex
       } else {
         *expr = pool->Add(new ScalarFnCall(texpr_node));
       }
-      return Status::OK;
+      return Status::OK();
     default:
       stringstream os;
       os << "Unknown expr node type: " << texpr_node.node_type;
@@ -257,8 +262,11 @@ struct MemLayoutData {
   int expr_idx;
   int byte_size;
   bool variable_length;
+  int alignment;
 
   // TODO: sort by type as well?  Any reason to do this?
+  // TODO: would sorting in reverse order of size be faster due to better packing?
+  // TODO: why put var-len at end?
   bool operator<(const MemLayoutData& rhs) const {
     // variable_len go at end
     if (this->variable_length && !rhs.variable_length) return false;
@@ -274,45 +282,56 @@ int Expr::ComputeResultsLayout(const vector<Expr*>& exprs, vector<int>* offsets,
     return 0;
   }
 
+  // Don't align more than word (8-byte) size. There's no performance gain beyond 8-byte
+  // alignment, and there is a performance gain to keeping the results buffer small. This
+  // is consistent with what compilers do.
+  int MAX_ALIGNMENT = sizeof(int64_t);
+
   vector<MemLayoutData> data;
   data.resize(exprs.size());
 
   // Collect all the byte sizes and sort them
   for (int i = 0; i < exprs.size(); ++i) {
+    DCHECK(!exprs[i]->type().IsComplexType()) << "NYI";
     data[i].expr_idx = i;
-    if (exprs[i]->type().IsVarLen()) {
-      data[i].byte_size = 16;
-      data[i].variable_length = true;
+    data[i].byte_size = exprs[i]->type().GetSlotSize();
+    DCHECK_GT(data[i].byte_size, 0);
+    data[i].variable_length = exprs[i]->type().IsVarLenStringType();
+
+    bool fixed_len_char = exprs[i]->type().type == TYPE_CHAR && !data[i].variable_length;
+
+    // Compute the alignment of this value. Values should be self-aligned for optimal
+    // memory access speed, up to the max alignment (e.g., if this value is an int32_t,
+    // its offset in the buffer should be divisible by sizeof(int32_t)).
+    // TODO: is self-alignment really necessary for perf?
+    if (!fixed_len_char) {
+      data[i].alignment = min(data[i].byte_size, MAX_ALIGNMENT);
     } else {
-      data[i].byte_size = exprs[i]->type().GetByteSize();
-      data[i].variable_length = false;
+      // Fixed-len chars are aligned to a one-byte boundary, as if they were char[],
+      // leaving no padding between them and the previous value.
+      data[i].alignment = 1;
     }
-    DCHECK_NE(data[i].byte_size, 0);
   }
 
   sort(data.begin(), data.end());
 
   // Walk the types and store in a packed aligned layout
-  int max_alignment = sizeof(int64_t);
-  int current_alignment = data[0].byte_size;
   int byte_offset = 0;
 
   offsets->resize(exprs.size());
-  offsets->clear();
   *var_result_begin = -1;
 
   for (int i = 0; i < data.size(); ++i) {
-    DCHECK_GE(data[i].byte_size, current_alignment);
-    // Don't align more than word (8-byte) size.  This is consistent with what compilers
-    // do.
-    if (data[i].byte_size != current_alignment && current_alignment != max_alignment) {
-      byte_offset += data[i].byte_size - current_alignment;
-      current_alignment = min(data[i].byte_size, max_alignment);
-    }
+
+    // Increase byte_offset so data[i] is at the right alignment (i.e. add padding between
+    // this value and the previous).
+    byte_offset = BitUtil::RoundUp(byte_offset, data[i].alignment);
+
     (*offsets)[data[i].expr_idx] = byte_offset;
     if (data[i].variable_length && *var_result_begin == -1) {
       *var_result_begin = byte_offset;
     }
+    DCHECK(!(i == 0 && byte_offset > 0)) << "first value should be at start of layout";
     byte_offset += data[i].byte_size;
   }
 
@@ -337,7 +356,7 @@ Status Expr::Prepare(const vector<ExprContext*>& ctxs, RuntimeState* state,
   for (int i = 0; i < ctxs.size(); ++i) {
     RETURN_IF_ERROR(ctxs[i]->Prepare(state, row_desc, tracker));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status Expr::Prepare(RuntimeState* state, const RowDescriptor& row_desc,
@@ -346,14 +365,14 @@ Status Expr::Prepare(RuntimeState* state, const RowDescriptor& row_desc,
   for (int i = 0; i < children_.size(); ++i) {
     RETURN_IF_ERROR(children_[i]->Prepare(state, row_desc, context));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status Expr::Open(const vector<ExprContext*>& ctxs, RuntimeState* state) {
   for (int i = 0; i < ctxs.size(); ++i) {
     RETURN_IF_ERROR(ctxs[i]->Open(state));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status Expr::Open(RuntimeState* state, ExprContext* context,
@@ -361,18 +380,23 @@ Status Expr::Open(RuntimeState* state, ExprContext* context,
   for (int i = 0; i < children_.size(); ++i) {
     RETURN_IF_ERROR(children_[i]->Open(state, context, scope));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
-Status Expr::Clone(const vector<ExprContext*>& ctxs, RuntimeState* state,
-                   vector<ExprContext*>* new_ctxs) {
+Status Expr::CloneIfNotExists(const vector<ExprContext*>& ctxs, RuntimeState* state,
+    vector<ExprContext*>* new_ctxs) {
   DCHECK(new_ctxs != NULL);
-  DCHECK(new_ctxs->empty());
+  if (!new_ctxs->empty()) {
+    // 'ctxs' was already cloned into '*new_ctxs', nothing to do.
+    DCHECK_EQ(new_ctxs->size(), ctxs.size());
+    for (int i = 0; i < new_ctxs->size(); ++i) DCHECK((*new_ctxs)[i]->is_clone_);
+    return Status::OK();
+  }
   new_ctxs->resize(ctxs.size());
   for (int i = 0; i < ctxs.size(); ++i) {
     RETURN_IF_ERROR(ctxs[i]->Clone(state, &(*new_ctxs)[i]));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 string Expr::DebugString() const {
@@ -465,12 +489,13 @@ void Expr::InitBuiltinsDummy() {
   // from that class in.
   // TODO: is there a better way to do this?
   AggregateFunctions::InitNull(NULL, NULL);
+  BitByteFunctions::CountSet(NULL, TinyIntVal::null());
   CastFunctions::CastToBooleanVal(NULL, TinyIntVal::null());
   CompoundPredicate::Not(NULL, BooleanVal::null());
   ConditionalFunctions::NullIfZero(NULL, TinyIntVal::null());
   DecimalFunctions::Precision(NULL, DecimalVal::null());
   DecimalOperators::CastToDecimalVal(NULL, DecimalVal::null());
-  InPredicate::In(NULL, BigIntVal::null(), 0, NULL);
+  InPredicate::InIterate(NULL, BigIntVal::null(), 0, NULL);
   IsNullPredicate::IsNull(NULL, BooleanVal::null());
   LikePredicate::Like(NULL, StringVal::null(), StringVal::null());
   Operators::Add_IntVal_IntVal(NULL, IntVal::null(), IntVal::null());
@@ -536,10 +561,73 @@ AnyVal* Expr::GetConstVal(ExprContext* context) {
   return constant_val_.get();
 }
 
-Status Expr::GetCodegendComputeFnWrapper(RuntimeState* state, llvm::Function** fn) {
+
+template<> int Expr::GetConstant(const FunctionContext& ctx, ExprConstant c, int i) {
+  switch (c) {
+    case RETURN_TYPE_SIZE:
+      DCHECK_EQ(i, -1);
+      return AnyValUtil::TypeDescToColumnType(ctx.GetReturnType()).GetByteSize();
+    case ARG_TYPE_SIZE:
+      DCHECK_GE(i, 0);
+      DCHECK_LT(i, ctx.GetNumArgs());
+      return AnyValUtil::TypeDescToColumnType(*ctx.GetArgType(i)).GetByteSize();
+    default:
+      CHECK(false) << "NYI";
+      return -1;
+  }
+}
+
+Value* Expr::GetIrConstant(LlvmCodeGen* codegen, ExprConstant c, int i) {
+  switch (c) {
+    case RETURN_TYPE_SIZE:
+      DCHECK_EQ(i, -1);
+      return ConstantInt::get(codegen->GetType(TYPE_INT), type_.GetByteSize());
+    case ARG_TYPE_SIZE:
+      DCHECK_GE(i, 0);
+      DCHECK_LT(i, children_.size());
+      return ConstantInt::get(
+          codegen->GetType(TYPE_INT), children_[i]->type_.GetByteSize());
+    default:
+      CHECK(false) << "NYI";
+      return NULL;
+  }
+}
+
+int Expr::InlineConstants(LlvmCodeGen* codegen, Function* fn) {
+  int replaced = 0;
+  for (inst_iterator iter = inst_begin(fn), end = inst_end(fn); iter != end; ) {
+    // Increment iter now so we don't mess it up modifying the instrunction below
+    Instruction* instr = &*(iter++);
+
+    // Look for call instructions
+    if (!isa<CallInst>(instr)) continue;
+    CallInst* call_instr = cast<CallInst>(instr);
+    Function* called_fn = call_instr->getCalledFunction();
+
+    // Look for call to Expr::GetConstant()
+    if (called_fn == NULL ||
+        called_fn->getName().find(GET_CONSTANT_SYMBOL_PREFIX) == string::npos) continue;
+
+    // 'c' and 'i' arguments must be constant
+    ConstantInt* c_arg = dyn_cast<ConstantInt>(call_instr->getArgOperand(1));
+    ConstantInt* i_arg = dyn_cast<ConstantInt>(call_instr->getArgOperand(2));
+    DCHECK(c_arg != NULL) << "Non-constant 'c' argument to Expr::GetConstant()";
+    DCHECK(i_arg != NULL) << "Non-constant 'i' argument to Expr::GetConstant()";
+
+    // Replace the called function with the appropriate constant
+    ExprConstant c_val = static_cast<ExprConstant>(c_arg->getSExtValue());
+    int i_val = static_cast<int>(i_arg->getSExtValue());
+    call_instr->replaceAllUsesWith(GetIrConstant(codegen, c_val, i_val));
+    call_instr->eraseFromParent();
+    ++replaced;
+  }
+  return replaced;
+}
+
+Status Expr::GetCodegendComputeFnWrapper(RuntimeState* state, Function** fn) {
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
-    return Status::OK;
+    return Status::OK();
   }
   LlvmCodeGen* codegen;
   RETURN_IF_ERROR(state->GetCodegen(&codegen));
@@ -559,7 +647,7 @@ Status Expr::GetCodegendComputeFnWrapper(RuntimeState* state, llvm::Function** f
   builder.CreateRet(ret);
   ir_compute_fn_ = codegen->FinalizeFunction(ir_compute_fn_);
   *fn = ir_compute_fn_;
-  return Status::OK;
+  return Status::OK();
 }
 
 // At least one of these should always be subclassed.
@@ -595,6 +683,10 @@ StringVal Expr::GetStringVal(ExprContext* context, TupleRow* row) {
   DCHECK(false) << DebugString();
   return StringVal::null();
 }
+ArrayVal Expr::GetArrayVal(ExprContext* context, TupleRow* row) {
+  DCHECK(false) << DebugString();
+  return ArrayVal::null();
+}
 TimestampVal Expr::GetTimestampVal(ExprContext* context, TupleRow* row) {
   DCHECK(false) << DebugString();
   return TimestampVal::null();
@@ -602,4 +694,14 @@ TimestampVal Expr::GetTimestampVal(ExprContext* context, TupleRow* row) {
 DecimalVal Expr::GetDecimalVal(ExprContext* context, TupleRow* row) {
   DCHECK(false) << DebugString();
   return DecimalVal::null();
+}
+
+Status Expr::GetFnContextError(ExprContext* ctx) {
+  if (fn_context_index_ != -1) {
+    FunctionContext* fn_ctx = ctx->fn_context(fn_context_index_);
+    if (fn_ctx->has_error()) return Status(fn_ctx->error_msg());
+  }
+  return Status::OK();
+}
+
 }

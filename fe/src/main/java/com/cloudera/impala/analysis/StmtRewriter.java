@@ -16,22 +16,22 @@ package com.cloudera.impala.analysis;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.cloudera.impala.analysis.AnalysisContext.AnalysisResult;
-import com.cloudera.impala.catalog.Type;
+import com.cloudera.impala.analysis.UnionStmt.UnionOperand;
 import com.cloudera.impala.common.AnalysisException;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 
 /**
  * Class representing a statement rewriter. A statement rewriter performs subquery
  * unnesting on an analyzed parse tree.
+ * TODO: Now that we have a nested-loop join supporting all join modes we could
+ * allow more rewrites, although it is not clear we would always want to.
  */
 public class StmtRewriter {
   private final static Logger LOG = LoggerFactory.getLogger(StmtRewriter.class);
@@ -42,30 +42,42 @@ public class StmtRewriter {
    */
   public static StatementBase rewrite(AnalysisResult analysisResult)
       throws AnalysisException {
-    StatementBase rewrittenStmt = null;
-    if (analysisResult.getStmt() instanceof SelectStmt) {
-      SelectStmt analyzedStmt = (SelectStmt)analysisResult.getStmt();
-      rewriteStatement(analyzedStmt, analysisResult.getAnalyzer());
-      rewrittenStmt = analyzedStmt.clone();
-    } else if (analysisResult.getStmt() instanceof InsertStmt) {
-      // For an InsertStmt, rewrites are performed during its analysis.
-      // Clone the insert stmt to reset its analysis state.
-      rewrittenStmt = ((InsertStmt)analysisResult.getStmt()).clone();
-    } else if (analysisResult.getStmt() instanceof CreateTableAsSelectStmt) {
-      // For a CTAS, rewrites are performed during its analysis.
-      CreateTableAsSelectStmt ctasStmt =
-          (CreateTableAsSelectStmt)analysisResult.getStmt();
-      Preconditions.checkState(ctasStmt.getQueryStmt() instanceof SelectStmt);
-      // Create a new CTAS from the original create statement and the
-      // rewritten insert statement.
-      Preconditions.checkNotNull(analysisResult.getTmpCreateTableStmt());
-      rewrittenStmt = new CreateTableAsSelectStmt(analysisResult.getTmpCreateTableStmt(),
-          ctasStmt.getQueryStmt().clone());
+    // Analyzed stmt that contains a query statement with subqueries to be rewritten.
+    StatementBase stmt = analysisResult.getStmt();
+    Preconditions.checkState(stmt.isAnalyzed());
+    // Analyzed query statement to be rewritten.
+    QueryStmt queryStmt = null;
+    if (stmt instanceof QueryStmt) {
+      queryStmt = (QueryStmt) analysisResult.getStmt();
+    } else if (stmt instanceof InsertStmt) {
+      queryStmt = ((InsertStmt) analysisResult.getStmt()).getQueryStmt();
+    } else if (stmt instanceof CreateTableAsSelectStmt) {
+      queryStmt = ((CreateTableAsSelectStmt) analysisResult.getStmt()).getQueryStmt();
     } else {
       throw new AnalysisException("Unsupported statement containing subqueries: " +
-          analysisResult.getStmt().toSql());
+          stmt.toSql());
     }
-    return rewrittenStmt;
+    rewriteQueryStatement(queryStmt, queryStmt.getAnalyzer());
+    stmt.reset();
+    return stmt;
+  }
+
+  /**
+   * Calls the appropriate rewrite method based on the specific type of query stmt. See
+   * rewriteSelectStatement() and rewriteUnionStatement() documentation.
+   */
+  public static void rewriteQueryStatement(QueryStmt stmt, Analyzer analyzer)
+      throws AnalysisException {
+    Preconditions.checkNotNull(stmt);
+    Preconditions.checkNotNull(stmt.isAnalyzed());
+    if (stmt instanceof SelectStmt) {
+      rewriteSelectStatement((SelectStmt)stmt, analyzer);
+    } else if (stmt instanceof UnionStmt) {
+      rewriteUnionStatement((UnionStmt)stmt, analyzer);
+    } else {
+      throw new AnalysisException("Subqueries not supported for " +
+          stmt.getClass().getSimpleName() + " statements");
+    }
   }
 
   /**
@@ -73,12 +85,13 @@ public class StmtRewriter {
    * are currently supported in FROM and WHERE clauses. The rewrite is performed in
    * place and not in a clone of SelectStmt because it requires the stmt to be analyzed.
    */
-  public static void rewriteStatement(SelectStmt stmt, Analyzer analyzer)
+  private static void rewriteSelectStatement(SelectStmt stmt, Analyzer analyzer)
       throws AnalysisException {
     // Rewrite all the subqueries in the FROM clause.
     for (TableRef tblRef: stmt.tableRefs_) {
       if (!(tblRef instanceof InlineViewRef)) continue;
-      ((InlineViewRef)tblRef).rewrite();
+      InlineViewRef inlineViewRef = (InlineViewRef)tblRef;
+      rewriteQueryStatement(inlineViewRef.getViewStmt(), inlineViewRef.getAnalyzer());
     }
     // Rewrite all the subqueries in the WHERE clause.
     if (stmt.hasWhereClause()) {
@@ -94,6 +107,19 @@ public class StmtRewriter {
     }
     stmt.sqlString_ = null;
     LOG.trace("rewritten stmt: " + stmt.toSql());
+  }
+
+  /**
+   * Rewrite all operands in a UNION. The conditions that apply to SelectStmt rewriting
+   * also apply here.
+   */
+  private static void rewriteUnionStatement(UnionStmt stmt, Analyzer analyzer)
+      throws AnalysisException {
+    for (UnionOperand operand: stmt.getOperands()) {
+      Preconditions.checkState(operand.getQueryStmt() instanceof SelectStmt);
+      StmtRewriter.rewriteSelectStatement(
+          (SelectStmt)operand.getQueryStmt(), operand.getAnalyzer());
+    }
   }
 
   /**
@@ -190,6 +216,18 @@ public class StmtRewriter {
             "expression: " + conjunct.toSql());
       }
 
+      if (conjunct instanceof ExistsPredicate) {
+        // Check if we can determine the result of an ExistsPredicate during analysis.
+        // If so, replace the predicate with a BoolLiteral predicate and remove it from
+        // the list of predicates to be rewritten.
+        BoolLiteral boolLiteral = replaceExistsPredicate((ExistsPredicate) conjunct);
+        if (boolLiteral != null) {
+          boolLiteral.analyze(analyzer);
+          smap.put(conjunct, boolLiteral);
+          continue;
+        }
+      }
+
       // Replace all the supported exprs with subqueries with true BoolLiterals
       // using an smap.
       BoolLiteral boolLiteral = new BoolLiteral(true);
@@ -197,7 +235,7 @@ public class StmtRewriter {
       smap.put(conjunct, boolLiteral);
       exprsWithSubqueries.add(conjunct);
     }
-    stmt.whereClause_ = stmt.whereClause_.substitute(smap, analyzer);
+    stmt.whereClause_ = stmt.whereClause_.substitute(smap, analyzer, false);
 
     boolean hasNewVisibleTuple = false;
     // Recursively rewrite all the exprs that contain subqueries and merge them
@@ -209,6 +247,25 @@ public class StmtRewriter {
     }
     if (canEliminate(stmt.whereClause_)) stmt.whereClause_ = null;
     if (hasNewVisibleTuple) replaceUnqualifiedStarItems(stmt, numTableRefs);
+  }
+
+  /**
+   * Replace an ExistsPredicate that contains a subquery with a BoolLiteral if we
+   * can determine its result without evaluating it. Return null if the result of the
+   * ExistsPredicate can only be determined at run-time.
+   */
+  private static BoolLiteral replaceExistsPredicate(ExistsPredicate predicate) {
+    Subquery subquery = predicate.getSubquery();
+    Preconditions.checkNotNull(subquery);
+    SelectStmt subqueryStmt = (SelectStmt) subquery.getStatement();
+    BoolLiteral boolLiteral = null;
+    if (subqueryStmt.getAnalyzer().hasEmptyResultSet()) {
+      boolLiteral = new BoolLiteral(predicate.isNotExists());
+    } else if (subqueryStmt.hasAggInfo() && subqueryStmt.getAggInfo().hasAggregateExprs()
+          && !subqueryStmt.hasAnalyticInfo() && subqueryStmt.getHavingPred() == null) {
+      boolLiteral = new BoolLiteral(!predicate.isNotExists());
+    }
+    return boolLiteral;
   }
 
   /**
@@ -235,14 +292,16 @@ public class StmtRewriter {
     // Extract the subquery and rewrite it.
     Subquery subquery = expr.getSubquery();
     Preconditions.checkNotNull(subquery);
-    rewriteStatement((SelectStmt)subquery.getStatement(), subquery.getAnalyzer());
+    rewriteSelectStatement((SelectStmt) subquery.getStatement(), subquery.getAnalyzer());
     // Create a new Subquery with the rewritten stmt and use a substitution map
     // to replace the original subquery from the expr.
-    Subquery newSubquery = new Subquery(subquery.getStatement().clone());
+    QueryStmt rewrittenStmt = subquery.getStatement().clone();
+    rewrittenStmt.reset();
+    Subquery newSubquery = new Subquery(rewrittenStmt);
     newSubquery.analyze(analyzer);
     ExprSubstitutionMap smap = new ExprSubstitutionMap();
     smap.put(subquery, newSubquery);
-    return expr.substitute(smap, analyzer);
+    return expr.substitute(smap, analyzer, false);
   }
 
   /**
@@ -253,11 +312,11 @@ public class StmtRewriter {
    * due to a CROSS JOIN or a LEFT OUTER JOIN.
    *
    * This process works as follows:
-   * 1. Extract all correlated predicates from the subquery's WHERE
+   * 1. Create a new inline view with the subquery as the view's stmt. Changes
+   *    made to the subquery's stmt will affect the inline view.
+   * 2. Extract all correlated predicates from the subquery's WHERE
    *    clause; the subquery's select list may be extended with new items and a
    *    GROUP BY clause may be added.
-   * 2. Create a new inline view using the transformed subquery stmt; the new
-   *    inline view is analyzed.
    * 3. Add the inline view to stmt's tableRefs and create a
    *    join (left semi join, anti-join, left outer join for agg functions
    *    that return a non-NULL value for an empty input, or cross-join) with
@@ -275,8 +334,16 @@ public class StmtRewriter {
     boolean updateSelectList = false;
 
     SelectStmt subqueryStmt = (SelectStmt)expr.getSubquery().getStatement();
-    // Generate an alias for the new inline view.
-    String inlineViewAlias = stmt.getTableAliasGenerator().getNextAlias();
+    // Create a new inline view from the subquery stmt. The inline view will be added
+    // to the stmt's table refs later. Explicitly set the inline view's column labels
+    // to eliminate any chance that column aliases from the parent query could reference
+    // select items from the inline view after the rewrite.
+    List<String> colLabels = Lists.newArrayList();
+    for (int i = 0; i < subqueryStmt.getColLabels().size(); ++i) {
+      colLabels.add(subqueryStmt.getColumnAliasGenerator().getNextAlias());
+    }
+    InlineViewRef inlineView = new InlineViewRef(
+        stmt.getTableAliasGenerator().getNextAlias(), subqueryStmt, colLabels);
 
     // Extract all correlated predicates from the subquery.
     List<Expr> onClauseConjuncts = extractCorrelatedPredicates(subqueryStmt);
@@ -285,40 +352,25 @@ public class StmtRewriter {
       // For correlated subqueries that are eligible for rewrite by transforming
       // into a join, a LIMIT clause has no effect on the results, so we can
       // safely remove it.
-      subqueryStmt.limitElement_ = null;
+      subqueryStmt.limitElement_ = new LimitElement(null, null);
     }
 
     // Update the subquery's select list and/or its GROUP BY clause by adding
-    // SlotRefs from the extracted correlated predicates.
+    // exprs from the extracted correlated predicates.
     boolean updateGroupBy = expr.getSubquery().isScalarSubquery() ||
-        (expr instanceof ExistsPredicate && subqueryStmt.hasAggInfo());
-    Map<Expr, Expr> exprMap = Maps.newHashMap();
-    List<TupleId> subqueryTupleIds = subqueryStmt.getTableRefIds();
+        (expr instanceof ExistsPredicate &&
+         subqueryStmt.hasAggInfo() && !subqueryStmt.getSelectList().isDistinct());
+    List<Expr> lhsExprs = Lists.newArrayList();
+    List<Expr> rhsExprs = Lists.newArrayList();
     for (Expr conjunct: onClauseConjuncts) {
-      updateSubquery(subqueryStmt, conjunct, subqueryTupleIds, inlineViewAlias,
-          exprMap, updateGroupBy);
+      updateInlineView(inlineView, conjunct, stmt.getTableRefIds(),
+          lhsExprs, rhsExprs, updateGroupBy);
     }
 
-    if (expr instanceof ExistsPredicate) {
-      // Modify the select list of an EXISTS subquery to avoid potential name
-      // clashes with stmt's select list items in case we rewrite it using a
-      // CROSS JOIN. Also, we reduce the overhead of computing the CROSS JOIN by
-      // eliminating unecessary columns from the subquery's select list; for
-      // uncorrelated subqueries, we limit the number of rows returned by the subquery.
-      pruneSelectList(subqueryStmt);
-      if (onClauseConjuncts.isEmpty()) subqueryStmt.setLimit(1);
-    } else {
-      // Create an alias for the first item of the subquery's select list; to be
-      // used later for the construction of a join conjunct.
-      List<SelectListItem> selectList = subqueryStmt.getSelectList().getItems();
-      if (selectList.get(0).getAlias() == null) {
-        selectList.get(0).setAlias(subqueryStmt.getColumnAliasGenerator().getNextAlias());
-      }
-    }
-
-    // Create a new inline view from the modified subquery stmt and append it to
-    // stmt's tableRefs.
-    InlineViewRef inlineView = new InlineViewRef(inlineViewAlias, subqueryStmt.clone());
+    // Analyzing the inline view triggers reanalysis of the subquery's select statement.
+    // However the statement is already analyzed and since statement analysis is not
+    // idempotent, the analysis needs to be reset.
+    inlineView.reset();
     inlineView.analyze(analyzer);
     inlineView.setLeftTblRef(stmt.tableRefs_.get(stmt.tableRefs_.size() - 1));
     stmt.tableRefs_.add(inlineView);
@@ -360,29 +412,48 @@ public class StmtRewriter {
 
     if (onClausePredicate == null) {
       Preconditions.checkState(expr instanceof ExistsPredicate);
-      // TODO: Remove this when we support independent subquery evaluation.
-      if (((ExistsPredicate)expr).isNotExists()) {
-        throw new AnalysisException("Unsupported uncorrelated NOT EXISTS subquery: " +
-            subqueryStmt.toSql());
+      ExistsPredicate existsPred = (ExistsPredicate) expr;
+      // Note that the concept of a 'correlated inline view' is similar but not the same
+      // as a 'correlated subquery', i.e., a subquery with a correlated predicate.
+      if (inlineView.isCorrelated()) {
+        if (existsPred.isNotExists()) {
+          inlineView.setJoinOp(JoinOperator.LEFT_ANTI_JOIN);
+        } else {
+          inlineView.setJoinOp(JoinOperator.LEFT_SEMI_JOIN);
+        }
+        // No visible tuples added.
+        return false;
+      } else {
+        // TODO: Remove this when we support independent subquery evaluation.
+        if (existsPred.isNotExists()) {
+          throw new AnalysisException("Unsupported uncorrelated NOT EXISTS subquery: " +
+              subqueryStmt.toSql());
+        }
+        // For uncorrelated subqueries, we limit the number of rows returned by the
+        // subquery.
+        subqueryStmt.setLimit(1);
+        // We don't have an ON clause predicate to create an equi-join. Rewrite the
+        // subquery using a CROSS JOIN.
+        // TODO This is very expensive. Remove it when we implement independent
+        // subquery evaluation.
+        inlineView.setJoinOp(JoinOperator.CROSS_JOIN);
+        LOG.warn("uncorrelated subquery rewritten using a cross join");
+        // Indicate that new visible tuples may be added in stmt's select list.
+        return true;
       }
-      // We don't have an ON clause predicate to create an equi-join. Rewrite the
-      // subquery using a CROSS JOIN.
-      // TODO This is very expensive. Remove it when we implement independent
-      // subquery evaluation.
-      inlineView.setJoinOp(JoinOperator.CROSS_JOIN);
-      LOG.warn("uncorrelated subquery rewritten using a cross join");
-      // Indicate that new visible tuples may be added in stmt's select list.
-      return true;
     }
 
     // Create an smap from the original select-list exprs of the select list to
     // the corresponding inline-view columns.
     ExprSubstitutionMap smap = new ExprSubstitutionMap();
-    for (Map.Entry<Expr, Expr> entry: exprMap.entrySet()) {
-      entry.getValue().analyze(analyzer);
-      smap.put(entry.getKey(), entry.getValue());
+    Preconditions.checkState(lhsExprs.size() == rhsExprs.size());
+    for (int i = 0; i < lhsExprs.size(); ++i) {
+      Expr lhsExpr = lhsExprs.get(i);
+      Expr rhsExpr = rhsExprs.get(i);
+      rhsExpr.analyze(analyzer);
+      smap.put(lhsExpr, rhsExpr);
     }
-    onClausePredicate = onClausePredicate.substitute(smap, analyzer);
+    onClausePredicate = onClausePredicate.substitute(smap, analyzer, false);
 
     // Check for references to ancestor query blocks (cycles in the dependency
     // graph of query blocks are not supported).
@@ -415,7 +486,7 @@ public class StmtRewriter {
       break;
     }
 
-    if (!hasEqJoinPred) {
+    if (!hasEqJoinPred && !inlineView.isCorrelated()) {
       // TODO: Remove this when independent subquery evaluation is implemented.
       // TODO: Requires support for non-equi joins.
       boolean hasGroupBy = ((SelectStmt) inlineView.getViewStmt()).hasGroupByClause();
@@ -435,7 +506,7 @@ public class StmtRewriter {
       return true;
     }
 
-    // We have a valid equi-join conjunct.
+    // We have a valid equi-join conjunct or the inline view is correlated.
     if (expr instanceof InPredicate && ((InPredicate)expr).isNotIn() ||
         expr instanceof ExistsPredicate && ((ExistsPredicate)expr).isNotExists()) {
       // For the case of a NOT IN with an eq join conjunct, replace the join
@@ -479,7 +550,7 @@ public class StmtRewriter {
     ArrayList<SelectListItem> newItems = Lists.newArrayList();
     for (int i = 0; i < stmt.selectList_.getItems().size(); ++i) {
       SelectListItem item = stmt.selectList_.getItems().get(i);
-      if (!item.isStar() || item.getTblName() != null) {
+      if (!item.isStar() || item.getRawPath() != null) {
         newItems.add(item);
         continue;
       }
@@ -491,44 +562,14 @@ public class StmtRewriter {
             tableRef.getJoinOp() == JoinOperator.LEFT_ANTI_JOIN) {
           continue;
         }
-        newItems.add(SelectListItem.createStarItem(tableRef.getAliasAsName()));
+        newItems.add(SelectListItem.createStarItem(
+            Lists.newArrayList(tableRef.getUniqueAlias())));
       }
     }
     Preconditions.checkState(!newItems.isEmpty());
     boolean isDistinct = stmt.selectList_.isDistinct();
     stmt.selectList_ =
         new SelectList(newItems, isDistinct, stmt.selectList_.getPlanHints());
-  }
-
-  /**
-   * Prune stmt's select list by keeping the minimum set of items. Star items
-   * are replaced by a constant expr. An alias is generated for all other (non-star)
-   * items. We need to maintain non-star items because the select list may
-   * have been expanded with new items from correlated predicates during
-   * subquery rewrite.
-   */
-  private static void pruneSelectList(SelectStmt stmt) throws AnalysisException {
-    ArrayList<SelectListItem> newItems = Lists.newArrayList();
-    boolean replacedStarItem = false;
-    for (int i = 0; i < stmt.selectList_.getItems().size(); ++i) {
-      SelectListItem item = stmt.selectList_.getItems().get(i);
-      if (item.isStar()) {
-        if (replacedStarItem) continue;
-        newItems.add(new SelectListItem(new NumericLiteral(Long.toString(1),
-            Type.BIGINT), stmt.getColumnAliasGenerator().getNextAlias()));
-        replacedStarItem = true;
-        continue;
-      }
-      if (item.getAlias() == null) {
-        newItems.add(new SelectListItem(item.getExpr(),
-            stmt.getColumnAliasGenerator().getNextAlias()));
-      } else {
-        newItems.add(new SelectListItem(item.getExpr(), item.getAlias()));
-      }
-    }
-    boolean isDistinct = stmt.selectList_.isDistinct();
-    stmt.selectList_ = new SelectList(
-        newItems, isDistinct, stmt.selectList_.getPlanHints());
   }
 
   /**
@@ -642,38 +683,77 @@ public class StmtRewriter {
   }
 
   /**
-   * Update a subquery by expanding its select list with SlotRefs from 'expr'.
-   * If 'updateGroupBy' is true, the SlotRefs from 'expr' are also added in
-   * stmt's GROUP BY clause. 'expr' is a correlated predicate from the
-   * subquery that will be 'moved' to an ON clause in the subquery's parent query
-   * block. Hence, we need to make sure that every SlotRef of 'expr' originating from
-   * the subquery references an item in the subquery's select list.
+   * Update the subquery within an inline view by expanding its select list with exprs
+   * from a correlated predicate 'expr' that will be 'moved' to an ON clause in the
+   * subquery's parent query block. We need to make sure that every expr extracted from
+   * the subquery references an item in the subquery's select list. If 'updateGroupBy'
+   * is true, the exprs extracted from 'expr' are also added in stmt's GROUP BY clause.
+   * Throws an AnalysisException if we need to update the GROUP BY clause but
+   * both the lhs and rhs of 'expr' reference a tuple of the subquery stmt.
    */
-  private static void updateSubquery(SelectStmt stmt, Expr expr,
-      List<TupleId> subqueryTblIds, String inlineViewAlias, Map<Expr, Expr> exprMap,
-      boolean updateGroupBy) {
+  private static void updateInlineView(InlineViewRef inlineView, Expr expr,
+      List<TupleId> parentQueryTids, List<Expr> lhsExprs, List<Expr> rhsExprs,
+      boolean updateGroupBy) throws AnalysisException {
+    SelectStmt stmt = (SelectStmt)inlineView.getViewStmt();
+    List<TupleId> subqueryTblIds = stmt.getTableRefIds();
     ArrayList<Expr> groupByExprs = null;
     if (updateGroupBy) groupByExprs = Lists.newArrayList();
+
+    List<SelectListItem> items = stmt.selectList_.getItems();
+    // Collect all the SlotRefs from 'expr' and identify those that are bound by
+    // subquery tuple ids.
     ArrayList<Expr> slotRefs = Lists.newArrayList();
     expr.collectAll(Predicates.instanceOf(SlotRef.class), slotRefs);
-    List<SelectListItem> items = stmt.selectList_.getItems();
+    List<Expr> exprsBoundBySubqueryTids = Lists.newArrayList();
     for (Expr slotRef: slotRefs) {
-      // If the slotRef belongs to the subquery, add it to the select list and
-      // register it for substitution. We use a temporary substitution map
-      // because we cannot at this point analyze the new select list expr. Once
-      // the new inline view is analyzed, the entries from this map will be
-      // added to an ExprSubstitutionMap.
       if (slotRef.isBoundByTupleIds(subqueryTblIds)) {
-        String colAlias = stmt.getColumnAliasGenerator().getNextAlias();
-        items.add(new SelectListItem(slotRef, colAlias));
-        exprMap.put(slotRef, new SlotRef(new TableName(null, inlineViewAlias), colAlias));
-        if (groupByExprs != null) groupByExprs.add(slotRef);
+        exprsBoundBySubqueryTids.add(slotRef);
       }
+    }
+    // The correlated predicate only references slots from a parent block,
+    // no need to update the subquery's select or group by list.
+    if (exprsBoundBySubqueryTids.isEmpty()) return;
+    if (updateGroupBy) {
+      Preconditions.checkState(expr instanceof BinaryPredicate);
+      Expr exprBoundBySubqueryTids = null;
+      if (exprsBoundBySubqueryTids.size() > 1) {
+        // If the predicate contains multiple SlotRefs bound by subquery tuple
+        // ids, they must all be on the same side of that predicate.
+        if (expr.getChild(0).isBoundByTupleIds(subqueryTblIds) &&
+           expr.getChild(1).isBoundByTupleIds(parentQueryTids)) {
+          exprBoundBySubqueryTids = expr.getChild(0);
+        } else if (expr.getChild(0).isBoundByTupleIds(parentQueryTids) &&
+            expr.getChild(1).isBoundByTupleIds(subqueryTblIds)) {
+          exprBoundBySubqueryTids = expr.getChild(1);
+        } else {
+          throw new AnalysisException("All subquery columns " +
+              "that participate in a predicate must be on the same side of " +
+              "that predicate: " + expr.toSql());
+        }
+      } else {
+        Preconditions.checkState(exprsBoundBySubqueryTids.size() == 1);
+        exprBoundBySubqueryTids = exprsBoundBySubqueryTids.get(0);
+      }
+      exprsBoundBySubqueryTids.clear();
+      exprsBoundBySubqueryTids.add(exprBoundBySubqueryTids);
+    }
+
+    // Add the exprs bound by subquery tuple ids to the select list and
+    // register it for substitution. We use a temporary substitution map
+    // because we cannot at this point analyze the new select list expr. Once
+    // the new inline view is analyzed, the entries from this map will be
+    // added to an ExprSubstitutionMap.
+    for (Expr boundExpr: exprsBoundBySubqueryTids) {
+      String colAlias = stmt.getColumnAliasGenerator().getNextAlias();
+      items.add(new SelectListItem(boundExpr, null));
+      inlineView.getExplicitColLabels().add(colAlias);
+      lhsExprs.add(boundExpr);
+      rhsExprs.add(new SlotRef(Lists.newArrayList(inlineView.getUniqueAlias(), colAlias)));
+      if (groupByExprs != null) groupByExprs.add(boundExpr);
     }
 
     // Update the subquery's select list.
     boolean isDistinct = stmt.selectList_.isDistinct();
-    Preconditions.checkState(!isDistinct);
     stmt.selectList_ = new SelectList(
         items, isDistinct, stmt.selectList_.getPlanHints());
     // Update subquery's GROUP BY clause
@@ -741,8 +821,8 @@ public class StmtRewriter {
     Preconditions.checkState(exprWithSubquery.contains(Subquery.class));
     if (exprWithSubquery instanceof ExistsPredicate) return null;
     // Create a SlotRef from the first item of inlineView's select list
-    SlotRef slotRef = new SlotRef(new TableName(null, inlineView.getAlias()),
-        inlineView.getViewStmt().getColLabels().get(0));
+    SlotRef slotRef = new SlotRef(Lists.newArrayList(
+        inlineView.getUniqueAlias(), inlineView.getColLabels().get(0)));
     slotRef.analyze(analyzer);
     Expr subquerySubstitute = slotRef;
     if (exprWithSubquery instanceof InPredicate) {
@@ -799,6 +879,6 @@ public class StmtRewriter {
       }
     }
     smap.put(subquery, subquerySubstitute);
-    return exprWithSubquery.substitute(smap, analyzer);
+    return exprWithSubquery.substitute(smap, analyzer, false);
   }
 }

@@ -1,12 +1,15 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # General Impala query tests
 #
+import copy
 import logging
+import os
 import pytest
-from tests.common.test_vector import *
 from tests.common.impala_test_suite import ImpalaTestSuite
+from tests.common.test_vector import *
 from tests.common.test_dimensions import create_uncompressed_text_dimension
+from tests.common.test_dimensions import create_exec_option_dimension
+from tests.common.skip import SkipIfS3
 from tests.util.test_file_parser import QueryTestSectionReader
 
 class TestQueries(ImpalaTestSuite):
@@ -17,15 +20,22 @@ class TestQueries(ImpalaTestSuite):
       cls.TestMatrix.add_constraint(lambda v:\
           v.get_value('table_format').file_format == 'parquet')
 
+    # Manually adding a test dimension here to test the small query opt
+    # in exhaustive.
+    # TODO Cleanup required, allow adding values to dimensions without having to
+    # manually explode them
+    if cls.exploration_strategy() == 'exhaustive':
+      dim = cls.TestMatrix.dimensions["exec_option"]
+      new_value = []
+      for v in dim:
+        new_value.append(TestVector.Value(v.name, copy.copy(v.value)))
+        new_value[-1].value["exec_single_node_rows_threshold"] = 100
+      dim.extend(new_value)
+      cls.TestMatrix.add_dimension(dim)
+
   @classmethod
   def get_workload(cls):
     return 'functional-query'
-
-  def test_distinct(self, vector):
-    if vector.get_value('table_format').file_format == 'hbase':
-      pytest.xfail("HBase returns columns in alphabetical order for select distinct *, "
-                    "making result verication fail.")
-    self.run_test_case('QueryTest/distinct', vector)
 
   def test_exprs(self, vector):
     # TODO: Enable some of these tests for Avro if possible
@@ -74,6 +84,10 @@ class TestQueries(ImpalaTestSuite):
   def test_union(self, vector):
     self.run_test_case('QueryTest/union', vector)
 
+  def test_very_large_strings(self, vector):
+    """Regression test for IMPALA-1619"""
+    self.run_test_case('QueryTest/large_strings', vector)
+
   def test_sort(self, vector):
     if vector.get_value('table_format').file_format == 'hbase':
       pytest.xfail(reason="IMPALA-283 - select count(*) produces inconsistent results")
@@ -93,6 +107,12 @@ class TestQueries(ImpalaTestSuite):
 
   def test_subquery(self, vector):
     self.run_test_case('QueryTest/subquery', vector)
+
+  def test_subplans(self, vector):
+    pytest.xfail("Disabled due to missing nested types functionality.")
+    if vector.get_value('table_format').file_format != 'parquet':
+      pytest.xfail("Nested TPCH only available in parquet.")
+    self.run_test_case('QueryTest/subplannull_data', vector)
 
   def test_empty(self, vector):
     self.run_test_case('QueryTest/empty', vector)
@@ -147,7 +167,6 @@ class TestQueriesTextTables(ImpalaTestSuite):
   def test_mixed_format(self, vector):
     self.run_test_case('QueryTest/mixed-format', vector)
 
+  @SkipIfS3.insert
   def test_values(self, vector):
     self.run_test_case('QueryTest/values', vector)
-
-

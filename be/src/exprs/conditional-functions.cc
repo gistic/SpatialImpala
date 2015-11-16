@@ -16,9 +16,10 @@
 #include "runtime/runtime-state.h"
 #include "udf/udf.h"
 
+#include "common/names.h"
+
 using namespace impala;
 using namespace impala_udf;
-using namespace std;
 
 #define CONDITIONAL_CODEGEN_FN(expr_class) \
   Status expr_class::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) { \
@@ -29,3 +30,23 @@ CONDITIONAL_CODEGEN_FN(IsNullExpr);
 CONDITIONAL_CODEGEN_FN(NullIfExpr);
 CONDITIONAL_CODEGEN_FN(IfExpr);
 CONDITIONAL_CODEGEN_FN(CoalesceExpr);
+
+BooleanVal ConditionalFunctions::IsFalse(FunctionContext* ctx, const BooleanVal& val) {
+  if (val.is_null) return BooleanVal(false);
+  return BooleanVal(!val.val);
+}
+
+BooleanVal ConditionalFunctions::IsNotFalse(FunctionContext* ctx, const BooleanVal& val) {
+  if (val.is_null) return BooleanVal(true);
+  return BooleanVal(val.val);
+}
+
+BooleanVal ConditionalFunctions::IsTrue(FunctionContext* ctx, const BooleanVal& val) {
+  if (val.is_null) return BooleanVal(false);
+  return BooleanVal(val.val);
+}
+
+BooleanVal ConditionalFunctions::IsNotTrue(FunctionContext* ctx, const BooleanVal& val) {
+  if (val.is_null) return BooleanVal(true);
+  return BooleanVal(!val.val);
+}

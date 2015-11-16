@@ -16,13 +16,15 @@ package com.cloudera.impala.authorization;
 
 import java.util.List;
 
+import org.apache.sentry.core.model.db.DBModelAuthorizable;
+
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
 /**
  * Class used to authorize access to a Function.
  */
-public class AuthorizeableFn implements Authorizeable {
+public class AuthorizeableFn extends Authorizeable {
   private final String fnName_;
 
   public AuthorizeableFn(String fnName) {
@@ -31,7 +33,7 @@ public class AuthorizeableFn implements Authorizeable {
   }
 
   @Override
-  public List<org.apache.sentry.core.Authorizable> getHiveAuthorizeableHierarchy() {
+  public List<DBModelAuthorizable> getHiveAuthorizeableHierarchy() {
     return Lists.newArrayList();
   }
 

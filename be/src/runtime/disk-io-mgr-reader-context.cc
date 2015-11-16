@@ -14,9 +14,9 @@
 
 #include "runtime/disk-io-mgr-internal.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 void DiskIoMgr::RequestContext::Cancel(const Status& status) {
   DCHECK(!status.ok());
@@ -137,9 +137,9 @@ DiskIoMgr::RequestContext::RequestContext(DiskIoMgr* parent, int num_disks)
 }
 
 // Resets this object.
-void DiskIoMgr::RequestContext::Reset(hdfsFS hdfs_connection, MemTracker* tracker) {
+void DiskIoMgr::RequestContext::Reset(MemTracker* tracker) {
   DCHECK_EQ(state_, Inactive);
-  status_ = Status::OK;
+  status_ = Status::OK();
 
   bytes_read_counter_ = NULL;
   read_timer_ = NULL;
@@ -147,7 +147,6 @@ void DiskIoMgr::RequestContext::Reset(hdfsFS hdfs_connection, MemTracker* tracke
   disks_accessed_bitmap_ = NULL;
 
   state_ = Active;
-  hdfs_connection_ = hdfs_connection;
   mem_tracker_ = tracker;
 
   num_unstarted_scan_ranges_ = 0;
@@ -157,9 +156,11 @@ void DiskIoMgr::RequestContext::Reset(hdfsFS hdfs_connection, MemTracker* tracke
   num_ready_buffers_ = 0;
   total_range_queue_capacity_ = 0;
   num_finished_ranges_ = 0;
+  num_remote_ranges_ = 0;
   bytes_read_local_ = 0;
   bytes_read_short_circuit_ = 0;
   bytes_read_dn_cache_ = 0;
+  unexpected_remote_bytes_ = 0;
   initial_queue_capacity_ = DiskIoMgr::DEFAULT_QUEUE_CAPACITY;
 
   DCHECK(ready_to_start_ranges_.empty());
@@ -179,7 +180,7 @@ string DiskIoMgr::RequestContext::DebugString() const {
   if (state_ == RequestContext::Cancelled) ss << "Cancelled";
   if (state_ == RequestContext::Active) ss << "Active";
   if (state_ != RequestContext::Inactive) {
-    ss << " status_=" << (status_.ok() ? "OK" : status_.GetErrorMsg())
+    ss << " status_=" << (status_.ok() ? "OK" : status_.GetDetail())
        << " #ready_buffers=" << num_ready_buffers_
        << " #used_buffers=" << num_used_buffers_
        << " #num_buffers_in_reader=" << num_buffers_in_reader_

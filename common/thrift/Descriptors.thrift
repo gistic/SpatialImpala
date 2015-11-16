@@ -22,33 +22,55 @@ include "Exprs.thrift"
 struct TSlotDescriptor {
   1: required Types.TSlotId id
   2: required Types.TTupleId parent
-  3: required Types.TColumnType slotType
-  // TODO: Make this a list of positions to support SlotRefs into struct fields.
-  4: required i32 columnPos   // in originating table
-  5: required i32 byteOffset  // into tuple
-  6: required i32 nullIndicatorByte
-  7: required i32 nullIndicatorBit
+  // Only set for collection slots. The tuple ID of the item tuple for the collection.
+  3: optional Types.TTupleId itemTupleId
+  4: required Types.TColumnType slotType
+
+  // Absolute path into the table schema pointing to the column/field materialized into
+  // this slot. Empty for slots that do not materialize a table column/field, e.g., slots
+  // materializing an aggregation result.
+  //
+  // materializedPath[i] is the ordinal position of the column/field of the table schema
+  // at level i. For example, materializedPath[0] is an ordinal into the list of table
+  // columns, materializedPath[1] is an ordinal into the list of fields of the
+  // complex-typed column at position materializedPath[0], etc.
+  //
+  // The materialized path is used to determine when a new tuple (containing a new
+  // instance of this slot) should be created. A tuple is emitted for every data item
+  // pointed to by the materialized path. For scalar slots this trivially means that every
+  // data item goes into a different tuple. For collection slots, the materialized path
+  // determines how many data items go into a single collection value.
+  5: required list<i32> materializedPath
+
+  6: required i32 byteOffset  // into tuple
+  7: required i32 nullIndicatorByte
+  8: required i32 nullIndicatorBit
   9: required i32 slotIdx
   10: required bool isMaterialized
+}
+
+struct TColumnDescriptor {
+  1: required string name
+  2: required Types.TColumnType type
 }
 
 // "Union" of all table types.
 struct TTableDescriptor {
   1: required Types.TTableId id
   2: required CatalogObjects.TTableType tableType
-  3: required i32 numCols
+  // Clustering/partition columns come first.
+  3: required list<TColumnDescriptor> columnDescriptors
   4: required i32 numClusteringCols
-  // Names of the columns. Clustering columns come first.
-  10: optional list<string> colNames;
+
   5: optional CatalogObjects.THdfsTable hdfsTable
   6: optional CatalogObjects.THBaseTable hbaseTable
   9: optional CatalogObjects.TDataSourceTable dataSourceTable
 
   // Unqualified name of table
-  7: required string tableName;
+  7: required string tableName
 
   // Name of the database that the table belongs to
-  8: required string dbName;
+  8: required string dbName
 }
 
 struct TTupleDescriptor {
@@ -56,12 +78,17 @@ struct TTupleDescriptor {
   2: required i32 byteSize
   3: required i32 numNullBytes
   4: optional Types.TTableId tableId
+
+  // Absolute path into the table schema pointing to the collection whose fields
+  // are materialized into this tuple. Non-empty if this tuple belongs to a
+  // nested collection, empty otherwise.
+  5: optional list<i32> tuplePath
 }
 
 struct TDescriptorTable {
-  1: optional list<TSlotDescriptor> slotDescriptors;
-  2: required list<TTupleDescriptor> tupleDescriptors;
+  1: optional list<TSlotDescriptor> slotDescriptors
+  2: required list<TTupleDescriptor> tupleDescriptors
 
   // all table descriptors referenced by tupleDescriptors
-  3: optional list<TTableDescriptor> tableDescriptors;
+  3: optional list<TTableDescriptor> tableDescriptors
 }

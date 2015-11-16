@@ -26,7 +26,6 @@ import com.cloudera.impala.analysis.Analyzer;
 import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.analysis.SlotDescriptor;
 import com.cloudera.impala.analysis.TupleId;
-import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.common.Pair;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TExpr;
@@ -157,7 +156,7 @@ public class UnionNode extends PlanNode {
    * been evaluated during registration to set analyzer.hasEmptyResultSet_.
    */
   @Override
-  public void init(Analyzer analyzer) throws InternalException {
+  public void init(Analyzer analyzer) {
     computeMemLayout(analyzer);
     computeStats(analyzer);
 
@@ -173,7 +172,7 @@ public class UnionNode extends PlanNode {
         if (slots.get(j).isMaterialized()) newExprList.add(exprList.get(j));
       }
       materializedResultExprLists_.add(
-          Expr.substituteList(newExprList, getChild(i).getOutputSmap(), analyzer));
+          Expr.substituteList(newExprList, getChild(i).getOutputSmap(), analyzer, true));
     }
     Preconditions.checkState(
         materializedResultExprLists_.size() == getChildren().size());
@@ -190,6 +189,7 @@ public class UnionNode extends PlanNode {
 
   @Override
   protected void toThrift(TPlanNode msg) {
+    Preconditions.checkState(materializedResultExprLists_.size() == children_.size());
     List<List<TExpr>> texprLists = Lists.newArrayList();
     for (List<Expr> exprList: materializedResultExprLists_) {
       texprLists.add(Expr.treesToThrift(exprList));

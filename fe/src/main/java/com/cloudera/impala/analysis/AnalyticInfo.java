@@ -37,8 +37,11 @@ public class AnalyticInfo extends AggregateInfoBase {
   // in this list.
   private final ArrayList<Expr> analyticExprs_;
 
+  // Intersection of the partition exps of all the analytic functions.
+  private final List<Expr> commonPartitionExprs_;
+
   // map from analyticExprs_ to their corresponding analytic tuple slotrefs
-  private final ExprSubstitutionMap analyticTupleSmap_ = new ExprSubstitutionMap();
+  private final ExprSubstitutionMap analyticTupleSmap_;
 
   private AnalyticInfo(ArrayList<Expr> analyticExprs) {
     super(new ArrayList<Expr>(), new ArrayList<FunctionCallExpr>());
@@ -47,10 +50,24 @@ public class AnalyticInfo extends AggregateInfoBase {
     for (Expr analyticExpr: analyticExprs) {
       aggregateExprs_.add(((AnalyticExpr) analyticExpr).getFnCall());
     }
+    analyticTupleSmap_ = new ExprSubstitutionMap();
+    commonPartitionExprs_ = computeCommonPartitionExprs();
+  }
+
+  /**
+   * C'tor for cloning.
+   */
+  private AnalyticInfo(AnalyticInfo other) {
+    super(other);
+    analyticExprs_ =
+        (other.analyticExprs_ != null) ? Expr.cloneList(other.analyticExprs_) : null;
+    analyticTupleSmap_ = other.analyticTupleSmap_.clone();
+    commonPartitionExprs_ = Expr.cloneList(other.commonPartitionExprs_);
   }
 
   public ArrayList<Expr> getAnalyticExprs() { return analyticExprs_; }
   public ExprSubstitutionMap getSmap() { return analyticTupleSmap_; }
+  public List<Expr> getCommonPartitionExprs() { return commonPartitionExprs_; }
 
   /**
    * Creates complete AnalyticInfo for analyticExprs, including tuple descriptors and
@@ -74,10 +91,32 @@ public class AnalyticInfo extends AggregateInfoBase {
     for (int i = 0; i < analyticExprs.size(); ++i) {
       result.analyticTupleSmap_.put(result.analyticExprs_.get(i),
           new SlotRef(result.outputTupleDesc_.getSlots().get(i)));
+      result.outputTupleDesc_.getSlots().get(i).setSourceExpr(
+          result.analyticExprs_.get(i));
     }
     LOG.trace("analytictuple=" + result.outputTupleDesc_.debugString());
     LOG.trace("analytictuplesmap=" + result.analyticTupleSmap_.debugString());
     LOG.trace("analytic info:\n" + result.debugString());
+    return result;
+  }
+
+  /**
+   * Returns the intersection of the partition exprs of all the
+   * analytic functions.
+   */
+  private List<Expr> computeCommonPartitionExprs() {
+    List<Expr> result = Lists.newArrayList();
+    for (Expr analyticExpr: analyticExprs_) {
+      Preconditions.checkState(analyticExpr.isAnalyzed_);
+      List<Expr> partitionExprs = ((AnalyticExpr) analyticExpr).getPartitionExprs();
+      if (partitionExprs == null) continue;
+      if (result.isEmpty()) {
+        result.addAll(partitionExprs);
+      } else {
+        result.retainAll(partitionExprs);
+        if (result.isEmpty()) break;
+      }
+    }
     return result;
   }
 
@@ -94,46 +133,6 @@ public class AnalyticInfo extends AggregateInfoBase {
     }
   }
 
-  // TODO: implement this
-  /**
-   * Substitute all the expressions (grouping expr, aggregate expr) and update our
-   * substitution map according to the given substitution map:
-   * - smap typically maps from tuple t1 to tuple t2 (example: the smap of an
-   *   inline view maps the virtual table ref t1 into a base table ref t2)
-   * - our grouping and aggregate exprs need to be substituted with the given
-   *   smap so that they also reference t2
-   * - aggTupleSMap needs to be recomputed to map exprs based on t2
-   *   onto our aggTupleDesc (ie, the left-hand side needs to be substituted with
-   *   smap)
-   * - mergeAggInfo: this is not affected, because
-   *   * its grouping and aggregate exprs only reference aggTupleDesc_
-   *   * its smap is identical to aggTupleSMap_
-   * - 2ndPhaseDistinctAggInfo:
-   *   * its grouping and aggregate exprs also only reference aggTupleDesc_
-   *     and are therefore not affected
-   *   * its smap needs to be recomputed to map exprs based on t2 to its own
-   *     aggTupleDesc
-  public void substitute(ExprSubstitutionMap smap, Analyzer analyzer)
-      throws InternalException {
-    groupingExprs_ = Expr.substituteList(groupingExprs_, smap, analyzer);
-    LOG.trace("AggInfo: grouping_exprs=" + Expr.debugString(groupingExprs_));
-
-    // The smap in this case should not substitute the aggs themselves, only
-    // their subexpressions.
-    List<Expr> substitutedAggs = Expr.substituteList(aggregateExprs_, smap, analyzer);
-    aggregateExprs_.clear();
-    for (Expr substitutedAgg: substitutedAggs) {
-      aggregateExprs_.add((FunctionCallExpr) substitutedAgg);
-    }
-
-    LOG.trace("AggInfo: agg_exprs=" + Expr.debugString(aggregateExprs_));
-    aggTupleSMap_.substituteLhs(smap, analyzer);
-    if (secondPhaseDistinctAggInfo_ != null) {
-      secondPhaseDistinctAggInfo_.substitute(smap, analyzer);
-    }
-  }
-   */
-
   @Override
   public void materializeRequiredSlots(Analyzer analyzer, ExprSubstitutionMap smap) {
     materializedSlots_.clear();
@@ -145,7 +144,7 @@ public class AnalyticInfo extends AggregateInfoBase {
       exprs.add(analyticExprs_.get(i));
       materializedSlots_.add(i);
     }
-    List<Expr> resolvedExprs = Expr.substituteList(exprs, smap, analyzer);
+    List<Expr> resolvedExprs = Expr.substituteList(exprs, smap, analyzer, false);
     analyzer.materializeSlots(resolvedExprs);
   }
 
@@ -189,5 +188,9 @@ public class AnalyticInfo extends AggregateInfoBase {
     return out.toString();
   }
 
+  @Override
   protected String tupleDebugName() { return "analytic-tuple"; }
+
+  @Override
+  public AnalyticInfo clone() { return new AnalyticInfo(this); }
 }

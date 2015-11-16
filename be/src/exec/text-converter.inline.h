@@ -32,11 +32,11 @@
 
 namespace impala {
 
-// Note: this function has a codegen'd version.  Changing this function requires
-// corresponding changes to CodegenWriteSlot.
+/// Note: this function has a codegen'd version.  Changing this function requires
+/// corresponding changes to CodegenWriteSlot.
 inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tuple,
     const char* data, int len, bool copy_string, bool need_escape, MemPool* pool) {
-  if ((len == 0 && slot_desc->type().type != TYPE_STRING) || data == NULL) {
+  if ((len == 0 && !slot_desc->type().IsStringType()) || data == NULL) {
     tuple->SetNull(slot_desc->null_indicator_offset());
     return true;
   } else if (check_null_ && len == null_col_val_.size() &&
@@ -58,7 +58,8 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       int buffer_len = len;
       if (type.type == TYPE_VARCHAR || type.type == TYPE_CHAR) buffer_len = type.len;
 
-      bool reuse_data = type.IsVarLen() && !(len != 0 && (copy_string || need_escape));
+      bool reuse_data = type.IsVarLenStringType() &&
+                        !(len != 0 && (copy_string || need_escape));
       if (type.type == TYPE_CHAR) reuse_data &= (buffer_len <= len);
 
       StringValue str;
@@ -66,7 +67,8 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       if (reuse_data) {
         str.ptr = const_cast<char*>(data);
       } else {
-        str.ptr = type.IsVarLen() ? reinterpret_cast<char*>(pool->Allocate(buffer_len)) :
+        str.ptr = type.IsVarLenStringType() ?
+            reinterpret_cast<char*>(pool->Allocate(buffer_len)) :
             reinterpret_cast<char*>(slot);
         if (need_escape) {
           UnescapeString(data, str.ptr, &str.len, buffer_len);
@@ -79,8 +81,8 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
         StringValue::PadWithSpaces(str.ptr, buffer_len, str.len);
         str.len = type.len;
       }
-      // write back to the slot, if !IsVarLen() we already wrote to the slot
-      if (type.IsVarLen()) {
+      // write back to the slot, if !IsVarLenStringType() we already wrote to the slot
+      if (type.IsVarLenStringType()) {
         StringValue* str_slot = reinterpret_cast<StringValue*>(slot);
         *str_slot = str;
       }
@@ -117,7 +119,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
     case TYPE_TIMESTAMP: {
       TimestampValue* ts_slot = reinterpret_cast<TimestampValue*>(slot);
       *ts_slot = TimestampValue(data, len);
-      if (ts_slot->NotADateTime()) {
+      if (!ts_slot->HasDateOrTime()) {
         parse_result = StringParser::PARSE_FAILURE;
       }
       break;

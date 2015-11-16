@@ -24,10 +24,10 @@
 
 #include "gen-cpp/PlanNodes_types.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
 using namespace llvm;
-using namespace std;
 
 const char* BlockingJoinNode::LLVM_CLASS_NAME = "class.impala::BlockingJoinNode";
 
@@ -38,12 +38,24 @@ BlockingJoinNode::BlockingJoinNode(const string& node_name, const TJoinOp::type 
     join_op_(join_op),
     eos_(false),
     probe_side_eos_(false),
+    probe_batch_pos_(-1),
+    current_probe_row_(NULL),
+    semi_join_staging_row_(NULL),
     can_add_probe_filters_(false) {
 }
 
 Status BlockingJoinNode::Init(const TPlanNode& tnode) {
   RETURN_IF_ERROR(ExecNode::Init(tnode));
-  return Status::OK;
+  DCHECK((join_op_ != TJoinOp::LEFT_SEMI_JOIN && join_op_ != TJoinOp::LEFT_ANTI_JOIN &&
+      join_op_ != TJoinOp::RIGHT_SEMI_JOIN && join_op_ != TJoinOp::RIGHT_ANTI_JOIN &&
+      join_op_ != TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) || conjunct_ctxs_.size() == 0);
+  runtime_profile_->AddLocalTimeCounter(
+      bind<int64_t>(&BlockingJoinNode::LocalTimeCounterFn,
+      runtime_profile_->total_time_counter(),
+      child(0)->runtime_profile()->total_time_counter(),
+      child(1)->runtime_profile()->total_time_counter(),
+      &built_probe_overlap_stop_watch_));
+  return Status::OK();
 }
 
 BlockingJoinNode::~BlockingJoinNode() {
@@ -58,41 +70,69 @@ Status BlockingJoinNode::Prepare(RuntimeState* state) {
   build_pool_.reset(new MemPool(mem_tracker()));
   build_timer_ = ADD_TIMER(runtime_profile(), "BuildTime");
   probe_timer_ = ADD_TIMER(runtime_profile(), "ProbeTime");
-  build_row_counter_ = ADD_COUNTER(runtime_profile(), "BuildRows", TCounterType::UNIT);
-  probe_row_counter_ = ADD_COUNTER(runtime_profile(), "ProbeRows", TCounterType::UNIT);
+  build_row_counter_ = ADD_COUNTER(runtime_profile(), "BuildRows", TUnit::UNIT);
+  probe_row_counter_ = ADD_COUNTER(runtime_profile(), "ProbeRows", TUnit::UNIT);
 
-  // Validate the row desc layout is what we expect. The join node returns a row
-  // that is a concatenation of the left side and build side row desc's. For example if
-  // the probe row had 1 tuple and the build row had 2, the resulting row desc
-  // of the join node would have 3 tuples with:
-  //   result[0] = left[0]
-  //   result[1] = build[0]
-  //   result[2] = build[1]
-  // The current join node implementation relies on this property to enable some
-  // optimizations.
+  // Validate the row desc layout is what we expect because the current join
+  // implementation relies on it to enable some optimizations.
   int num_left_tuples = child(0)->row_desc().tuple_descriptors().size();
   int num_build_tuples = child(1)->row_desc().tuple_descriptors().size();
-  for (int i = 0; i < num_left_tuples; ++i) {
-    TupleDescriptor* desc = child(0)->row_desc().tuple_descriptors()[i];
-    DCHECK_EQ(i, row_desc().GetTupleIdx(desc->id()));
+
+#ifndef NDEBUG
+  switch (join_op_) {
+    case TJoinOp::LEFT_ANTI_JOIN:
+    case TJoinOp::LEFT_SEMI_JOIN:
+    case TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN: {
+      // Only return the surviving probe-side tuples.
+      DCHECK(row_desc().Equals(child(0)->row_desc()));
+      break;
+    }
+    case TJoinOp::RIGHT_ANTI_JOIN:
+    case TJoinOp::RIGHT_SEMI_JOIN: {
+      // Only return the surviving build-side tuples.
+      DCHECK(row_desc().Equals(child(1)->row_desc()));
+      break;
+    }
+    default: {
+      // The join node returns a row that is a concatenation of the left side and build
+      // side row desc's. For example if the probe row had 1 tuple and the build row had
+      // 2, the resulting row desc of the join node would have 3 tuples with:
+      //   result[0] = left[0]
+      //   result[1] = build[0]
+      //   result[2] = build[1]
+      for (int i = 0; i < num_left_tuples; ++i) {
+        TupleDescriptor* desc = child(0)->row_desc().tuple_descriptors()[i];
+        DCHECK_EQ(i, row_desc().GetTupleIdx(desc->id()));
+      }
+      for (int i = 0; i < num_build_tuples; ++i) {
+        TupleDescriptor* desc = child(1)->row_desc().tuple_descriptors()[i];
+        DCHECK_EQ(num_left_tuples + i, row_desc().GetTupleIdx(desc->id()));
+      }
+      break;
+    }
   }
-  for (int i = 0; i < num_build_tuples; ++i) {
-    TupleDescriptor* desc = child(1)->row_desc().tuple_descriptors()[i];
-    DCHECK_EQ(num_left_tuples + i, row_desc().GetTupleIdx(desc->id()));
-  }
+#endif
 
   probe_tuple_row_size_ = num_left_tuples * sizeof(Tuple*);
   build_tuple_row_size_ = num_build_tuples * sizeof(Tuple*);
 
+  if (join_op_ == TJoinOp::LEFT_ANTI_JOIN || join_op_ == TJoinOp::LEFT_SEMI_JOIN ||
+      join_op_ == TJoinOp::RIGHT_ANTI_JOIN || join_op_ == TJoinOp::RIGHT_SEMI_JOIN ||
+      join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
+    semi_join_staging_row_ = reinterpret_cast<TupleRow*>(
+        new char[probe_tuple_row_size_ + build_tuple_row_size_]);
+  }
+
   probe_batch_.reset(
       new RowBatch(child(0)->row_desc(), state->batch_size(), mem_tracker()));
-  return Status::OK;
+  return Status::OK();
 }
 
 void BlockingJoinNode::Close(RuntimeState* state) {
   if (is_closed()) return;
   if (build_pool_.get() != NULL) build_pool_->FreeAll();
   probe_batch_.reset();
+  if (semi_join_staging_row_ != NULL) delete[] semi_join_staging_row_;
   ExecNode::Close(state);
 }
 
@@ -100,9 +140,14 @@ void BlockingJoinNode::BuildSideThread(RuntimeState* state, Promise<Status>* sta
   Status s;
   {
     SCOPED_TIMER(state->total_cpu_timer());
-    SCOPED_TIMER(runtime_profile()->total_async_timer());
     s = ConstructBuildSide(state);
   }
+  // IMPALA-1863: If the build-side thread failed, then we need to close the right
+  // (build-side) child to avoid a potential deadlock between fragment instances.  This
+  // is safe to do because while the build may have partially completed, it will not be
+  // probed.  BlockJoinNode::Open() will return failure as soon as child(0)->Open()
+  // completes.
+  if (!s.ok()) child(1)->Close(state);
   // Release the thread token as soon as possible (before the main thread joins
   // on it).  This way, if we had a chain of 10 joins using 1 additional thread,
   // we'd keep the additional thread busy the whole time.
@@ -114,34 +159,66 @@ Status BlockingJoinNode::Open(RuntimeState* state) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Open(state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
+  RETURN_IF_ERROR(QueryMaintenance(state));
+  eos_ = false;
+  probe_side_eos_ = false;
 
-  // Kick-off the construction of the build-side table in a separate
-  // thread, so that the left child can do any initialisation in parallel.
-  // Only do this if we can get a thread token.  Otherwise, do this in the
-  // main thread
-  Promise<Status> build_side_status;
-  if (state->resource_pool()->TryAcquireThreadToken()) {
+  // If this node is not inside a subplan and can get a thread token, initiate the
+  // construction of the build-side table in a separate thread, so that the left child
+  // can do any initialisation in parallel. Otherwise, do this in the main thread.
+  // Inside a subplan we expect Open() to be called a number of times proportional to the
+  // input data of the SubplanNode, so we prefer doing the join build in the main thread,
+  // assuming that thread creation is expensive relative to a single subplan iteration.
+  //
+  // In this block, we also compute the 'overlap' time for the left and right child.  This
+  // is the time (i.e. clock reads) when the right child stops overlapping with the left
+  // child. For the single threaded case, the left and right child never overlap. For the
+  // build side in a different thread, the overlap stops when the left child Open()
+  // returns.
+  if (!IsInSubplan() && state->resource_pool()->TryAcquireThreadToken()) {
+    Promise<Status> build_side_status;
     AddRuntimeExecOption("Join Build-Side Prepared Asynchronously");
     Thread build_thread(node_name_, "build thread",
         bind(&BlockingJoinNode::BuildSideThread, this, state, &build_side_status));
     if (!state->cgroup().empty()) {
-      RETURN_IF_ERROR(state->exec_env()->cgroups_mgr()->AssignThreadToCgroup(
-          build_thread, state->cgroup()));
+      Status status = state->exec_env()->cgroups_mgr()->AssignThreadToCgroup(
+          build_thread, state->cgroup());
+      // If AssignThreadToCgroup() failed, we still need to wait for the build-side
+      // thread to complete before returning, so just log that error.
+      if (!status.ok()) state->LogError(status.msg());
     }
+    // Open the left child so that it may perform any initialisation in parallel.
+    // Don't exit even if we see an error, we still need to wait for the build thread
+    // to finish.
+    Status open_status = child(0)->Open(state);
+
+    // The left/right child overlap stops here.
+    timespec overlap_stops_time;
+    clock_gettime(CLOCK_MONOTONIC, &overlap_stops_time);
+    built_probe_overlap_stop_watch_.SetTimeCeiling(overlap_stops_time);
+
+    // Blocks until ConstructBuildSide has returned, after which the build side structures
+    // are fully constructed.
+    RETURN_IF_ERROR(build_side_status.Get());
+    RETURN_IF_ERROR(open_status);
+  } else if (IsInSubplan()) {
+    // When inside a subplan, open the first child before doing the build such that
+    // UnnestNodes on the probe side are opened and project their unnested collection
+    // slots. Otherwise, the build might unnecessarily deep-copy those collection slots,
+    // and this node would return them in GetNext().
+    // TODO: Remove this special-case behavior for subplans once we have proper
+    // projection. See UnnestNode for details on the current projection implementation.
+    RETURN_IF_ERROR(child(0)->Open(state));
+    RETURN_IF_ERROR(ConstructBuildSide(state));
   } else {
-    build_side_status.Set(ConstructBuildSide(state));
+    // The left/right child never overlap. The overlap stops here.
+    timespec overlap_stops_time;
+    clock_gettime(CLOCK_MONOTONIC, &overlap_stops_time);
+    built_probe_overlap_stop_watch_.SetTimeCeiling(overlap_stops_time);
+
+    RETURN_IF_ERROR(ConstructBuildSide(state));
+    RETURN_IF_ERROR(child(0)->Open(state));
   }
-
-  // Open the left child so that it may perform any initialisation in parallel.
-  // Don't exit even if we see an error, we still need to wait for the build thread
-  // to finish.
-  Status open_status = child(0)->Open(state);
-
-  // Blocks until ConstructBuildSide has returned, after which the build side structures
-  // are fully constructed.
-  RETURN_IF_ERROR(build_side_status.Get());
-  RETURN_IF_ERROR(open_status);
 
   // Seed left child in preparation for GetNext().
   while (true) {
@@ -151,7 +228,9 @@ Status BlockingJoinNode::Open(RuntimeState* state) {
     if (probe_batch_->num_rows() == 0) {
       if (probe_side_eos_) {
         RETURN_IF_ERROR(InitGetNext(NULL /* eos */));
-        eos_ = true;
+        // If the probe side is exhausted, set the eos_ to true for only those
+        // join modes that don't need to process unmatched build rows.
+        eos_ = !NeedToProcessUnmatchedBuildRows();
         break;
       }
       probe_batch_->Reset();
@@ -162,7 +241,7 @@ Status BlockingJoinNode::Open(RuntimeState* state) {
       break;
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void BlockingJoinNode::DebugString(int indentation_level, stringstream* out) const {
@@ -190,6 +269,20 @@ string BlockingJoinNode::GetLeftChildRowString(TupleRow* row) {
   }
   out << "]";
   return out.str();
+}
+
+int64_t BlockingJoinNode::LocalTimeCounterFn(const RuntimeProfile::Counter* total_time,
+    const RuntimeProfile::Counter* left_child_time,
+    const RuntimeProfile::Counter* right_child_time,
+    const MonotonicStopWatch* child_overlap_timer) {
+  int64_t local_time = total_time->value() - left_child_time->value() -
+      (right_child_time->value() - child_overlap_timer->TotalElapsedTime());
+  // While the calculation is correct at the end of the execution, counter value
+  // and the stop watch reading is not accurate during execution.
+  // If the child time counter is updated before the parent time counter, then the child
+  // time will be greater. Stop watch is not thread safe, which can return invalid value.
+  // Don't return a negative number in those cases.
+  return ::max(0L, local_time);
 }
 
 // This function is replaced by codegen

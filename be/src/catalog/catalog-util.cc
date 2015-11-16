@@ -20,8 +20,9 @@
 #include "common/status.h"
 #include "util/debug-util.h"
 
-using namespace boost::algorithm;
-using namespace std;
+#include "common/names.h"
+
+using boost::algorithm::to_upper_copy;
 
 namespace impala {
 
@@ -142,7 +143,7 @@ Status TCatalogObjectFromObjectName(const TCatalogObjectType::type& object_type,
       error_msg << "Unexpected object type: " << object_type;
       return Status(error_msg.str());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 string TCatalogObjectToEntryKey(const TCatalogObject& catalog_object) {

@@ -23,7 +23,13 @@
 #include "exprs/operators.h"
 #include "util/string-parser.h"
 
-using namespace std;
+#include "common/names.h"
+
+using boost::algorithm::is_any_of;
+using boost::algorithm::join;
+using boost::algorithm::split;
+using boost::algorithm::to_lower;
+using std::uppercase;
 
 namespace impala {
 
@@ -44,20 +50,43 @@ DoubleVal MathFunctions::E(FunctionContext* ctx) {
     return RET_TYPE(FN(v.val)); \
   }
 
+// Generates a UDF that always calls FN() on the input vals and returns it.
+#define TWO_ARG_MATH_FN(NAME, RET_TYPE, INPUT_TYPE1, INPUT_TYPE2, FN) \
+  RET_TYPE MathFunctions::NAME(FunctionContext* ctx, \
+    const INPUT_TYPE1& v1, const INPUT_TYPE2& v2) { \
+    if (v1.is_null || v2.is_null) return RET_TYPE::null(); \
+    return RET_TYPE(FN(v1.val, v2.val)); \
+  }
+
+ONE_ARG_MATH_FN(Abs, BigIntVal, BigIntVal, llabs);
 ONE_ARG_MATH_FN(Abs, DoubleVal, DoubleVal, fabs);
+ONE_ARG_MATH_FN(Abs, FloatVal, FloatVal, fabs);
+ONE_ARG_MATH_FN(Abs, IntVal, IntVal, abs);
+ONE_ARG_MATH_FN(Abs, SmallIntVal, SmallIntVal, abs);
+ONE_ARG_MATH_FN(Abs, TinyIntVal, TinyIntVal, abs);
 ONE_ARG_MATH_FN(Sin, DoubleVal, DoubleVal, sin);
 ONE_ARG_MATH_FN(Asin, DoubleVal, DoubleVal, asin);
 ONE_ARG_MATH_FN(Cos, DoubleVal, DoubleVal, cos);
 ONE_ARG_MATH_FN(Acos, DoubleVal, DoubleVal, acos);
 ONE_ARG_MATH_FN(Tan, DoubleVal, DoubleVal, tan);
 ONE_ARG_MATH_FN(Atan, DoubleVal, DoubleVal, atan);
-
+ONE_ARG_MATH_FN(Cosh, DoubleVal, DoubleVal, cosh);
+ONE_ARG_MATH_FN(Tanh, DoubleVal, DoubleVal, tanh);
+ONE_ARG_MATH_FN(Sinh, DoubleVal, DoubleVal, sinh);
 ONE_ARG_MATH_FN(Sqrt, DoubleVal, DoubleVal, sqrt);
 ONE_ARG_MATH_FN(Ceil, BigIntVal, DoubleVal, ceil);
 ONE_ARG_MATH_FN(Floor, BigIntVal, DoubleVal, floor);
+ONE_ARG_MATH_FN(Truncate, BigIntVal, DoubleVal, trunc);
 ONE_ARG_MATH_FN(Ln, DoubleVal, DoubleVal, log);
 ONE_ARG_MATH_FN(Log10, DoubleVal, DoubleVal, log10);
 ONE_ARG_MATH_FN(Exp, DoubleVal, DoubleVal, exp);
+
+TWO_ARG_MATH_FN(Atan2, DoubleVal, DoubleVal, DoubleVal, atan2);
+
+DoubleVal MathFunctions::Cot(FunctionContext* ctx, const DoubleVal& v) {
+  if (v.is_null) return DoubleVal::null();
+  return DoubleVal(tan(M_PI_2 - v.val));
+}
 
 FloatVal MathFunctions::Sign(FunctionContext* ctx, const DoubleVal& v) {
   if (v.is_null) return FloatVal::null();
@@ -393,7 +422,18 @@ template <typename T> T MathFunctions::Negative(FunctionContext* ctx, const T& v
 template <>
 DecimalVal MathFunctions::Negative(FunctionContext* ctx, const DecimalVal& val) {
   if (val.is_null) return val;
-  return DecimalVal(-val.val16);
+  int type_byte_size = Expr::GetConstant<int>(*ctx, Expr::RETURN_TYPE_SIZE);
+  switch (type_byte_size) {
+    case 4:
+      return DecimalVal(-val.val4);
+    case 8:
+      return DecimalVal(-val.val8);
+    case 16:
+      return DecimalVal(-val.val16);
+    default:
+      DCHECK(false);
+      return DecimalVal::null();
+  }
 }
 
 BigIntVal MathFunctions::QuotientDouble(FunctionContext* ctx, const DoubleVal& x,
@@ -468,12 +508,33 @@ template <bool ISLEAST> DecimalVal MathFunctions::LeastGreatest(
   DCHECK_GT(num_args, 0);
   if (args[0].is_null) return DecimalVal::null();
   DecimalVal result_val = args[0];
+  int type_byte_size = Expr::GetConstant<int>(*ctx, Expr::RETURN_TYPE_SIZE);
   for (int i = 1; i < num_args; ++i) {
     if (args[i].is_null) return DecimalVal::null();
-    if (ISLEAST) {
-      if (args[i].val16 < result_val.val16) result_val = args[i];
-    } else {
-      if (args[i].val16 > result_val.val16) result_val = args[i];
+    switch (type_byte_size) {
+      case 4:
+        if (ISLEAST) {
+          if (args[i].val4 < result_val.val4) result_val = args[i];
+        } else {
+          if (args[i].val4 > result_val.val4) result_val = args[i];
+        }
+        break;
+      case 8:
+        if (ISLEAST) {
+          if (args[i].val8 < result_val.val8) result_val = args[i];
+        } else {
+          if (args[i].val8 > result_val.val8) result_val = args[i];
+        }
+        break;
+      case 16:
+        if (ISLEAST) {
+          if (args[i].val16 < result_val.val16) result_val = args[i];
+        } else {
+          if (args[i].val16 > result_val.val16) result_val = args[i];
+        }
+        break;
+      default:
+        DCHECK(false);
     }
   }
   return result_val;

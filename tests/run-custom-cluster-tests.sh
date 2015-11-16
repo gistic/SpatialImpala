@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Copyright 2012 Cloudera Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,11 +33,12 @@ fi
 
 export LOG_DIR
 
-cd ${IMPALA_HOME}/tests
-. ${IMPALA_HOME}/bin/set-classpath.sh
-py.test custom_cluster/ authorization/ ${AUX_CUSTOM_DIR} \
+# KERBEROS TODO We'll want to pass kerberos status in here.
+pushd ${IMPALA_HOME}/tests
+. ${IMPALA_HOME}/bin/set-classpath.sh &> /dev/null
+impala-py.test custom_cluster/ authorization/ ${AUX_CUSTOM_DIR} \
     --junitxml="${RESULTS_DIR}/TEST-impala-custom-cluster.xml" \
     --resultlog="${RESULTS_DIR}/TEST-impala-custom-cluster.log" "$@"
 EXIT_CODE=$?
-cd ~
+popd
 exit $EXIT_CODE

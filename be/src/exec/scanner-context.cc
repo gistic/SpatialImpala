@@ -14,6 +14,8 @@
 
 #include "exec/scanner-context.h"
 
+#include <gutil/strings/substitute.h>
+
 #include "exec/hdfs-scan-node.h"
 #include "runtime/row-batch.h"
 #include "runtime/mem-pool.h"
@@ -21,9 +23,10 @@
 #include "runtime/string-buffer.h"
 #include "util/debug-util.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
+using namespace strings;
 
 static const int64_t DEFAULT_READ_PAST_SIZE = 1024; // in bytes
 
@@ -59,6 +62,7 @@ ScannerContext::Stream* ScannerContext::AddStream(DiskIoMgr::ScanRange* range) {
   Stream* stream = state_->obj_pool()->Add(new Stream(this));
   stream->scan_range_ = range;
   stream->file_desc_ = scan_node_->GetFileDesc(stream->filename());
+  stream->file_len_ = stream->file_desc_->file_length;
   stream->total_bytes_returned_ = 0;
   stream->io_buffer_pos_ = NULL;
   stream->io_buffer_ = NULL;
@@ -67,7 +71,7 @@ ScannerContext::Stream* ScannerContext::AddStream(DiskIoMgr::ScanRange* range) {
   stream->output_buffer_pos_ = NULL;
   stream->output_buffer_bytes_left_ =
       const_cast<int64_t*>(&OUTPUT_BUFFER_BYTES_LEFT_INIT);
-  stream->contains_tuple_data_ = !scan_node_->tuple_desc()->string_slots().empty();
+  stream->contains_tuple_data_ = scan_node_->tuple_desc()->ContainsStringData();
   streams_.push_back(stream);
   return stream;
 }
@@ -137,12 +141,19 @@ Status ScannerContext::Stream::GetNextBuffer(int64_t read_past_size) {
 
     int64_t read_past_buffer_size = read_past_size_cb_.empty() ?
         DEFAULT_READ_PAST_SIZE : read_past_size_cb_(offset);
+    int64_t file_bytes_remaining = file_desc()->file_length - offset;
     read_past_buffer_size = ::max(read_past_buffer_size, read_past_size);
-
-    // TODO: we're reading past this scan range so this is likely a remote read.
-    // Update when the IoMgr has better support for remote reads.
+    read_past_buffer_size = ::min(read_past_buffer_size, file_bytes_remaining);
+    // We're reading past the scan range. Be careful not to read past the end of file.
+    DCHECK_GE(read_past_buffer_size, 0);
+    if (read_past_buffer_size == 0) {
+      io_buffer_bytes_left_ = 0;
+      // TODO: We are leaving io_buffer_ = NULL, revisit.
+      return Status::OK();
+    }
     DiskIoMgr::ScanRange* range = parent_->scan_node_->AllocateScanRange(
-        filename(), read_past_buffer_size, offset, -1, scan_range_->disk_id(), false);
+        scan_range_->fs(), filename(), read_past_buffer_size, offset, -1,
+        scan_range_->disk_id(), false, false, scan_range_->mtime());
     RETURN_IF_ERROR(parent_->state_->io_mgr()->Read(
         parent_->scan_node_->reader_context(), range, &io_buffer_));
   }
@@ -151,14 +162,19 @@ Status ScannerContext::Stream::GetNextBuffer(int64_t read_past_size) {
   ++parent_->scan_node_->num_owned_io_buffers_;
   io_buffer_pos_ = reinterpret_cast<uint8_t*>(io_buffer_->buffer());
   io_buffer_bytes_left_ = io_buffer_->len();
-
-  return Status::OK;
+  if (io_buffer_->len() == 0) {
+    file_len_ = file_offset() + boundary_buffer_bytes_left_;
+    VLOG_FILE << "Unexpectedly read 0 bytes from file=" << filename() << " table="
+              << parent_->scan_node_->hdfs_table()->name()
+              << ". Setting expected file length=" << file_len_;
+  }
+  return Status::OK();
 }
 
 Status ScannerContext::Stream::GetBuffer(bool peek, uint8_t** out_buffer, int64_t* len) {
   *out_buffer = NULL;
   *len = 0;
-  if (eosr()) return Status::OK;
+  if (eosr()) return Status::OK();
 
   if (parent_->cancelled()) {
     DCHECK(*out_buffer == NULL);
@@ -177,7 +193,7 @@ Status ScannerContext::Stream::GetBuffer(bool peek, uint8_t** out_buffer, int64_
       boundary_buffer_bytes_left_ -= *len;
       total_bytes_returned_ += *len;
     }
-    return Status::OK;
+    return Status::OK();
   }
 
   if (io_buffer_bytes_left_ == 0) {
@@ -197,7 +213,7 @@ Status ScannerContext::Stream::GetBuffer(bool peek, uint8_t** out_buffer, int64_
     total_bytes_returned_ += *len;
   }
   DCHECK_GE(bytes_left(), 0);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ScannerContext::Stream::GetBytesInternal(int64_t requested_len,
@@ -211,6 +227,15 @@ Status ScannerContext::Stream::GetBytesInternal(int64_t requested_len,
     } else {
       boundary_buffer_->Clear();
     }
+  }
+  // Workaround IMPALA-1619. Fail the request if requested_len is more than 1GB.
+  // StringBuffer can only handle 32-bit allocations and StringBuffer::Append()
+  // will allocate twice the current buffer size, cause int overflow.
+  // TODO: Revert once IMPALA-1619 is fixed.
+  if (UNLIKELY(requested_len > StringValue::MAX_LENGTH)) {
+    LOG(WARNING) << "Requested buffer size " << requested_len << "B > 1GB."
+        << GetStackTrace();
+    return Status(Substitute("Requested buffer size $0B > 1GB", requested_len));
   }
 
   while (requested_len > boundary_buffer_bytes_left_ + io_buffer_bytes_left_) {
@@ -263,7 +288,7 @@ Status ScannerContext::Stream::GetBytesInternal(int64_t requested_len,
     }
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 bool ScannerContext::cancelled() const {
@@ -271,16 +296,10 @@ bool ScannerContext::cancelled() const {
 }
 
 Status ScannerContext::Stream::ReportIncompleteRead(int64_t length, int64_t bytes_read) {
-  stringstream ss;
-  ss << "Tried to read " << length << " bytes but could only read "
-     << bytes_read << " bytes. This may indicate data file corruption. "
-     << "(file: " << filename() << ", byte offset: " << file_offset() << ")";
-  return Status(ss.str());
+  return Status(TErrorCode::SCANNER_INCOMPLETE_READ, length, bytes_read,
+      filename(), file_offset());
 }
 
 Status ScannerContext::Stream::ReportInvalidRead(int64_t length) {
-  stringstream ss;
-  ss << "Invalid read of " << length << " bytes. This may indicate data file corruption. "
-     << "(file: " << filename() << ", byte offset: " << file_offset() << ")";
-  return Status(ss.str());
+  return Status(TErrorCode::SCANNER_INVALID_READ, length, filename(), file_offset());
 }

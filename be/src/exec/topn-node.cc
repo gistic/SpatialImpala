@@ -30,13 +30,20 @@
 #include "gen-cpp/Exprs_types.h"
 #include "gen-cpp/PlanNodes_types.h"
 
+#include "common/names.h"
+
+using std::priority_queue;
 using namespace impala;
-using namespace std;
 
 TopNNode::TopNNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs)
   : ExecNode(pool, tnode, descs),
     offset_(tnode.sort_node.__isset.offset ? tnode.sort_node.offset : 0),
-    num_rows_skipped_(0) {
+    materialized_tuple_desc_(NULL),
+    tuple_row_less_than_(NULL),
+    tmp_tuple_(NULL),
+    tuple_pool_(NULL),
+    num_rows_skipped_(0),
+    priority_queue_(NULL) {
 }
 
 Status TopNNode::Init(const TPlanNode& tnode) {
@@ -48,34 +55,42 @@ Status TopNNode::Init(const TPlanNode& tnode) {
   DCHECK_EQ(conjunct_ctxs_.size(), 0)
       << "TopNNode should never have predicates to evaluate.";
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status TopNNode::Prepare(RuntimeState* state) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Prepare(state));
   tuple_pool_.reset(new MemPool(mem_tracker()));
-  RETURN_IF_ERROR(sort_exec_exprs_.Prepare(state, child(0)->row_desc(), row_descriptor_));
+  RETURN_IF_ERROR(sort_exec_exprs_.Prepare(
+      state, child(0)->row_desc(), row_descriptor_, expr_mem_tracker()));
+  AddExprCtxsToFree(sort_exec_exprs_);
   materialized_tuple_desc_ = row_descriptor_.tuple_descriptors()[0];
-  // Allocate memory for a temporary tuple.
-  tmp_tuple_ = reinterpret_cast<Tuple*>(
-      tuple_pool_->Allocate(materialized_tuple_desc_->byte_size()));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status TopNNode::Open(RuntimeState* state) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Open(state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
+  RETURN_IF_ERROR(QueryMaintenance(state));
   RETURN_IF_ERROR(sort_exec_exprs_.Open(state));
 
-  tuple_row_less_than_.reset(new TupleRowComparator(
-      sort_exec_exprs_.lhs_ordering_expr_ctxs(), sort_exec_exprs_.rhs_ordering_expr_ctxs(),
-      is_asc_order_, nulls_first_));
-  priority_queue_.reset(
-      new priority_queue<Tuple*, vector<Tuple*>, TupleRowComparator>(
-          *tuple_row_less_than_));
+  // These objects must be created after opening the sort_exec_exprs_. Avoid creating
+  // them after every Reset()/Open().
+  if (tuple_row_less_than_.get() == NULL) {
+    DCHECK(priority_queue_.get() == NULL);
+    tuple_row_less_than_.reset(new TupleRowComparator(
+        sort_exec_exprs_.lhs_ordering_expr_ctxs(),
+        sort_exec_exprs_.rhs_ordering_expr_ctxs(),
+        is_asc_order_, nulls_first_));
+    priority_queue_.reset(
+        new priority_queue<Tuple*, vector<Tuple*>, TupleRowComparator>(
+            *tuple_row_less_than_));
+  }
+  // Allocate memory for a temporary tuple.
+  tmp_tuple_ = reinterpret_cast<Tuple*>(
+      tuple_pool_->Allocate(materialized_tuple_desc_->byte_size()));
 
   RETURN_IF_ERROR(child(0)->Open(state));
 
@@ -90,20 +105,23 @@ Status TopNNode::Open(RuntimeState* state) {
         InsertTupleRow(batch.GetRow(i));
       }
       RETURN_IF_CANCELLED(state);
-      RETURN_IF_ERROR(state->QueryMaintenance());
+      RETURN_IF_ERROR(QueryMaintenance(state));
     } while (!eos);
   }
   DCHECK_LE(priority_queue_->size(), limit_ + offset_);
   PrepareForOutput();
-  child(0)->Close(state);
-  return Status::OK;
+
+  // Unless we are inside a subplan expecting to call Open()/GetNext() on the child
+  // again, the child can be closed at this point.
+  if (!IsInSubplan()) child(0)->Close(state);
+  return Status::OK();
 }
 
 Status TopNNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
+  RETURN_IF_ERROR(QueryMaintenance(state));
   while (!row_batch->AtCapacity() && (get_next_iter_ != sorted_top_n_.end())) {
     if (num_rows_skipped_ < offset_) {
       ++get_next_iter_;
@@ -121,7 +139,21 @@ Status TopNNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
     COUNTER_SET(rows_returned_counter_, num_rows_returned_);
   }
   *eos = get_next_iter_ == sorted_top_n_.end();
-  return Status::OK;
+
+  // Transfer ownership of tuple data to output batch.
+  // TODO: To improve performance for small inputs when this node is run multiple times
+  // inside a subplan, we might choose to only selectively transfer, e.g., when the
+  // block(s) in the pool are all full or when the pool has reached a certain size.
+  if (*eos) row_batch->tuple_data_pool()->AcquireData(tuple_pool_.get(), false);
+  return Status::OK();
+}
+
+Status TopNNode::Reset(RuntimeState* state) {
+  while(!priority_queue_->empty()) priority_queue_->pop();
+  num_rows_skipped_ = 0;
+  // We deliberately do not free the tuple_pool_ here to allow selective transferring
+  // of resources in the future.
+  return ExecNode::Reset(state);
 }
 
 void TopNNode::Close(RuntimeState* state) {

@@ -18,12 +18,10 @@ import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.hadoop.hive.metastore.api.FieldSchema;
-
 import com.cloudera.impala.analysis.CreateTableStmt;
 import com.cloudera.impala.analysis.SqlParser;
 import com.cloudera.impala.analysis.SqlScanner;
-import com.cloudera.impala.common.AnalysisException;
+import com.cloudera.impala.analysis.TypeDef;
 import com.cloudera.impala.common.Pair;
 import com.cloudera.impala.thrift.TColumnType;
 import com.cloudera.impala.thrift.TPrimitiveType;
@@ -40,8 +38,11 @@ import com.google.common.collect.Lists;
  * as abstract methods that subclasses must implement.
  */
 public abstract class Type {
-  // If true, this type has been analyzed.
-  protected boolean isAnalyzed_;
+  // Maximum nesting depth of a type. This limit was determined experimentally by
+  // generating and scanning deeply nested Parquet and Avro files. In those experiments,
+  // we exceeded the stack space in the scanner (which uses recursion for dealing with
+  // nested types) at a nesting depth between 200 and 300 (200 worked, 300 crashed).
+  public static int MAX_NESTING_DEPTH = 100;
 
   // Static constant types for scalar types that don't require additional information.
   public static final ScalarType INVALID = new ScalarType(PrimitiveType.INVALID_TYPE);
@@ -113,15 +114,28 @@ public abstract class Type {
     return supportedTypes;
   }
 
-  public abstract void analyze() throws AnalysisException;
-
   /**
    * The output of this is stored directly in the hive metastore as the column type.
    * The string must match exactly.
-   * TODO: Consider adding another 'pretty print' method for complex types to use
-   * in describe/show statements.
    */
-  public abstract String toSql();
+  public final String toSql() { return toSql(0); }
+
+  /**
+   * Recursive helper for toSql() to be implemented by subclasses. Keeps track of the
+   * nesting depth and terminates the recursion if MAX_NESTING_DEPTH is reached.
+   */
+  protected abstract String toSql(int depth);
+
+  /**
+   * Same as toSql() but adds newlines and spaces for better readability of nested types.
+   */
+  public String prettyPrint() { return prettyPrint(0); }
+
+  /**
+   * Pretty prints this type with lpad number of leading spaces. Used to implement
+   * prettyPrint() with space-indented nested types.
+   */
+  protected abstract String prettyPrint(int lpad);
 
   public boolean isInvalid() { return isScalarType(PrimitiveType.INVALID_TYPE); }
   public boolean isValid() { return !isInvalid(); }
@@ -192,8 +206,17 @@ public abstract class Type {
 
   public PrimitiveType getPrimitiveType() { return PrimitiveType.INVALID_TYPE; }
 
-  // TODO: Handle complex types properly. Some instances may be fixed length.
-  public int getSlotSize() { return -1; }
+  /**
+   * Returns the size in bytes of the fixed-length portion that a slot of this type
+   * occupies in a tuple.
+   */
+  public int getSlotSize() {
+    // 8-byte pointer and 4-byte length indicator (12 bytes total).
+    // Per struct alignment rules, there is an extra 4 bytes of padding to align to 8
+    // bytes so 16 bytes total.
+    if (isCollectionType()) return 16;
+    throw new IllegalStateException("getSlotSize() not implemented for type " + toSql());
+  }
 
   public TColumnType toThrift() {
     TColumnType container = new TColumnType();
@@ -209,9 +232,10 @@ public abstract class Type {
 
   /**
    * Returns true if this type is equal to t, or if t is a wildcard variant of this
-   * type (only applicable to DECIMAL).
+   * type. Subclasses should override this as appropriate. The default implementation
+   * here is to avoid special-casing logic in callers for concrete types.
    */
-  public abstract boolean matchesType(Type t);
+  public boolean matchesType(Type t) { return false; }
 
   /**
    * Gets the ColumnType from the given FieldSchema by using Impala's SqlParser.
@@ -222,11 +246,11 @@ public abstract class Type {
    *     returned but type.IsSupported() returns false.
    *   - A type Impala can't understand at all in which case null is returned.
    */
-  public static Type parseColumnType(FieldSchema fs) {
+  public static Type parseColumnType(String typeStr) {
     // Wrap the type string in a CREATE TABLE stmt and use Impala's Parser
     // to get the ColumnType.
     // Pick a table name that can't be used.
-    String stmt = String.format("CREATE TABLE $DUMMY ($DUMMY %s)", fs.getType());
+    String stmt = String.format("CREATE TABLE $DUMMY ($DUMMY %s)", typeStr);
     SqlScanner input = new SqlScanner(new StringReader(stmt));
     SqlParser parser = new SqlParser(input);
     CreateTableStmt createTableStmt;
@@ -244,33 +268,78 @@ public abstract class Type {
     } catch (Exception e) {
       return null;
     }
-    return createTableStmt.getColumnDefs().get(0).getType();
+    TypeDef typeDef = createTableStmt.getColumnDefs().get(0).getTypeDef();
+    return typeDef.getType();
   }
 
   /**
-   * Returns true if casting t1 to t2 results in no loss of precision, false otherwise.
+   * Returns true if t1 can be implicitly cast to t2 according to Impala's casting rules.
+   * Implicit casts are always allowed when no loss of precision would result (i.e. every
+   * value of t1 can be represented exactly by a value of t2). Implicit casts are allowed
+   * in certain other cases such as casting numeric types to floating point types and
+   * converting strings to timestamps.
+   * If strict is true, only consider casts that result in no loss of precision.
    * TODO: Support casting of non-scalar types.
    */
-  public static boolean isImplicitlyCastable(Type t1, Type t2) {
-    if (t1.isScalarType() && t1.isScalarType()) {
+  public static boolean isImplicitlyCastable(Type t1, Type t2, boolean strict) {
+    if (t1.isScalarType() && t2.isScalarType()) {
       return ScalarType.isImplicitlyCastable(
-          (ScalarType) t1, (ScalarType) t2);
+          (ScalarType) t1, (ScalarType) t2, strict);
     }
     return false;
   }
 
   /**
-   * Return type t such that values from both t1 and t2 can be assigned to t
-   * without loss of precision. Returns INVALID_TYPE if there is no such type
-   * or if any of t1 and t2 is INVALID_TYPE.
+   * Return type t such that values from both t1 and t2 can be assigned to t without an
+   * explicit cast. If strict, does not consider conversions that would result in loss
+   * of precision (e.g. converting decimal to float). Returns INVALID_TYPE if there is
+   * no such type or if any of t1 and t2 is INVALID_TYPE.
    * TODO: Support non-scalar types.
    */
-  public static Type getAssignmentCompatibleType(Type t1, Type t2) {
+  public static Type getAssignmentCompatibleType(Type t1, Type t2, boolean strict) {
     if (t1.isScalarType() && t2.isScalarType()) {
       return ScalarType.getAssignmentCompatibleType(
-          (ScalarType) t1, (ScalarType) t2);
+          (ScalarType) t1, (ScalarType) t2, strict);
     }
     return ScalarType.INVALID;
+  }
+
+  /**
+   * Returns true if this type exceeds the MAX_NESTING_DEPTH, false otherwise.
+   */
+  public boolean exceedsMaxNestingDepth() { return exceedsMaxNestingDepth(0); }
+
+  /**
+   * Helper for exceedsMaxNestingDepth(). Recursively computes the max nesting depth,
+   * terminating early if MAX_NESTING_DEPTH is reached. Returns true if this type
+   * exceeds the MAX_NESTING_DEPTH, false otherwise.
+   *
+   * Examples of types and their nesting depth:
+   * INT --> 1
+   * STRUCT<f1:INT> --> 2
+   * STRUCT<f1:STRUCT<f2:INT>> --> 3
+   * ARRAY<INT> --> 2
+   * ARRAY<STRUCT<f1:INT>> --> 3
+   * MAP<STRING,INT> --> 2
+   * MAP<STRING,STRUCT<f1:INT>> --> 3
+   */
+  private boolean exceedsMaxNestingDepth(int d) {
+    if (d >= MAX_NESTING_DEPTH) return true;
+    if (isStructType()) {
+      StructType structType = (StructType) this;
+      for (StructField f: structType.getFields()) {
+        if (f.getType().exceedsMaxNestingDepth(d + 1)) return true;
+      }
+    } else if (isArrayType()) {
+      ArrayType arrayType = (ArrayType) this;
+      if (arrayType.getItemType().exceedsMaxNestingDepth(d + 1)) return true;
+    } else if (isMapType()) {
+      MapType mapType = (MapType) this;
+      if (mapType.getValueType().exceedsMaxNestingDepth(d + 1)) return true;
+    } else {
+      Preconditions.checkState(isScalarType());
+    }
+    return false;
   }
 
   public static List<TColumnType> toThrift(Type[] types) {
@@ -385,7 +454,10 @@ public abstract class Type {
       case STRING:
         return Integer.MAX_VALUE;
       case TIMESTAMP:
-        return 30;
+        return 29;
+      case CHAR:
+      case VARCHAR:
+        return t.getLength();
       default:
         return null;
     }
@@ -412,6 +484,8 @@ public abstract class Type {
         return 7;
       case DOUBLE:
         return 15;
+      case DECIMAL:
+        return t.decimalPrecision();
       default:
         return null;
     }
@@ -420,6 +494,8 @@ public abstract class Type {
   /**
    * JDBC data type description
    * Returns the number of fractional digits for this type, or null if not applicable.
+   * For timestamp/time types, returns the number of digits in the fractional seconds
+   * component.
    */
   public Integer getDecimalDigits() {
     if (!isScalarType()) return null;
@@ -435,6 +511,10 @@ public abstract class Type {
         return 7;
       case DOUBLE:
         return 15;
+      case TIMESTAMP:
+        return 9;
+      case DECIMAL:
+        return t.decimalScale();
       default:
         return null;
     }
@@ -442,7 +522,15 @@ public abstract class Type {
 
   /**
    * JDBC data type description
-   * Returns the radix for this type (typically either 2 or 10) or null if not applicable.
+   * For numeric data types, either 10 or 2. If it is 10, the values in COLUMN_SIZE
+   * and DECIMAL_DIGITS give the number of decimal digits allowed for the column.
+   * For example, a DECIMAL(12,5) column would return a NUM_PREC_RADIX of 10,
+   * a COLUMN_SIZE of 12, and a DECIMAL_DIGITS of 5; a FLOAT column could return
+   * a NUM_PREC_RADIX of 10, a COLUMN_SIZE of 15, and a DECIMAL_DIGITS of NULL.
+   * If it is 2, the values in COLUMN_SIZE and DECIMAL_DIGITS give the number of bits
+   * allowed in the column. For example, a FLOAT column could return a RADIX of 2,
+   * a COLUMN_SIZE of 53, and a DECIMAL_DIGITS of NULL. NULL is returned for data
+   * types where NUM_PREC_RADIX is not applicable.
    */
   public Integer getNumPrecRadix() {
     if (!isScalarType()) return null;
@@ -452,10 +540,10 @@ public abstract class Type {
       case SMALLINT:
       case INT:
       case BIGINT:
-        return 10;
       case FLOAT:
       case DOUBLE:
-        return 2;
+      case DECIMAL:
+        return 10;
       default:
         // everything else (including boolean and string) is null
         return null;
@@ -467,10 +555,12 @@ public abstract class Type {
    * Returns the java SQL type enum
    */
   public int getJavaSqlType() {
-    if (!isScalarType()) {
-      Preconditions.checkArgument(false, "Invalid non-scalar type " + toSql());
-      return 0;
-    }
+    if (isStructType()) return java.sql.Types.STRUCT;
+    // Both MAP and ARRAY are reported as ARRAY, since there is no better matching
+    // Java SQL type. This behavior is consistent with Hive.
+    if (isCollectionType()) return java.sql.Types.ARRAY;
+
+    Preconditions.checkState(isScalarType(), "Invalid non-scalar type: " + toSql());
     ScalarType t = (ScalarType) this;
     switch (t.getPrimitiveType()) {
       case NULL_TYPE: return java.sql.Types.NULL;
@@ -483,6 +573,8 @@ public abstract class Type {
       case DOUBLE: return java.sql.Types.DOUBLE;
       case TIMESTAMP: return java.sql.Types.TIMESTAMP;
       case STRING: return java.sql.Types.VARCHAR;
+      case CHAR: return java.sql.Types.CHAR;
+      case VARCHAR: return java.sql.Types.VARCHAR;
       case BINARY: return java.sql.Types.BINARY;
       case DECIMAL: return java.sql.Types.DECIMAL;
       default:
@@ -496,37 +588,40 @@ public abstract class Type {
    * Matrix that records "smallest" assignment-compatible type of two types
    * (INVALID_TYPE if no such type exists, ie, if the input types are fundamentally
    * incompatible). A value of any of the two types could be assigned to a slot
-   * of the assignment-compatible type without loss of precision.
+   * of the assignment-compatible type. For strict compatibility, this can be done
+   * without any loss of precision. For non-strict compatibility, there may be loss of
+   * precision, e.g. if converting from BIGINT to FLOAT.
    *
    * We chose not to follow MySQL's type casting behavior as described here:
    * http://dev.mysql.com/doc/refman/5.0/en/type-conversion.html
    * for the following reasons:
    * conservative casting in arithmetic exprs: TINYINT + TINYINT -> BIGINT
    * comparison of many types as double: INT < FLOAT -> comparison as DOUBLE
-   * special cases when dealing with dates and timestamps
+   * special cases when dealing with dates and timestamps.
    */
   protected static PrimitiveType[][] compatibilityMatrix;
+
+  /**
+   * If we are checking in strict mode, any non-null entry in this matrix overrides
+   * compatibilityMatrix. If the entry is null, the entry in compatibility matrix
+   * is valid.
+   */
+  protected static PrimitiveType[][] strictCompatibilityMatrix;
+
   static {
     compatibilityMatrix = new
-        PrimitiveType[CHAR.ordinal() + 1][CHAR.ordinal() + 1];
+        PrimitiveType[PrimitiveType.values().length][PrimitiveType.values().length];
+    strictCompatibilityMatrix = new
+        PrimitiveType[PrimitiveType.values().length][PrimitiveType.values().length];
 
-    // NULL_TYPE is compatible with any type and results in the non-null type.
-    compatibilityMatrix[NULL.ordinal()][NULL.ordinal()] = PrimitiveType.NULL_TYPE;
-    compatibilityMatrix[NULL.ordinal()][BOOLEAN.ordinal()] = PrimitiveType.BOOLEAN;
-    compatibilityMatrix[NULL.ordinal()][TINYINT.ordinal()] = PrimitiveType.TINYINT;
-    compatibilityMatrix[NULL.ordinal()][SMALLINT.ordinal()] = PrimitiveType.SMALLINT;
-    compatibilityMatrix[NULL.ordinal()][INT.ordinal()] = PrimitiveType.INT;
-    compatibilityMatrix[NULL.ordinal()][BIGINT.ordinal()] = PrimitiveType.BIGINT;
-    compatibilityMatrix[NULL.ordinal()][FLOAT.ordinal()] = PrimitiveType.FLOAT;
-    compatibilityMatrix[NULL.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
-    compatibilityMatrix[NULL.ordinal()][DATE.ordinal()] = PrimitiveType.DATE;
-    compatibilityMatrix[NULL.ordinal()][DATETIME.ordinal()] = PrimitiveType.DATETIME;
-    compatibilityMatrix[NULL.ordinal()][TIMESTAMP.ordinal()] = PrimitiveType.TIMESTAMP;
-    compatibilityMatrix[NULL.ordinal()][STRING.ordinal()] = PrimitiveType.STRING;
-    compatibilityMatrix[NULL.ordinal()][VARCHAR.ordinal()] = PrimitiveType.VARCHAR;
-    compatibilityMatrix[NULL.ordinal()][CHAR.ordinal()] = PrimitiveType.CHAR;
+    for (int i = 0; i < PrimitiveType.values().length; ++i) {
+      // Each type is compatible with itself.
+      compatibilityMatrix[i][i] = PrimitiveType.values()[i];
+      // BINARY is not supported.
+      compatibilityMatrix[BINARY.ordinal()][i] = PrimitiveType.INVALID_TYPE;
+      compatibilityMatrix[i][BINARY.ordinal()] = PrimitiveType.INVALID_TYPE;
+    }
 
-    compatibilityMatrix[BOOLEAN.ordinal()][BOOLEAN.ordinal()] = PrimitiveType.BOOLEAN;
     compatibilityMatrix[BOOLEAN.ordinal()][TINYINT.ordinal()] = PrimitiveType.TINYINT;
     compatibilityMatrix[BOOLEAN.ordinal()][SMALLINT.ordinal()] = PrimitiveType.SMALLINT;
     compatibilityMatrix[BOOLEAN.ordinal()][INT.ordinal()] = PrimitiveType.INT;
@@ -538,14 +633,16 @@ public abstract class Type {
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BOOLEAN.ordinal()][TIMESTAMP.ordinal()] =
         PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[BOOLEAN.ordinal()][STRING.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[BOOLEAN.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[BOOLEAN.ordinal()][STRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[BOOLEAN.ordinal()][VARCHAR.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BOOLEAN.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[TINYINT.ordinal()][TINYINT.ordinal()] = PrimitiveType.TINYINT;
     compatibilityMatrix[TINYINT.ordinal()][SMALLINT.ordinal()] = PrimitiveType.SMALLINT;
     compatibilityMatrix[TINYINT.ordinal()][INT.ordinal()] = PrimitiveType.INT;
     compatibilityMatrix[TINYINT.ordinal()][BIGINT.ordinal()] = PrimitiveType.BIGINT;
+    // 8 bit integer fits in mantissa of both float and double.
     compatibilityMatrix[TINYINT.ordinal()][FLOAT.ordinal()] = PrimitiveType.FLOAT;
     compatibilityMatrix[TINYINT.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[TINYINT.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
@@ -553,13 +650,15 @@ public abstract class Type {
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TINYINT.ordinal()][TIMESTAMP.ordinal()] =
         PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[TINYINT.ordinal()][STRING.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[TINYINT.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[TINYINT.ordinal()][STRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[TINYINT.ordinal()][VARCHAR.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TINYINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[SMALLINT.ordinal()][SMALLINT.ordinal()] = PrimitiveType.SMALLINT;
     compatibilityMatrix[SMALLINT.ordinal()][INT.ordinal()] = PrimitiveType.INT;
     compatibilityMatrix[SMALLINT.ordinal()][BIGINT.ordinal()] = PrimitiveType.BIGINT;
+    // 16 bit integer fits in mantissa of both float and double.
     compatibilityMatrix[SMALLINT.ordinal()][FLOAT.ordinal()] = PrimitiveType.FLOAT;
     compatibilityMatrix[SMALLINT.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[SMALLINT.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
@@ -573,9 +672,13 @@ public abstract class Type {
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[SMALLINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[INT.ordinal()][INT.ordinal()] = PrimitiveType.INT;
     compatibilityMatrix[INT.ordinal()][BIGINT.ordinal()] = PrimitiveType.BIGINT;
+    // 32 bit integer fits only mantissa of double.
+    // TODO: arguably we should promote INT + FLOAT to DOUBLE to avoid loss of precision,
+    // but we depend on it remaining FLOAT for some use cases, e.g.
+    // "insert into tbl (float_col) select int_col + float_col from ..."
     compatibilityMatrix[INT.ordinal()][FLOAT.ordinal()] = PrimitiveType.FLOAT;
+    strictCompatibilityMatrix[INT.ordinal()][FLOAT.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[INT.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[INT.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[INT.ordinal()][DATETIME.ordinal()] = PrimitiveType.INVALID_TYPE;
@@ -584,8 +687,14 @@ public abstract class Type {
     compatibilityMatrix[INT.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[INT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[BIGINT.ordinal()][BIGINT.ordinal()] = PrimitiveType.BIGINT;
+    // 64 bit integer does not fit in mantissa of double or float.
+    // TODO: arguably we should always promote BIGINT + FLOAT to double here to keep as
+    // much precision as possible, but we depend on this implicit cast for some use
+    // cases, similarly to INT + FLOAT.
     compatibilityMatrix[BIGINT.ordinal()][FLOAT.ordinal()] = PrimitiveType.FLOAT;
+    strictCompatibilityMatrix[BIGINT.ordinal()][FLOAT.ordinal()] = PrimitiveType.DOUBLE;
+    // TODO: we're breaking the definition of strict compatibility for BIGINT + DOUBLE,
+    // but this forces function overloading to consider the DOUBLE overload first.
     compatibilityMatrix[BIGINT.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[BIGINT.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BIGINT.ordinal()][DATETIME.ordinal()] =
@@ -596,7 +705,6 @@ public abstract class Type {
     compatibilityMatrix[BIGINT.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BIGINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[FLOAT.ordinal()][FLOAT.ordinal()] = PrimitiveType.FLOAT;
     compatibilityMatrix[FLOAT.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[FLOAT.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[FLOAT.ordinal()][DATETIME.ordinal()] = PrimitiveType.INVALID_TYPE;
@@ -606,7 +714,6 @@ public abstract class Type {
     compatibilityMatrix[FLOAT.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[FLOAT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[DOUBLE.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[DOUBLE.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][DATETIME.ordinal()] =
         PrimitiveType.INVALID_TYPE;
@@ -616,36 +723,47 @@ public abstract class Type {
     compatibilityMatrix[DOUBLE.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[DATE.ordinal()][DATE.ordinal()] = PrimitiveType.DATE;
     compatibilityMatrix[DATE.ordinal()][DATETIME.ordinal()] = PrimitiveType.DATETIME;
     compatibilityMatrix[DATE.ordinal()][TIMESTAMP.ordinal()] = PrimitiveType.TIMESTAMP;
     compatibilityMatrix[DATE.ordinal()][STRING.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DATE.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DATE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[DATETIME.ordinal()][DATETIME.ordinal()] = PrimitiveType.DATETIME;
     compatibilityMatrix[DATETIME.ordinal()][TIMESTAMP.ordinal()] =
         PrimitiveType.TIMESTAMP;
     compatibilityMatrix[DATETIME.ordinal()][STRING.ordinal()] =
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DATETIME.ordinal()][VARCHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[DATETIME.ordinal()][CHAR.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[TIMESTAMP.ordinal()][TIMESTAMP.ordinal()] =
-        PrimitiveType.TIMESTAMP;
+    // We can convert some but not all string values to timestamps.
     compatibilityMatrix[TIMESTAMP.ordinal()][STRING.ordinal()] =
         PrimitiveType.TIMESTAMP;
+    strictCompatibilityMatrix[TIMESTAMP.ordinal()][STRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TIMESTAMP.ordinal()][VARCHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TIMESTAMP.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[STRING.ordinal()][STRING.ordinal()] = PrimitiveType.STRING;
     compatibilityMatrix[STRING.ordinal()][VARCHAR.ordinal()] = PrimitiveType.STRING;
     compatibilityMatrix[STRING.ordinal()][CHAR.ordinal()] = PrimitiveType.STRING;
 
-    compatibilityMatrix[VARCHAR.ordinal()][VARCHAR.ordinal()] = PrimitiveType.VARCHAR;
     compatibilityMatrix[VARCHAR.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-    compatibilityMatrix[CHAR.ordinal()][CHAR.ordinal()] = PrimitiveType.CHAR;
+    // Check all of the necessary entries that should be filled.
+    for (int i = 0; i < PrimitiveType.values().length; ++i) {
+      for (int j = i; j < PrimitiveType.values().length; ++j) {
+        PrimitiveType t1 = PrimitiveType.values()[i];
+        PrimitiveType t2 = PrimitiveType.values()[j];
+        // DECIMAL, NULL, and INVALID_TYPE  are handled separately.
+        if (t1 == PrimitiveType.INVALID_TYPE ||
+            t2 == PrimitiveType.INVALID_TYPE) continue;
+        if (t1 == PrimitiveType.NULL_TYPE || t2 == PrimitiveType.NULL_TYPE) continue;
+        if (t1 == PrimitiveType.DECIMAL || t2 == PrimitiveType.DECIMAL) continue;
+        Preconditions.checkNotNull(compatibilityMatrix[i][j]);
+      }
+    }
   }
 }

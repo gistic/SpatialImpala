@@ -14,9 +14,8 @@
 
 package com.cloudera.impala.catalog;
 
-import org.apache.hadoop.hive.metastore.MetaStoreUtils;
+import org.apache.commons.lang3.StringUtils;
 
-import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.thrift.TColumnType;
 import com.cloudera.impala.thrift.TStructField;
 import com.cloudera.impala.thrift.TTypeNode;
@@ -27,8 +26,9 @@ import com.cloudera.impala.thrift.TTypeNode;
  */
 public class StructField {
   protected final String name_;
-  protected Type type_;
-  protected String comment_;
+  protected final Type type_;
+  protected final String comment_;
+  protected int position_;  // in struct
 
   public StructField(String name, Type type, String comment) {
     name_ = name;
@@ -36,21 +36,38 @@ public class StructField {
     comment_ = comment;
   }
 
-  public void analyze() throws AnalysisException {
-    // Check whether the column name meets the Metastore's requirements.
-    if (!MetaStoreUtils.validateName(name_)) {
-      throw new AnalysisException("Invalid struct field name: " + name_);
-    }
-    type_.analyze();
+  public StructField(String name, Type type) {
+    this(name, type, null);
   }
 
   public String getComment() { return comment_; }
   public String getName() { return name_; }
   public Type getType() { return type_; }
+  public int getPosition() { return position_; }
+  public void setPosition(int position) { position_ = position; }
 
-  public String toSql() {
+  public String toSql(int depth) {
+    String typeSql = (depth < Type.MAX_NESTING_DEPTH) ? type_.toSql(depth) : "...";
     StringBuilder sb = new StringBuilder(name_);
-    if (type_ != null) sb.append(":" + type_.toSql());
+    if (type_ != null) sb.append(":" + typeSql);
+    if (comment_ != null) sb.append(String.format(" COMMENT '%s'", comment_));
+    return sb.toString();
+  }
+
+  /**
+   * Pretty prints this field with lpad number of leading spaces.
+   * Calls prettyPrint(lpad) on this field's type.
+   */
+  public String prettyPrint(int lpad) {
+    String leftPadding = StringUtils.repeat(' ', lpad);
+    StringBuilder sb = new StringBuilder(leftPadding + name_);
+    if (type_ != null) {
+      // Pass in the padding to make sure nested fields are aligned properly,
+      // even if we then strip the top-level padding.
+      String typeStr = type_.prettyPrint(lpad);
+      typeStr = typeStr.substring(lpad);
+      sb.append(":" + typeStr);
+    }
     if (comment_ != null) sb.append(String.format(" COMMENT '%s'", comment_));
     return sb.toString();
   }
@@ -61,5 +78,12 @@ public class StructField {
     if (comment_ != null) field.setComment(comment_);
     node.struct_fields.add(field);
     type_.toThrift(container);
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    if (!(other instanceof StructField)) return false;
+    StructField otherStructField = (StructField) other;
+    return otherStructField.name_.equals(name_) && otherStructField.type_.equals(type_);
   }
 }

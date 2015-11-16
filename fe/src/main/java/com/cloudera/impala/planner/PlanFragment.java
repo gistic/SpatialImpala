@@ -29,7 +29,7 @@ import com.cloudera.impala.catalog.HdfsTable;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.common.NotImplementedException;
-import com.cloudera.impala.planner.HashJoinNode.DistributionMode;
+import com.cloudera.impala.planner.JoinNode.DistributionMode;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TPartitionType;
 import com.cloudera.impala.thrift.TPlanFragment;
@@ -199,10 +199,10 @@ public class PlanFragment {
       if (!childResult) return false;
       if (hashJoinNode.getJoinOp().equals(JoinOperator.FULL_OUTER_JOIN) ||
           hashJoinNode.getJoinOp().equals(JoinOperator.LEFT_OUTER_JOIN) ||
-          hashJoinNode.getJoinOp().equals(JoinOperator.LEFT_ANTI_JOIN)) {
+          hashJoinNode.getJoinOp().equals(JoinOperator.LEFT_ANTI_JOIN) ||
+          hashJoinNode.getJoinOp().equals(JoinOperator.NULL_AWARE_LEFT_ANTI_JOIN)) {
         // It is not correct to push through an outer or anti join on the probe side.
         // We cannot filter those rows out.
-        // TODO: Add NULL_AWARE_LEFT_ANTI_JOIN.
         return false;
       }
       // We can't push down predicates for partitioned joins yet.

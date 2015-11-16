@@ -25,35 +25,70 @@
 
 namespace impala {
 
-// Used to indicate the type of a date/time format token group.
+/// Add support for dealing with custom date/time formats in Impala. The following
+/// date/time tokens are supported:
+///   y – Year
+///   M – Month
+///   d – Day
+///   H – Hour
+///   m – Minute
+///   s – second
+///   S – Fractional second
+///
+///   TimeZone offset formats (Must be at the end of format string):
+///   +/-hh:mm
+///   +/-hhmm
+///   +/-hh
+/// The token names and usage have been modeled on the SimpleDateFormat class used
+/// in Java. This allows the use of repeating tokens to indicate zero padding for an
+/// output scenario (TS -> String) and a guide for reading data to a given length in
+/// a parsing scenario. Representing literal month is achieved by specifying three
+/// repeating tokens e.g. yyyy-MMM-dd -> 2013-Nov-21.
+///
+/// Formatting character groups can appear in any order along with any separators
+/// except TimeZone offset.
+/// e.g.
+///   yyyy/MM/dd
+///   dd-MMM-yy
+///   (dd)(MM)(yyyy) HH:mm:ss
+///   yyyy-MM-dd HH:mm:ss+hh:mm
+/// ..etc..
+///
+/// The following features are not supported:
+///   Long literal months e.g. MMMM
+///   Nested strings e.g. “Year: “ yyyy “Month: “ mm “Day: “ dd
+///   Lazy formatting
+
+/// Used to indicate the type of a date/time format token group.
 enum DateTimeFormatTokenType {
   UNKNOWN = 0,
   SEPARATOR,
   YEAR,
   MONTH_IN_YEAR,
-  // Indicates a short literal month e.g. MMM (Aug). Note that the month name is case
-  // insensitive for an input scenario and printed in camel case for an output scenario.
+  /// Indicates a short literal month e.g. MMM (Aug). Note that the month name is case
+  /// insensitive for an input scenario and printed in camel case for an output scenario.
   MONTH_IN_YEAR_SLT,
   DAY_IN_MONTH,
   HOUR_IN_DAY,
   MINUTE_IN_HOUR,
   SECOND_IN_MINUTE,
-  // Indicates fractional seconds e.g.14:52:36.2334. By default this provides nanosecond
-  // resolution.
+  /// Indicates fractional seconds e.g.14:52:36.2334. By default this provides nanosecond
+  /// resolution.
   FRACTION,
+  TZ_OFFSET,
 };
 
-// Used to store metadata about a token group within a date/time format.
+/// Used to store metadata about a token group within a date/time format.
 struct DateTimeFormatToken {
-  // Indicates the type of date/time format token e.g. year
+  /// Indicates the type of date/time format token e.g. year
   DateTimeFormatTokenType type;
-  // The position of where this token group is supposed to start in the date/time string
-  // to be parsed
+  /// The position of where this token group is supposed to start in the date/time string
+  /// to be parsed
   int pos;
-  // The length of the token group
+  /// The length of the token group
   int len;
-  // A pointer to the date/time format string that is positioned at the start of this
-  // token group
+  /// A pointer to the date/time format string that is positioned at the start of this
+  /// token group
   const char* val;
 
   DateTimeFormatToken(DateTimeFormatTokenType type, int pos, int len, const char* val)
@@ -64,19 +99,19 @@ struct DateTimeFormatToken {
   }
 };
 
-// This structure is used to hold metadata for a date/time format. Each token group
-// within the raw format is parsed and placed in this structure along with other high
-// level information e.g. if the format contains date and/or time tokens. This context
-// is used during date/time parsing.
+/// This structure is used to hold metadata for a date/time format. Each token group
+/// within the raw format is parsed and placed in this structure along with other high
+/// level information e.g. if the format contains date and/or time tokens. This context
+/// is used during date/time parsing.
 struct DateTimeFormatContext {
   const char* fmt;
   int fmt_len;
-  // Holds the expanded length of fmt_len plus any required space when short format
-  // tokens are used. The output buffer size is driven from this value. For example, in
-  // an output scenario a user may provide the format yyyy-M-d, if the day and month
-  // equates to 12, 21 then extra space is needed in the buffer to hold the values. The
-  // short format type e.g. yyyy-M-d is valid where no zero padding is required on single
-  // digits.
+  /// Holds the expanded length of fmt_len plus any required space when short format
+  /// tokens are used. The output buffer size is driven from this value. For example, in
+  /// an output scenario a user may provide the format yyyy-M-d, if the day and month
+  /// equates to 12, 21 then extra space is needed in the buffer to hold the values. The
+  /// short format type e.g. yyyy-M-d is valid where no zero padding is required on single
+  /// digits.
   int fmt_out_len;
   std::vector<DateTimeFormatToken> toks;
   bool has_date_toks;
@@ -100,7 +135,7 @@ struct DateTimeFormatContext {
   }
 };
 
-// Stores the results of parsing a date/time string.
+/// Stores the results of parsing a date/time string.
 struct DateTimeParseResult {
   int year;
   int month;
@@ -109,6 +144,7 @@ struct DateTimeParseResult {
   int minute;
   int second;
   int32_t fraction;
+  boost::posix_time::time_duration tz_offset;
 
   DateTimeParseResult()
     : year(0),
@@ -117,21 +153,22 @@ struct DateTimeParseResult {
       hour(0),
       minute(0),
       second(0),
-      fraction(0) {
+      fraction(0),
+      tz_offset(0,0,0,0) {
   }
 };
 
-// Used for parsing both default and custom formatted timestamp values.
+/// Used for parsing both default and custom formatted timestamp values.
 class TimestampParser {
  public:
-  // Initializes the static parser context which includes default date/time formats and
-  // lookup tables. This *must* be called before any of the Parse* related functions can
-  // be used.
+  /// Initializes the static parser context which includes default date/time formats and
+  /// lookup tables. This *must* be called before any of the Parse* related functions can
+  /// be used.
   static void Init();
 
-  // Parse the date/time format into tokens and place them in the context.
-  // dt_ctx -- date/time format context
-  // Return true if the parse was successful.
+  /// Parse the date/time format into tokens and place them in the context.
+  /// dt_ctx -- date/time format context
+  /// Return true if the parse was successful.
   static inline bool ParseFormatTokens(DateTimeFormatContext* dt_ctx) {
     DCHECK(dt_ctx != NULL);
     DCHECK(dt_ctx->fmt != NULL);
@@ -145,6 +182,12 @@ class TimestampParser {
       if (isdigit(*str)) return false;
       // Ignore T|Z|non aA-zZ chars but track them as separators (required for printing).
       if ((*str == 'T') || (*str == 'Z') || (!isalpha(*str))) {
+        if (dt_ctx->has_time_toks && IsValidTZOffset(str, str_end)) {
+          // TZ offset must come at the end of the format.
+          dt_ctx->toks.push_back(DateTimeFormatToken(TZ_OFFSET, str - str_begin,
+              str_end - str, str));
+          break;
+        }
         dt_ctx->toks.push_back(DateTimeFormatToken(SEPARATOR, str - str_begin, 1, str));
         ++str;
         continue;
@@ -187,18 +230,18 @@ class TimestampParser {
     return dt_ctx->has_date_toks || dt_ctx->has_time_toks;
   }
 
-  // Parse a default date/time string. The default timestamp format is:
-  // yyyy-MM-dd HH:mm:ss.SSSSSSSSS or yyyy-MM-ddTHH:mm:ss.SSSSSSSSS. Either just the date
-  // or just the time may be specified. All components are required in either the date or
-  // time except for the fractional seconds following the period. In the case of just a
-  // date, the time will be set to 00:00:00. In the case of just a time, the date will be
-  // set to invalid.
-  // str -- valid pointer to the string to parse
-  // len -- length of the string to parse (must be > 0)
-  // dt_ctx -- date/time format context (must contain valid tokens)
-  // d -- the date value where the results of the parsing will be placed
-  // t -- the time value where the results of the parsing will be placed
-  // Returns true if the date/time was successfully parsed.
+  /// Parse a default date/time string. The default timestamp format is:
+  /// yyyy-MM-dd HH:mm:ss.SSSSSSSSS or yyyy-MM-ddTHH:mm:ss.SSSSSSSSS. Either just the
+  /// date or just the time may be specified. All components are required in either the
+  /// date or time except for the fractional seconds following the period. In the case
+  /// of just a date, the time will be set to 00:00:00. In the case of just a time, the
+  /// date will be set to invalid.
+  /// str -- valid pointer to the string to parse
+  /// len -- length of the string to parse (must be > 0)
+  /// dt_ctx -- date/time format context (must contain valid tokens)
+  /// d -- the date value where the results of the parsing will be placed
+  /// t -- the time value where the results of the parsing will be placed
+  /// Returns true if the date/time was successfully parsed.
   static inline bool Parse(const char* str, int len, boost::gregorian::date* d,
       boost::posix_time::time_duration* t) {
     DCHECK(TimestampParser::initialized_);
@@ -216,6 +259,23 @@ class TimestampParser {
     }
     // Strip the trailing blanks.
     while (len > 0 && isspace(str[len - 1])) --len;
+    // Strip if there is a 'Z' suffix
+    if (len > 0 && str[len - 1] == 'Z') {
+      --len;
+    } else if (len > DEFAULT_TIME_FMT_LEN && (str[4] == '-' || str[2] == ':')) {
+      // Strip timezone offset if it seems like a valid timestamp string.
+      int curr_pos = DEFAULT_TIME_FMT_LEN;
+      // Timezone offset will be at least two bytes long, no need to check last
+      // two bytes.
+      while (curr_pos < len - 2) {
+        if (str[curr_pos] == '+' || str[curr_pos] == '-') {
+          len = curr_pos;
+          break;
+        }
+        ++curr_pos;
+      }
+    }
+
     // Only process what we have to.
     if (len > DEFAULT_DATE_TIME_FMT_LEN) len = DEFAULT_DATE_TIME_FMT_LEN;
     // Determine the default formatting context that's required for parsing.
@@ -281,14 +341,14 @@ class TimestampParser {
     }
   }
 
-  // Parse a date/time string. The data must adhere to the format, otherwise it will be
-  // rejected i.e. no missing tokens. In the case of just a date, the time will be set
-  // to 00:00:00. In the case of just a time, the date will be set to invalid.
-  // str -- valid pointer to the string to parse
-  // len -- length of the string to parse (must be > 0)
-  // d -- the date value where the results of the parsing will be placed
-  // t -- the time value where the results of the parsing will be placed
-  // Returns true if the date/time was successfully parsed.
+  /// Parse a date/time string. The data must adhere to the format, otherwise it will be
+  /// rejected i.e. no missing tokens. In the case of just a date, the time will be set
+  /// to 00:00:00. In the case of just a time, the date will be set to invalid.
+  /// str -- valid pointer to the string to parse
+  /// len -- length of the string to parse (must be > 0)
+  /// d -- the date value where the results of the parsing will be placed
+  /// t -- the time value where the results of the parsing will be placed
+  /// Returns true if the date/time was successfully parsed.
   static inline bool Parse(const char* str, int len, const DateTimeFormatContext& dt_ctx,
       boost::gregorian::date* d, boost::posix_time::time_duration* t) {
     DCHECK(TimestampParser::initialized_);
@@ -296,16 +356,47 @@ class TimestampParser {
     DCHECK(d != NULL);
     DCHECK(t != NULL);
     DateTimeParseResult dt_result;
+    int day_offset = 0;
     if (UNLIKELY(str == NULL || len <= 0 ||
         !ParseDateTime(str, len, dt_ctx, &dt_result))) {
       *d = boost::gregorian::date();
       *t = boost::posix_time::time_duration(boost::posix_time::not_a_date_time);
       return false;
     }
+    if (dt_ctx.has_time_toks) {
+      *t = boost::posix_time::time_duration(dt_result.hour, dt_result.minute,
+          dt_result.second, dt_result.fraction);
+      *t -= dt_result.tz_offset;
+      if (t->is_negative()) {
+        *t += boost::posix_time::hours(24);
+        day_offset = -1;
+      } else if (t->hours() >= 24) {
+        *t -= boost::posix_time::hours(24);
+        day_offset = 1;
+      }
+    } else {
+      *t = boost::posix_time::time_duration(0, 0, 0, 0);
+    }
     if (dt_ctx.has_date_toks) {
+      bool is_valid_date = true;
       try {
-        *d = boost::gregorian::date(dt_result.year, dt_result.month, dt_result.day);
+        DCHECK(-1 <= day_offset && day_offset <= 1);
+        if ((dt_result.year == 1400 && dt_result.month == 1 && dt_result.day == 1 &&
+            day_offset == -1) || (dt_result.year == 9999 && dt_result.month == 12 &&
+            dt_result.day == 31 && day_offset == 1)) {
+          // Have to check lower/upper bound explicitly.
+          // Tried boost::gregorian::date::is_not_a_date_time() but it doesn't
+          // complain value is out of range for "'1400-01-01' - 1 day" and
+          // "'9999-12-31' + 1 day".
+          is_valid_date = false;
+        } else {
+          *d = boost::gregorian::date(dt_result.year, dt_result.month, dt_result.day);
+          *d += boost::gregorian::date_duration(day_offset);
+        }
       } catch (boost::exception& e) {
+        is_valid_date = false;
+      }
+      if (!is_valid_date) {
         VLOG_ROW << "Invalid date: " << dt_result.year << "-" << dt_result.month << "-"
                  << dt_result.day;
         *d = boost::gregorian::date();
@@ -315,23 +406,17 @@ class TimestampParser {
     } else {
       *d = boost::gregorian::date();
     }
-    if (dt_ctx.has_time_toks) {
-      *t = boost::posix_time::time_duration(dt_result.hour, dt_result.minute,
-          dt_result.second, dt_result.fraction);
-    } else {
-      *t = boost::posix_time::time_duration(0, 0, 0, 0);
-    }
     return true;
   }
 
-  // Format the date/time values using the given format context. Note that a string
-  // terminator will be appended to the string.
-  // dt_ctx -- date/time format context
-  // d -- the date value
-  // t -- the time value
-  // len -- the output buffer length (should be at least dt_ctx.fmt_exp_len + 1)
-  // buff -- the output string buffer (must be large enough to hold value)
-  // Return the number of characters copied in to the buffer (excluding terminator).
+  /// Format the date/time values using the given format context. Note that a string
+  /// terminator will be appended to the string.
+  /// dt_ctx -- date/time format context
+  /// d -- the date value
+  /// t -- the time value
+  /// len -- the output buffer length (should be at least dt_ctx.fmt_exp_len + 1)
+  /// buff -- the output string buffer (must be large enough to hold value)
+  /// Return the number of characters copied in to the buffer (excluding terminator).
   static inline int Format(const DateTimeFormatContext& dt_ctx,
       const boost::gregorian::date& d, const boost::posix_time::time_duration& t,
       int len, char* buff) {
@@ -372,6 +457,9 @@ class TimestampParser {
           str_val_len = tok.len;
           break;
         }
+        case TZ_OFFSET: {
+          break;
+        }
         default: DCHECK(false) << "Unknown date/time format token";
       }
       if (num_val > -1) {
@@ -381,7 +469,7 @@ class TimestampParser {
         str += str_val_len;
       }
     }
-    // Terminate the string
+    /// Terminate the string
     *str = '\0';
     return str - buff;
   }
@@ -459,29 +547,85 @@ class TimestampParser {
           for (int i = tok.len; i < 9; ++i) dt_result->fraction *= 10;
           break;
         }
+        case TZ_OFFSET: {
+          if (tok_val[0] != '+' && tok_val[0] != '-') return false;
+          int sign = tok_val[0] == '-' ? -1 : 1;
+          int minute = 0;
+          int hour = StringParser::StringToInt<int>(tok_val + 1, 2, &status);
+          if (UNLIKELY(StringParser::PARSE_SUCCESS != status ||
+              hour < 0 || hour > 23)) {
+            return false;
+          }
+          switch (tok.len) {
+            case 6: {
+              // +hh:mm
+              minute = StringParser::StringToInt<int>(tok_val + 4, 2, &status);
+              break;
+            }
+            case 5: {
+              // +hh:mm
+              minute = StringParser::StringToInt<int>(tok_val + 3, 2, &status);
+              break;
+            }
+            case 3: {
+              // +hh
+              break;
+            }
+            default: {
+              // Invalid timezone offset length.
+              return false;
+            }
+          }
+          if (UNLIKELY(StringParser::PARSE_SUCCESS != status ||
+              minute < 0 || minute > 59)) {
+            return false;
+          }
+          dt_result->tz_offset = boost::posix_time::time_duration(sign * hour,
+              sign * minute, 0, 0);
+          break;
+        }
         default: DCHECK(false) << "Unknown date/time format token";
       }
     }
     return true;
   }
 
-  // Constants to hold default format lengths.
+  /// Check if the string is a TimeZone offset token.
+  /// Valid offset token format are 'hh:mm', 'hhmm', 'hh'.
+  static bool IsValidTZOffset(const char* str_begin, const char* str_end) {
+    if (*str_begin == '+' || *str_begin == '-') {
+      ++str_begin;
+      switch(str_end - str_begin) {
+        case 5:   // hh:mm
+          return strncmp(str_begin, "hh:mm", 5) == 0;
+        case 4:   // hhmm
+          return strncmp(str_begin, "hhmm", 4) == 0;
+        case 2:   // hh
+          return strncmp(str_begin, "hh", 2) == 0;
+        default:
+          break;
+      }
+    }
+    return false;
+  }
+
+  /// Constants to hold default format lengths.
   static const int DEFAULT_DATE_FMT_LEN = 10;
   static const int DEFAULT_TIME_FMT_LEN = 8;
   static const int DEFAULT_TIME_FRAC_FMT_LEN = 18;
   static const int DEFAULT_SHORT_DATE_TIME_FMT_LEN = 19;
   static const int DEFAULT_DATE_TIME_FMT_LEN = 29;
 
-  // Used to indicate if the parsing state has been initialized.
+  /// Used to indicate if the parsing state has been initialized.
   static bool initialized_;
 
-  // Lazily initialized pseudo-constant hashmap for mapping month names to an index.
+  /// Lazily initialized pseudo-constant hashmap for mapping month names to an index.
   static boost::unordered_map<StringValue, int> REV_MONTH_INDEX;
 
-  // Pseudo-constant default date/time contexts. Backwards compatibility is provided on
-  // variable length fractional components by defining a format context for each expected
-  // length (0 - 9). This logic will be refactored when the parser supports lazy token
-  // groups.
+  /// Pseudo-constant default date/time contexts. Backwards compatibility is provided on
+  /// variable length fractional components by defining a format context for each expected
+  /// length (0 - 9). This logic will be refactored when the parser supports lazy token
+  /// groups.
   static DateTimeFormatContext DEFAULT_SHORT_DATE_TIME_CTX;
   static DateTimeFormatContext DEFAULT_SHORT_ISO_DATE_TIME_CTX;
   static DateTimeFormatContext DEFAULT_DATE_CTX;

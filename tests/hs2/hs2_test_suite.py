@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,8 +14,6 @@
 #
 # Superclass of all HS2 tests containing commonly used functions.
 
-import random
-
 from getpass import getuser
 from TCLIService import TCLIService
 from ImpalaService import ImpalaHiveServer2Service
@@ -26,7 +23,8 @@ from thrift.protocol import TBinaryProtocol
 from tests.common.impala_test_suite import ImpalaTestSuite, IMPALAD_HS2_HOST_PORT
 
 def needs_session(protocol_version=
-                  TCLIService.TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V6):
+                  TCLIService.TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V6,
+                  conf_overlay=None):
   def session_decorator(fn):
     """Decorator that establishes a session and sets self.session_handle. When the test is
     finished, the session is closed.
@@ -35,6 +33,8 @@ def needs_session(protocol_version=
       open_session_req = TCLIService.TOpenSessionReq()
       open_session_req.username = getuser()
       open_session_req.configuration = dict()
+      if conf_overlay is not None:
+        open_session_req.configuration = conf_overlay
       open_session_req.client_protocol = protocol_version
       resp = self.hs2_client.OpenSession(open_session_req)
       HS2TestSuite.check_response(resp)
@@ -58,10 +58,7 @@ def operation_id_to_query_id(operation_id):
   return "%s:%s" % (lo, hi)
 
 class HS2TestSuite(ImpalaTestSuite):
-  # This DB will be created/dropped for every HS2TestSuite subclass. Make the name unique
-  # so different test suites don't clobber each other's DBs. The [2:] is to remove the
-  # "0." from the random floating-point number.
-  TEST_DB = 'hs2_db' + str(random.random())[2:]
+  TEST_DB = 'hs2_db'
 
   HS2_V6_COLUMN_TYPES = ['boolVal', 'stringVal', 'byteVal', 'i16Val', 'i32Val', 'i64Val',
                          'doubleVal', 'binaryVal']
@@ -74,7 +71,6 @@ class HS2TestSuite(ImpalaTestSuite):
     self.transport.open()
     self.protocol = TBinaryProtocol.TBinaryProtocol(self.transport)
     self.hs2_client = ImpalaHiveServer2Service.Client(self.protocol)
-    self.client.execute("create database %s" % self.TEST_DB)
 
   def teardown(self):
     self.cleanup_db(self.TEST_DB)
@@ -96,11 +92,28 @@ class HS2TestSuite(ImpalaTestSuite):
     close_op_resp = self.hs2_client.CloseOperation(close_op_req)
     assert close_op_resp.status.statusCode == TCLIService.TStatusCode.SUCCESS_STATUS
 
-  def fetch(self, handle, orientation, size, expected_num_rows = None):
+  def get_num_rows(self, result_set):
+    # rows will always be set, so the only way to tell if we should use it is to see if
+    # any columns are set
+    if result_set.columns is None or len(result_set.columns) == 0:
+      return len(result_set.rows)
+
+    assert result_set.columns is not None
+    for col_type in HS2TestSuite.HS2_V6_COLUMN_TYPES:
+      typed_col = getattr(result_set.columns[0], col_type)
+      if typed_col != None:
+        return len(typed_col.values)
+
+    assert False
+
+  def fetch_at_most(self, handle, orientation, size, expected_num_rows = None):
     """Fetches at most size number of rows from the query identified by the given
-    operation handle. Uses the given fetch orientation. Asserts that the fetch returns
-    a success status, and that the number of rows returned is equal to size, or
-    equal to the given expected_num_rows (it one was given)."""
+    operation handle. Uses the given fetch orientation. Asserts that the fetch returns a
+    success status, and that the number of rows returned is equal to given
+    expected_num_rows (if given). It is only safe for expected_num_rows to be 0 or 1:
+    Impala does not guarantee that a larger result set will be returned in one go. Use
+    fetch_until() for repeated fetches."""
+    assert expected_num_rows is None or expected_num_rows in (0, 1)
     fetch_results_req = TCLIService.TFetchResultsReq()
     fetch_results_req.operationHandle = handle
     fetch_results_req.orientation = orientation
@@ -109,9 +122,36 @@ class HS2TestSuite(ImpalaTestSuite):
     HS2TestSuite.check_response(fetch_results_resp)
     num_rows = size
     if expected_num_rows is not None:
-      num_rows = expected_num_rows
-    assert len(fetch_results_resp.results.rows) == num_rows
+      assert self.get_num_rows(fetch_results_resp.results) == expected_num_rows
     return fetch_results_resp
+
+  def fetch_until(self, handle, orientation, size, expected_num_rows = None):
+    """Tries to fetch exactly 'size' rows from the given query handle, with the given
+    fetch orientation, by repeatedly issuing fetch(size - num rows already fetched)
+    calls. Returns fewer than 'size' rows if either a fetch() returns 0 rows (indicating
+    EOS) or 'expected_num_rows' rows are returned. If 'expected_num_rows' is set to None,
+    it defaults to 'size', so that the effect is to both ask for and expect the same
+    number of rows."""
+    assert expected_num_rows is None or (size >= expected_num_rows)
+    fetch_results_req = TCLIService.TFetchResultsReq()
+    fetch_results_req.operationHandle = handle
+    fetch_results_req.orientation = orientation
+    fetch_results_req.maxRows = size
+    fetch_results_resp = self.hs2_client.FetchResults(fetch_results_req)
+    HS2TestSuite.check_response(fetch_results_resp)
+    num_rows_fetched = self.get_num_rows(fetch_results_resp.results)
+    if expected_num_rows is None: expected_num_rows = size
+    while num_rows_fetched < expected_num_rows:
+      # Always try to fetch at most 'size'
+      fetch_results_req.maxRows = size - num_rows_fetched
+      fetch_results_req.orientation = TCLIService.TFetchOrientation.FETCH_NEXT
+      fetch_results_resp = self.hs2_client.FetchResults(fetch_results_req)
+      HS2TestSuite.check_response(fetch_results_resp)
+      last_fetch_size = self.get_num_rows(fetch_results_resp.results)
+      assert last_fetch_size > 0
+      num_rows_fetched += last_fetch_size
+
+    assert num_rows_fetched == expected_num_rows
 
   def fetch_fail(self, handle, orientation, expected_error_prefix):
     """Attempts to fetch rows from the query identified by the given operation handle.
@@ -125,3 +165,38 @@ class HS2TestSuite(ImpalaTestSuite):
     HS2TestSuite.check_response(fetch_results_resp, TCLIService.TStatusCode.ERROR_STATUS,
                                 expected_error_prefix)
     return fetch_results_resp
+
+  def result_metadata(self, handle):
+    """ Gets the schema for the query identified by the handle """
+    req = TCLIService.TGetResultSetMetadataReq()
+    req.operationHandle = handle
+    resp = self.hs2_client.GetResultSetMetadata(req)
+    HS2TestSuite.check_response(resp)
+    return resp
+
+  def column_results_to_string(self, columns):
+    """Quick-and-dirty way to get a readable string to compare the output of a
+    columnar-oriented query to its expected output"""
+    formatted = ""
+    num_rows = 0
+    # Determine the number of rows by finding the type of the first column
+    for col_type in HS2TestSuite.HS2_V6_COLUMN_TYPES:
+      typed_col = getattr(columns[0], col_type)
+      if typed_col != None:
+        num_rows = len(typed_col.values)
+        break
+
+    for i in xrange(num_rows):
+      row = []
+      for c in columns:
+        for col_type in HS2TestSuite.HS2_V6_COLUMN_TYPES:
+          typed_col = getattr(c, col_type)
+          if typed_col != None:
+            indicator = ord(typed_col.nulls[i / 8])
+            if indicator & (1 << (i % 8)):
+              row.append("NULL")
+            else:
+              row.append(str(typed_col.values[i]))
+            break
+      formatted += (", ".join(row) + "\n")
+    return (num_rows, formatted)

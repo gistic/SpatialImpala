@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # A TextMatrix is used to generate a set of TestVectors. The vectors that are generated
 # are based on one or more TestDimensions inputs. These lists define the set of
@@ -94,6 +93,8 @@ class TestMatrix(object):
     return self.dimensions.has_key(dimension_name)
 
   def generate_test_vectors(self, exploration_strategy):
+    if not self.dimensions:
+      return list()
     # TODO: Check valid exploration strategies, provide more options for exploration
     if exploration_strategy == 'exhaustive':
       return self.__generate_exhaustive_combinations()

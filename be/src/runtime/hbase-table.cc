@@ -19,8 +19,7 @@
 #include "runtime/runtime-state.h"
 #include "util/jni-util.h"
 
-using namespace boost;
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -51,12 +50,16 @@ void HBaseTable::Close(RuntimeState* state) {
 
   JNIEnv* env = getJNIEnv();
   if (env == NULL) {
-    state->LogError("HBaseTable::Close(): Error creating JNIEnv");
+    state->LogError(ErrorMsg(
+        TErrorCode::GENERAL, "HBaseTable::Close(): Error creating JNIEnv"));
   } else {
     env->CallObjectMethod(htable_, htable_close_id_);
-    state->LogError(JniUtil::GetJniExceptionMsg(env, "HBaseTable::Close(): "));
+    Status s = JniUtil::GetJniExceptionMsg(env, "HBaseTable::Close(): ");
+    if (!s.ok()) state->LogError(s.msg());
     env->DeleteGlobalRef(htable_);
-    state->LogError(JniUtil::GetJniExceptionMsg(env, "HBaseTable::Close(): "));
+
+    s = JniUtil::GetJniExceptionMsg(env, "HBaseTable::Close(): ");
+    if (!s.ok()) state->LogError(s.msg());
   }
 
   htable_ = NULL;
@@ -83,7 +86,7 @@ Status HBaseTable::Init() {
 
   // Make sure the GC doesn't remove the HTable until told to.
   RETURN_IF_ERROR(JniUtil::LocalToGlobalRef(env, local_htable, &htable_));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTable::InitJNI() {
@@ -123,7 +126,7 @@ Status HBaseTable::InitJNI() {
       "(Ljava/util/List;)V");
   RETURN_ERROR_IF_EXC(env);
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTable::GetResultScanner(const jobject& scan,
@@ -134,7 +137,7 @@ Status HBaseTable::GetResultScanner(const jobject& scan,
   (*result_scanner) = env->CallObjectMethod(htable_,
       htable_get_scanner_id_, scan);
   RETURN_ERROR_IF_EXC(env);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTable::Put(const jobject& puts_list) {
@@ -145,7 +148,7 @@ Status HBaseTable::Put(const jobject& puts_list) {
   RETURN_ERROR_IF_EXC(env);
 
   // TODO(eclark): FlushCommits
-  return Status::OK;
+  return Status::OK();
 }
 
 }  // namespace impala

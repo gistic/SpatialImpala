@@ -18,7 +18,6 @@
 #include <hdfs.h>
 #include <boost/scoped_ptr.hpp>
 #include <stdlib.h>
-#include <codec.h>
 #include <gutil/strings/substitute.h>
 
 #include "exec/exec-node.h"
@@ -33,8 +32,8 @@
 #include "runtime/hdfs-fs-cache.h"
 #include "write-stream.inline.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
 using namespace strings;
 using namespace impala;
 
@@ -152,7 +151,7 @@ Status HdfsAvroTableWriter::Init() {
       break;
     case THdfsCompression::NONE:
       codec_name_ = "null";
-      return Status::OK;
+      return Status::OK();
     default:
       const char* name = _THdfsCompression_VALUES_TO_NAMES.find(codec)->second;
       return Status(Substitute(
@@ -162,7 +161,7 @@ Status HdfsAvroTableWriter::Init() {
   RETURN_IF_ERROR(Codec::CreateCompressor(mem_pool_.get(), true, codec, &compressor_));
   DCHECK(compressor_.get() != NULL);
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsAvroTableWriter::AppendRowBatch(RowBatch* batch,
@@ -187,7 +186,7 @@ Status HdfsAvroTableWriter::AppendRowBatch(RowBatch* batch,
 
   if (out_.Size() > DEFAULT_AVRO_BLOCK_SIZE) Flush();
   *new_file = false;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsAvroTableWriter::WriteFileHeader() {
@@ -220,11 +219,11 @@ Status HdfsAvroTableWriter::WriteFileHeader() {
   RETURN_IF_ERROR(Write(reinterpret_cast<const uint8_t*>(text.c_str()),
                         text.size()));
   out_.Clear();
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsAvroTableWriter::Flush() {
-  if (unflushed_rows_ == 0) return Status::OK;
+  if (unflushed_rows_ == 0) return Status::OK();
 
   WriteStream header;
   // 1. Count of objects in this block
@@ -280,5 +279,5 @@ Status HdfsAvroTableWriter::Flush() {
 
   out_.Clear();
   unflushed_rows_ = 0;
-  return Status::OK;
+  return Status::OK();
 }

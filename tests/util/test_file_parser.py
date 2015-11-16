@@ -9,7 +9,6 @@ from collections import defaultdict
 from os.path import isfile, isdir
 from tests.common.test_dimensions import TableFormatInfo
 
-logging.basicConfig(level=logging.INFO, format='%(threadName)s: %(message)s')
 LOG = logging.getLogger('impala_test_suite')
 
 # constants
@@ -79,7 +78,8 @@ def parse_query_test_file(file_name, valid_section_names=None, encoding=None):
   if section_names is None:
     section_names = ['QUERY', 'RESULTS', 'TYPES', 'LABELS', 'SETUP', 'CATCH', 'ERRORS',
         'USER']
-  return parse_test_file(file_name, section_names, encoding=encoding)
+  return parse_test_file(file_name, section_names, encoding=encoding,
+      skip_unknown_sections=False)
 
 def parse_table_constraints(constraints_file):
   """Reads a table contraints file, if one exists"""
@@ -169,7 +169,13 @@ def parse_test_file_text(text, valid_section_names, skip_unknown_sections=True):
         parsed_sections['QUERY_NAME'] = subsection_comment
 
       if subsection_name == 'RESULTS' and subsection_comment:
-        parsed_sections['VERIFIER'] = subsection_comment
+        for comment in subsection_comment.split(','):
+          if subsection_comment == 'MULTI_LINE':
+            parsed_sections['MULTI_LINE'] = comment
+          elif subsection_comment.startswith('VERIFY'):
+            parsed_sections['VERIFIER'] = comment
+          else:
+            raise RuntimeError, 'Unknown subsection comment: %s' % comment
 
       parsed_sections[subsection_name] = '\n'.join([line for line in lines[1:-1]])
 

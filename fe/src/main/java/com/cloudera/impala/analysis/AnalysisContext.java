@@ -16,16 +16,30 @@ package com.cloudera.impala.analysis;
 
 import java.io.StringReader;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.cloudera.impala.authorization.AuthorizationChecker;
 import com.cloudera.impala.authorization.AuthorizationConfig;
+import com.cloudera.impala.authorization.AuthorizeableColumn;
+import com.cloudera.impala.authorization.AuthorizeableTable;
+import com.cloudera.impala.authorization.Privilege;
+import com.cloudera.impala.authorization.PrivilegeRequest;
+import com.cloudera.impala.catalog.AuthorizationException;
+import com.cloudera.impala.catalog.Db;
 import com.cloudera.impala.catalog.ImpaladCatalog;
 import com.cloudera.impala.common.AnalysisException;
+import com.cloudera.impala.common.Pair;
 import com.cloudera.impala.thrift.TAccessEvent;
+import com.cloudera.impala.thrift.TDescribeOutputStyle;
+import com.cloudera.impala.thrift.TLineageGraph;
 import com.cloudera.impala.thrift.TQueryCtx;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 
 /**
  * Wrapper class for parser and analyzer.
@@ -86,7 +100,12 @@ public class AnalysisContext {
     public boolean isShowCreateTableStmt() {
       return stmt_ instanceof ShowCreateTableStmt;
     }
-    public boolean isDescribeStmt() { return stmt_ instanceof DescribeStmt; }
+    public boolean isShowCreateFunctionStmt() {
+      return stmt_ instanceof ShowCreateFunctionStmt;
+    }
+    public boolean isShowFilesStmt() { return stmt_ instanceof ShowFilesStmt; }
+    public boolean isDescribeDbStmt() { return stmt_ instanceof DescribeDbStmt; }
+    public boolean isDescribeTableStmt() { return stmt_ instanceof DescribeTableStmt; }
     public boolean isResetMetadataStmt() { return stmt_ instanceof ResetMetadataStmt; }
     public boolean isExplainStmt() { return stmt_.isExplain(); }
     public boolean isShowRolesStmt() { return stmt_ instanceof ShowRolesStmt; }
@@ -98,6 +117,7 @@ public class AnalysisContext {
     public boolean isGrantRevokePrivStmt() {
       return stmt_ instanceof GrantRevokePrivStmt;
     }
+    public boolean isTruncateStmt() { return stmt_ instanceof TruncateStmt; }
 
     public boolean isCatalogOp() {
       return isUseStmt() || isViewMetadataStmt() || isDdlStmt();
@@ -110,13 +130,14 @@ public class AnalysisContext {
           isAlterViewStmt() || isComputeStatsStmt() || isCreateUdfStmt() ||
           isCreateUdaStmt() || isDropFunctionStmt() || isCreateTableAsSelectStmt() ||
           isCreateDataSrcStmt() || isDropDataSrcStmt() || isDropStatsStmt() ||
-          isCreateDropRoleStmt() || isGrantRevokeStmt();
+          isCreateDropRoleStmt() || isGrantRevokeStmt() || isTruncateStmt();
     }
 
     private boolean isViewMetadataStmt() {
-      return isShowTablesStmt() || isShowDbsStmt() || isShowFunctionsStmt() ||
-          isShowRolesStmt() || isShowGrantRoleStmt() || isShowCreateTableStmt() ||
-          isShowDataSrcsStmt() || isShowStatsStmt() || isDescribeStmt();
+      return isShowFilesStmt() || isShowTablesStmt() || isShowDbsStmt() ||
+          isShowFunctionsStmt() || isShowRolesStmt() || isShowGrantRoleStmt() ||
+          isShowCreateTableStmt() || isShowDataSrcsStmt() || isShowStatsStmt() ||
+          isDescribeTableStmt() || isDescribeDbStmt() || isShowCreateFunctionStmt();
     }
 
     private boolean isGrantRevokeStmt() {
@@ -191,6 +212,11 @@ public class AnalysisContext {
       return (DropTableOrViewStmt) stmt_;
     }
 
+    public TruncateStmt getTruncateStmt() {
+      Preconditions.checkState(isTruncateStmt());
+      return (TruncateStmt) stmt_;
+    }
+
     public DropFunctionStmt getDropFunctionStmt() {
       Preconditions.checkState(isDropFunctionStmt());
       return (DropFunctionStmt) stmt_;
@@ -250,9 +276,19 @@ public class AnalysisContext {
       return (ShowFunctionsStmt) stmt_;
     }
 
-    public DescribeStmt getDescribeStmt() {
-      Preconditions.checkState(isDescribeStmt());
-      return (DescribeStmt) stmt_;
+    public ShowFilesStmt getShowFilesStmt() {
+      Preconditions.checkState(isShowFilesStmt());
+      return (ShowFilesStmt) stmt_;
+    }
+
+    public DescribeDbStmt getDescribeDbStmt() {
+      Preconditions.checkState(isDescribeDbStmt());
+      return (DescribeDbStmt) stmt_;
+    }
+
+    public DescribeTableStmt getDescribeTableStmt() {
+      Preconditions.checkState(isDescribeTableStmt());
+      return (DescribeTableStmt) stmt_;
     }
 
     public ShowCreateTableStmt getShowCreateTableStmt() {
@@ -260,10 +296,21 @@ public class AnalysisContext {
       return (ShowCreateTableStmt) stmt_;
     }
 
+    public ShowCreateFunctionStmt getShowCreateFunctionStmt() {
+      Preconditions.checkState(isShowCreateFunctionStmt());
+      return (ShowCreateFunctionStmt) stmt_;
+    }
+
     public StatementBase getStmt() { return stmt_; }
     public Analyzer getAnalyzer() { return analyzer_; }
-    public List<TAccessEvent> getAccessEvents() { return analyzer_.getAccessEvents(); }
-    public boolean requiresRewrite() { return analyzer_.containsSubquery(); }
+    public Set<TAccessEvent> getAccessEvents() { return analyzer_.getAccessEvents(); }
+    public boolean requiresRewrite() {
+      return analyzer_.containsSubquery() && !(stmt_ instanceof CreateViewStmt)
+          && !(stmt_ instanceof AlterViewStmt);
+    }
+    public TLineageGraph getThriftLineageGraph() {
+      return analyzer_.getThriftSerializedLineageGraph();
+    }
   }
 
   /**
@@ -319,6 +366,7 @@ public class AnalysisContext {
         analysisResult_.stmt_.analyze(analysisResult_.analyzer_);
         LOG.trace("rewrittenStmt: " + rewrittenStmt.toSql());
         if (isExplain) analysisResult_.stmt_.setIsExplain();
+        Preconditions.checkState(!analysisResult_.requiresRewrite());
       }
     } catch (AnalysisException e) {
       // Don't wrap AnalysisExceptions in another AnalysisException
@@ -326,6 +374,157 @@ public class AnalysisContext {
     } catch (Exception e) {
       throw new AnalysisException(parser.getErrorMsg(stmt), e);
     }
+  }
+
+  /**
+   * Authorize an analyzed statement.
+   * analyze() must have already been called. Throws an AuthorizationException if the
+   * user doesn't have sufficient privileges to run this statement.
+   */
+  public void authorize(AuthorizationChecker authzChecker) throws AuthorizationException {
+    Preconditions.checkNotNull(analysisResult_);
+    Analyzer analyzer = getAnalyzer();
+    // Process statements for which column-level privilege requests may be registered.
+    if (analysisResult_.isQueryStmt() || analysisResult_.isInsertStmt() ||
+        analysisResult_.isCreateTableAsSelectStmt() ||
+        analysisResult_.isCreateViewStmt() || analysisResult_.isAlterViewStmt()) {
+      // Map of table name to a list of privilege requests associated with that table.
+      // These include both table-level and column-level privilege requests.
+      Map<String, List<PrivilegeRequest>> tablePrivReqs = Maps.newHashMap();
+      // Privilege requests that are not column or table-level.
+      List<PrivilegeRequest> otherPrivReqs = Lists.newArrayList();
+      // Group the registered privilege requests based on the table they reference.
+      for (PrivilegeRequest privReq: analyzer.getPrivilegeReqs()) {
+        String tableName = privReq.getAuthorizeable().getFullTableName();
+        if (tableName == null) {
+          otherPrivReqs.add(privReq);
+        } else {
+          List<PrivilegeRequest> requests = tablePrivReqs.get(tableName);
+          if (requests == null) {
+            requests = Lists.newArrayList();
+            tablePrivReqs.put(tableName, requests);
+          }
+          // The table-level SELECT must be the first table-level request, and it
+          // must precede all column-level privilege requests.
+          Preconditions.checkState((requests.isEmpty() ||
+              !(privReq.getAuthorizeable() instanceof AuthorizeableColumn)) ||
+              (requests.get(0).getAuthorizeable() instanceof AuthorizeableTable &&
+              requests.get(0).getPrivilege() == Privilege.SELECT));
+          requests.add(privReq);
+        }
+      }
+
+      // Check any non-table, non-column privilege requests first.
+      for (PrivilegeRequest request: otherPrivReqs) {
+        authorizePrivilegeRequest(authzChecker, request);
+      }
+
+      // Authorize table accesses, one table at a time, by considering both table and
+      // column-level privilege requests.
+      for (Map.Entry<String, List<PrivilegeRequest>> entry: tablePrivReqs.entrySet()) {
+        authorizeTableAccess(authzChecker, entry.getValue());
+      }
+    } else {
+      for (PrivilegeRequest privReq: analyzer.getPrivilegeReqs()) {
+        Preconditions.checkState(
+            !(privReq.getAuthorizeable() instanceof AuthorizeableColumn) ||
+            analysisResult_.isDescribeTableStmt());
+        authorizePrivilegeRequest(authzChecker, privReq);
+      }
+    }
+
+    // Check any masked requests.
+    for (Pair<PrivilegeRequest, String> maskedReq: analyzer.getMaskedPrivilegeReqs()) {
+      if (!authzChecker.hasAccess(analyzer.getUser(), maskedReq.first)) {
+        throw new AuthorizationException(maskedReq.second);
+      }
+    }
+  }
+
+  /**
+   * Authorize a privilege request.
+   * Throws an AuthorizationException if the user doesn't have sufficient privileges for
+   * this request. Also, checks if the request references a system database.
+   */
+  private void authorizePrivilegeRequest(AuthorizationChecker authzChecker,
+    PrivilegeRequest request) throws AuthorizationException {
+    Preconditions.checkNotNull(request);
+    String dbName = null;
+    if (request.getAuthorizeable() != null) {
+      dbName = request.getAuthorizeable().getDbName();
+    }
+    // If this is a system database, some actions should always be allowed
+    // or disabled, regardless of what is in the auth policy.
+    if (dbName != null && checkSystemDbAccess(dbName, request.getPrivilege())) {
+      return;
+    }
+    authzChecker.checkAccess(getAnalyzer().getUser(), request);
+  }
+
+  /**
+   * Authorize a list of privilege requests associated with a single table.
+   * It checks if the user has sufficient table-level privileges and if that is
+   * not the case, it falls back on checking column-level privileges, if any. This
+   * function requires 'SELECT' requests to be ordered by table and then by column
+   * privilege requests. Throws an AuthorizationException if the user doesn't have
+   * sufficient privileges.
+   */
+  private void authorizeTableAccess(AuthorizationChecker authzChecker,
+      List<PrivilegeRequest> requests) throws AuthorizationException {
+    Preconditions.checkState(!requests.isEmpty());
+    Analyzer analyzer = getAnalyzer();
+    boolean hasTableSelectPriv = true;
+    boolean hasColumnSelectPriv = false;
+    for (PrivilegeRequest request: requests) {
+      if (request.getAuthorizeable() instanceof AuthorizeableTable) {
+        try {
+          authorizePrivilegeRequest(authzChecker, request);
+        } catch (AuthorizationException e) {
+          // Authorization fails if we fail to authorize any table-level request that is
+          // not a SELECT privilege (e.g. INSERT).
+          if (request.getPrivilege() != Privilege.SELECT) throw e;
+          hasTableSelectPriv = false;
+        }
+      } else {
+        Preconditions.checkState(
+            request.getAuthorizeable() instanceof AuthorizeableColumn);
+        if (hasTableSelectPriv) continue;
+        if (authzChecker.hasAccess(analyzer.getUser(), request)) {
+          hasColumnSelectPriv = true;
+          continue;
+        }
+        // Make sure we don't reveal any column names in the error message.
+        throw new AuthorizationException(String.format("User '%s' does not have " +
+          "privileges to execute '%s' on: %s", analyzer.getUser().getName(),
+          request.getPrivilege().toString(),
+          request.getAuthorizeable().getFullTableName()));
+      }
+    }
+    if (!hasTableSelectPriv && !hasColumnSelectPriv) {
+       throw new AuthorizationException(String.format("User '%s' does not have " +
+          "privileges to execute 'SELECT' on: %s", analyzer.getUser().getName(),
+          requests.get(0).getAuthorizeable().getFullTableName()));
+    }
+  }
+
+  /**
+   * Throws an AuthorizationException if the dbName is a system db
+   * and the user is trying to modify it.
+   * Returns true if this is a system db and the action is allowed.
+   */
+  private boolean checkSystemDbAccess(String dbName, Privilege privilege)
+      throws AuthorizationException {
+    Db db = catalog_.getDb(dbName);
+    if (db != null && db.isSystemDb()) {
+      switch (privilege) {
+        case VIEW_METADATA:
+        case ANY:
+          return true;
+        default:
+          throw new AuthorizationException("Cannot modify system database.");
+      }
+    }
+    return false;
   }
 
   public AnalysisResult getAnalysisResult() { return analysisResult_; }

@@ -20,9 +20,10 @@
 #include "udf/udf.h"
 #include "gen-cpp/Exprs_types.h"
 
+#include "common/names.h"
+
 using namespace impala_udf;
 using namespace llvm;
-using namespace std;
 
 namespace impala {
 
@@ -85,7 +86,7 @@ DecimalVal NullLiteral::GetDecimalVal(ExprContext* context, TupleRow* row) {
 Status NullLiteral::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
-    return Status::OK;
+    return Status::OK();
   }
 
   DCHECK_EQ(GetNumChildren(), 0);
@@ -100,7 +101,7 @@ Status NullLiteral::GetCodegendComputeFn(RuntimeState* state, llvm::Function** f
   builder.CreateRet(v);
   *fn = codegen->FinalizeFunction(*fn);
   ir_compute_fn_ = *fn;
-  return Status::OK;
+  return Status::OK();
 }
 
 string NullLiteral::DebugString() const {

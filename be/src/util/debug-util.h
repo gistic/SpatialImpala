@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #ifndef IMPALA_UTIL_DEBUG_UTIL_H
 #define IMPALA_UTIL_DEBUG_UTIL_H
 
 #include <ostream>
 #include <string>
-#include <boost/cstdint.hpp>
+#include <sstream>
+
+#include <thrift/protocol/TDebugProtocol.h>
 
 #include "gen-cpp/JniCatalog_types.h"
 #include "gen-cpp/Descriptors_types.h"
@@ -28,10 +29,14 @@
 #include "gen-cpp/RuntimeProfile_types.h"
 #include "gen-cpp/ImpalaService_types.h"
 #include "gen-cpp/parquet_types.h"
+#include "gen-cpp/Llama_types.h"
+
+#include "runtime/descriptors.h" // for SchemaPath
 
 namespace impala {
 
 class RowDescriptor;
+class TableDescriptor;
 class TupleDescriptor;
 class Tuple;
 class TupleRow;
@@ -42,6 +47,8 @@ std::ostream& operator<<(std::ostream& os, const TUniqueId& id);
 std::ostream& operator<<(std::ostream& os, const THdfsFileFormat::type& type);
 std::ostream& operator<<(std::ostream& os, const THdfsCompression::type& type);
 std::ostream& operator<<(std::ostream& os, const TStmtType::type& type);
+std::ostream& operator<<(std::ostream& os, const TUnit::type& type);
+std::ostream& operator<<(std::ostream& os, const TMetricKind::type& type);
 std::ostream& operator<<(std::ostream& os, const beeswax::QueryState::type& type);
 std::ostream& operator<<(std::ostream& os, const parquet::Encoding::type& type);
 std::ostream& operator<<(std::ostream& os, const parquet::CompressionCodec::type& type);
@@ -60,38 +67,35 @@ std::string PrintTStmtType(const TStmtType::type& type);
 std::string PrintQueryState(const beeswax::QueryState::type& type);
 std::string PrintEncoding(const parquet::Encoding::type& type);
 std::string PrintAsHex(const char* bytes, int64_t len);
+std::string PrintTMetricKind(const TMetricKind::type& type);
+std::string PrintTUnit(const TUnit::type& type);
+/// Returns the fully qualified path, e.g. "database.table.array_col.item.field"
+std::string PrintPath(const TableDescriptor& tbl_desc, const SchemaPath& path);
+/// Returns the numeric path without column/field names, e.g. "[0,1,2]"
+std::string PrintNumericPath(const SchemaPath& path);
 
-// Parse 's' into a TUniqueId object.  The format of s needs to be the output format
-// from PrintId.  (<hi_part>:<low_part>)
-// Returns true if parse succeeded.
+// Convenience wrapper around Thrift's debug string function
+template<typename ThriftStruct> std::string PrintThrift(const ThriftStruct& t) {
+  return apache::thrift::ThriftDebugString(t);
+}
+
+/// Parse 's' into a TUniqueId object.  The format of s needs to be the output format
+/// from PrintId.  (<hi_part>:<low_part>)
+/// Returns true if parse succeeded.
 bool ParseId(const std::string& s, TUniqueId* id);
 
-// Returns a string "<product version number> (build <build hash>)"
-// If compact == false, this string is appended: "\nBuilt on <build time>"
-// This is used to set gflags build version
+/// Returns a string "<product version number> (build <build hash>)"
+/// If compact == false, this string is appended: "\nBuilt on <build time>"
+/// This is used to set gflags build version
 std::string GetBuildVersion(bool compact = false);
 
-// Returns "<program short name> version <GetBuildVersion(compact)>"
+/// Returns "<program short name> version <GetBuildVersion(compact)>"
 std::string GetVersionString(bool compact = false);
 
-// Returns the stack trace as a string from the current location.
-// Note: there is a libc bug that causes this not to work on 64 bit machines
-// for recursive calls.
+/// Returns the stack trace as a string from the current location.
+/// Note: there is a libc bug that causes this not to work on 64 bit machines
+/// for recursive calls.
 std::string GetStackTrace();
-
-class PrettyPrinter {
- public:
-  // Prints the 'value' in a human friendly format depending on the data type.
-  // i.e. for bytes: 3145728 -> 3MB
-  // If verbose is true, this also prints the raw value (before unit conversion) for
-  // types where this is applicable.
-  static std::string Print(int64_t value, TCounterType::type type, bool verbose = false);
-
-  // Convenience method
-  static std::string PrintBytes(int64_t value) {
-    return PrettyPrinter::Print(value, TCounterType::BYTES);
-  }
-};
 
 }
 

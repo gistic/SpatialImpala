@@ -15,11 +15,15 @@
 package com.cloudera.impala.analysis;
 
 import com.cloudera.impala.authorization.Privilege;
+import com.cloudera.impala.catalog.HdfsTable;
+import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.common.AnalysisException;
+import com.cloudera.impala.common.FileSystemUtil;
 import com.cloudera.impala.thrift.TAlterTableAddPartitionParams;
 import com.cloudera.impala.thrift.TAlterTableParams;
 import com.cloudera.impala.thrift.TAlterTableType;
 import com.google.common.base.Preconditions;
+import org.apache.hadoop.fs.permission.FsAction;
 
 /**
  * Represents an ALTER TABLE ADD PARTITION statement.
@@ -80,7 +84,31 @@ public class AlterTableAddPartitionStmt extends AlterTableStmt {
     partitionSpec_.setPrivilegeRequirement(Privilege.ALTER);
     partitionSpec_.analyze(analyzer);
 
-    if (location_ != null) location_.analyze(analyzer, Privilege.ALL);
-    if (cacheOp_ != null) cacheOp_.analyze(analyzer);
+    if (location_ != null) {
+      location_.analyze(analyzer, Privilege.ALL, FsAction.READ_WRITE);
+    }
+
+    boolean shouldCache = false;
+    Table table = getTargetTable();
+    if (cacheOp_ != null) {
+      cacheOp_.analyze(analyzer);
+      shouldCache = cacheOp_.shouldCache();
+    } else if (table instanceof HdfsTable) {
+      shouldCache = ((HdfsTable)table).isMarkedCached();
+    }
+    if (shouldCache) {
+      if (!(table instanceof HdfsTable)) {
+        throw new AnalysisException("Caching must target a HDFS table: " +
+            table.getFullName());
+      }
+      HdfsTable hdfsTable = (HdfsTable)table;
+      if ((location_ != null && !FileSystemUtil.isPathCacheable(location_.getPath())) ||
+          (location_ == null && !hdfsTable.isLocationCacheable())) {
+        throw new AnalysisException(String.format("Location '%s' cannot be cached. " +
+            "Please retry without caching: ALTER TABLE %s ADD PARTITION ... UNCACHED",
+            (location_ != null) ? location_.toString() : hdfsTable.getLocation(),
+            table.getFullName()));
+      }
+    }
   }
 }

@@ -1,23 +1,25 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # Impala tests for queries that query metadata and set session settings
 import logging
+import os
 import pytest
-from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
 from subprocess import call
-from tests.common.test_vector import *
+from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
 from tests.common.impala_test_suite import *
+from tests.common.skip import SkipIfIsilon, SkipIfS3
+from tests.common.test_vector import *
+from tests.util.filesystem_utils import get_fs_path
 
 # TODO: For these tests to pass, all table metadata must be created exhaustively.
 # the tests should be modified to remove that requirement.
 class TestMetadataQueryStatements(ImpalaTestSuite):
 
-  CREATE_DATA_SRC_STMT = ("CREATE DATA SOURCE %s "
-      "LOCATION '/test-warehouse/data-sources/test-data-source.jar' "
-      "CLASS 'com.cloudera.impala.extdatasource.AllTypesDataSource' API_VERSION 'V1'")
+  CREATE_DATA_SRC_STMT = ("CREATE DATA SOURCE %s LOCATION '" +
+      get_fs_path("/test-warehouse/data-sources/test-data-source.jar") +
+      "' CLASS 'com.cloudera.impala.extdatasource.AllTypesDataSource' API_VERSION 'V1'")
   DROP_DATA_SRC_STMT = "DROP DATA SOURCE IF EXISTS %s"
   TEST_DATA_SRC_NAMES = ["show_test_ds1", "show_test_ds2"]
-  AVRO_SCHEMA_LOC = "hdfs:///test-warehouse/avro_schemas/functional/alltypes.json"
+  AVRO_SCHEMA_LOC = get_fs_path("/test-warehouse/avro_schemas/functional/alltypes.json")
 
   @classmethod
   def get_workload(self):
@@ -48,13 +50,47 @@ class TestMetadataQueryStatements(ImpalaTestSuite):
       self.client.execute(self.CREATE_DATA_SRC_STMT % (name,))
 
   def setup_method(self, method):
+    self.cleanup_db('impala_test_desc_db1')
+    self.cleanup_db('impala_test_desc_db2')
+    self.cleanup_db('impala_test_desc_db3')
+    self.cleanup_db('impala_test_desc_db4')
+    self.cleanup_db('hive_test_desc_db')
     self.cleanup_db('hive_test_db')
 
+    call(["hive", "-e", "drop database if exists hive_test_desc_db cascade"])
+    call([
+        "hive", "-e", "create database hive_test_desc_db comment 'test comment' "
+        "with dbproperties('pi' = '3.14', 'e' = '2.82')"])
+    call(["hive", "-e", "alter database hive_test_desc_db set owner user test"])
+
+    self.client.execute("create database if not exists impala_test_desc_db1")
+    self.client.execute(
+        "create database if not exists impala_test_desc_db2 "
+        "comment \"test comment\"")
+    self.client.execute(
+        "create database if not exists impala_test_desc_db3 "
+        "location \"hdfs://localhost:20500/testdb\"")
+    self.client.execute(
+        "create database if not exists impala_test_desc_db4 "
+        "comment \"test comment\" location \"hdfs://localhost:20500/test2.db\"")
+    self.client.execute("invalidate metadata")
+
   def teardown_method(self, method):
+    self.cleanup_db('impala_test_desc_db1')
+    self.cleanup_db('impala_test_desc_db2')
+    self.cleanup_db('impala_test_desc_db3')
+    self.cleanup_db('impala_test_desc_db4')
+    self.cleanup_db('hive_test_desc_db')
     self.cleanup_db('hive_test_db')
 
   def test_show(self, vector):
     self.run_test_case('QueryTest/show', vector)
+
+  @pytest.mark.execute_serially
+  @SkipIfS3.hive
+  @SkipIfIsilon.hive
+  def test_describe_db(self, vector):
+    self.run_test_case('QueryTest/describedb', vector)
 
   @pytest.mark.execute_serially
   def test_show_data_sources(self, vector):
@@ -71,6 +107,10 @@ class TestMetadataQueryStatements(ImpalaTestSuite):
     self.run_test_case('QueryTest/describe', vector)
 
   @pytest.mark.execute_serially
+  # Missing Coverage: Describe formatted compatibility between Impala and Hive when the
+  # data doesn't reside in hdfs.
+  @SkipIfIsilon.hive
+  @SkipIfS3.hive
   def test_describe_formatted(self, vector):
     # Describe a partitioned table.
     self.exec_and_compare_hive_and_impala_hs2("describe formatted functional.alltypes")
@@ -108,6 +148,9 @@ class TestMetadataQueryStatements(ImpalaTestSuite):
     self.run_test_case('QueryTest/use', vector)
 
   @pytest.mark.execute_serially
+  # Missing Coverage: ddl by hive being visible to Impala for data not residing in hdfs.
+  @SkipIfIsilon.hive
+  @SkipIfS3.hive
   def test_impala_sees_hive_created_tables_and_databases(self, vector):
     self.client.set_configuration(vector.get_value('exec_option'))
     db_name = 'hive_test_db'

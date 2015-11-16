@@ -27,8 +27,7 @@
 #include <hdfs.h>
 #include <stdlib.h>
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
 
 // Hdfs block size for compressed text.
 static const int64_t COMPRESSED_BLOCK_SIZE = 64 * 1024 * 1024;
@@ -77,7 +76,7 @@ Status HdfsTextTableWriter::Init() {
     flush_size_ = HDFS_FLUSH_WRITE_SIZE;
   }
   parent_->mem_tracker()->Consume(flush_size_);
-  return Status::OK;
+  return Status::OK();
 }
 
 void HdfsTextTableWriter::Close() {
@@ -129,7 +128,7 @@ Status HdfsTextTableWriter::AppendRowBatch(RowBatch* batch,
             char* val_ptr = StringValue::CharSlotToPtr(value, type);
             StringValue sv(val_ptr, StringValue::UnpaddedCharLength(val_ptr, type.len));
             PrintEscaped(&sv);
-          } else if (type.IsVarLen()) {
+          } else if (type.IsVarLenStringType()) {
             PrintEscaped(reinterpret_cast<const StringValue*>(value));
           } else {
             output_expr_ctxs_[j]->PrintValue(value, &rowbatch_stringstream_);
@@ -157,7 +156,7 @@ Status HdfsTextTableWriter::AppendRowBatch(RowBatch* batch,
     *new_file = compressor_.get() != NULL;
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsTextTableWriter::Finalize() {
@@ -189,7 +188,7 @@ Status HdfsTextTableWriter::Flush() {
     RETURN_IF_ERROR(Write(data, len));
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 inline void HdfsTextTableWriter::PrintEscaped(const StringValue* str_val) {

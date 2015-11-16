@@ -40,11 +40,13 @@ DECLARE_int32(catalog_service_port);
 DECLARE_int32(webserver_port);
 DECLARE_bool(enable_webserver);
 DECLARE_int32(state_store_subscriber_port);
+DECLARE_string(ssl_server_certificate);
+DECLARE_string(ssl_private_key);
+DECLARE_string(ssl_private_key_password_cmd);
+
+#include "common/names.h"
 
 using namespace impala;
-using namespace std;
-using namespace boost;
-
 using namespace apache::thrift;
 
 int main(int argc, char** argv) {
@@ -62,14 +64,13 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Not starting webserver";
   }
 
-  scoped_ptr<Metrics> metrics(new Metrics());
+  scoped_ptr<MetricGroup> metrics(new MetricGroup("catalog"));
   metrics->Init(FLAGS_enable_webserver ? webserver.get() : NULL);
   EXIT_IF_ERROR(RegisterMemoryMetrics(metrics.get(), true));
   StartThreadInstrumentation(metrics.get(), webserver.get());
-  InitRpcEventTracing(webserver.get());
 
-  metrics->CreateAndRegisterPrimitiveMetric<string>(
-      "catalog.version", GetVersionString(true));
+  InitRpcEventTracing(webserver.get());
+  metrics->AddProperty<string>("catalog.version", GetVersionString(true));
 
   CatalogServer catalog_server(metrics.get());
   EXIT_IF_ERROR(catalog_server.Start());
@@ -82,6 +83,11 @@ int main(int argc, char** argv) {
 
   ThriftServer* server = new ThriftServer("CatalogService", processor,
       FLAGS_catalog_service_port, NULL, metrics.get(), 5);
+  if (EnableInternalSslConnections()) {
+    LOG(INFO) << "Enabling SSL for CatalogService";
+    EXIT_IF_ERROR(server->EnableSsl(FLAGS_ssl_server_certificate, FLAGS_ssl_private_key,
+        FLAGS_ssl_private_key_password_cmd));
+  }
   EXIT_IF_ERROR(server->Start());
   LOG(INFO) << "CatalogService started on port: " << FLAGS_catalog_service_port;
   server->Join();

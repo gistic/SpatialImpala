@@ -24,9 +24,10 @@
 DEFINE_string(impalad, "localhost:21000", "host:port of impalad process");
 DECLARE_int32(num_nodes);
 
-using namespace std;
-using namespace boost;
-using namespace boost::algorithm;
+#include "common/names.h"
+
+using boost::algorithm::is_any_of;
+using boost::algorithm::split;
 using namespace Apache::Hadoop::Hive;
 using namespace beeswax;
 
@@ -57,11 +58,11 @@ Status ImpaladQueryExecutor::Setup() {
 
   RETURN_IF_ERROR(client_->Open());
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpaladQueryExecutor::Close() {
-  if (!query_in_progress_) return Status::OK;
+  if (!query_in_progress_) return Status::OK();
   try {
     client_->iface()->close(query_handle_);
   } catch (BeeswaxException& e) {
@@ -70,7 +71,7 @@ Status ImpaladQueryExecutor::Close() {
     return Status(ss.str());
   }
   query_in_progress_ = false;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpaladQueryExecutor::Exec(
@@ -98,18 +99,24 @@ Status ImpaladQueryExecutor::Exec(
   current_row_ = 0;
   query_in_progress_ = true;
   if (col_schema != NULL) *col_schema = resultsMetadata.schema.fieldSchemas;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpaladQueryExecutor::FetchResult(RowBatch** batch) {
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpaladQueryExecutor::FetchResult(string* row) {
   // If we have not fetched any data, or we've returned all the data, fetch more rows
   // from ImpalaServer
   if (!query_results_.__isset.data || current_row_ >= query_results_.data.size()) {
-    client_->iface()->fetch(query_results_, query_handle_, false, 0);
+    try {
+      client_->iface()->fetch(query_results_, query_handle_, false, 0);
+    } catch (BeeswaxException& e) {
+      stringstream ss;
+      ss << e.SQLState << ": " << e.message;
+      return Status(ss.str());
+    }
     current_row_ = 0;
   }
 
@@ -128,7 +135,7 @@ Status ImpaladQueryExecutor::FetchResult(string* row) {
     eos_ = true;
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpaladQueryExecutor::FetchResult(vector<void*>* row) {
@@ -156,7 +163,7 @@ Status ImpaladQueryExecutor::Explain(const string& query_string, string* explain
     ss << e.SQLState << ": " << e.message;
     return Status(ss.str());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 RuntimeProfile* ImpaladQueryExecutor::query_profile() {

@@ -25,10 +25,9 @@
 #include "util/hdfs-util.h"
 #include "util/dynamic-util.h"
 
-using namespace boost;
-using namespace boost::algorithm;
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 DEFINE_bool(skip_lzo_version_check, false, "Disables checking the LZO library version "
             "against the running Impala version.");
@@ -70,7 +69,7 @@ Status HdfsLzoTextScanner::IssueInitialRanges(HdfsScanNode* scan_node,
         stringstream ss;
         ss << "Error loading impala-lzo library. Check that the impala-lzo library "
            << "is at version " << IMPALA_BUILD_VERSION;
-        library_load_status_.AddErrorMsg(ss.str());
+        library_load_status_.AddDetail(ss.str());
         return library_load_status_;
       }
     } else {
@@ -108,7 +107,7 @@ Status HdfsLzoTextScanner::LoadLzoLibrary() {
   DCHECK(CreateLzoTextScanner != NULL);
   DCHECK(LzoIssueInitialRanges != NULL);
   LOG(INFO) << "Loaded impala-lzo library: " << LIB_IMPALA_LZO;
-  return Status::OK;
+  return Status::OK();
 }
 
 }

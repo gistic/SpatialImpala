@@ -18,6 +18,7 @@ import java.util.List;
 
 import com.cloudera.impala.catalog.Db;
 import com.cloudera.impala.catalog.Function.CompareMode;
+import com.cloudera.impala.catalog.PrimitiveType;
 import com.cloudera.impala.catalog.ScalarFunction;
 import com.cloudera.impala.catalog.ScalarType;
 import com.cloudera.impala.catalog.Type;
@@ -159,6 +160,7 @@ public class CaseExpr extends Expr {
   public static void initBuiltins(Db db) {
     for (Type t: Type.getSupportedTypes()) {
       if (t.isNull()) continue;
+      if (t.isScalarType(PrimitiveType.CHAR)) continue;
       // TODO: case is special and the signature cannot be represented.
       // It is alternating varargs
       // e.g. case(bool, type, bool type, bool type, etc).
@@ -214,6 +216,7 @@ public class CaseExpr extends Expr {
   public void analyze(Analyzer analyzer) throws AnalysisException {
     if (isAnalyzed_) return;
     super.analyze(analyzer);
+    castChildCharsToStrings(analyzer);
 
     if (isDecode()) {
       Preconditions.checkState(!hasCaseExpr_);
@@ -263,8 +266,7 @@ public class CaseExpr extends Expr {
       } else {
         // If no case expr was given, then the when exprs should always return
         // boolean or be castable to boolean.
-        if (!Type.isImplicitlyCastable(whenExpr.getType(),
-            Type.BOOLEAN)) {
+        if (!Type.isImplicitlyCastable(whenExpr.getType(), Type.BOOLEAN, false)) {
           Preconditions.checkState(isCase());
           throw new AnalysisException("When expr '" + whenExpr.toSql() + "'" +
               " is not of type boolean and not castable to type boolean.");
@@ -318,13 +320,16 @@ public class CaseExpr extends Expr {
     // Do the function lookup just based on the whenType.
     Type[] args = new Type[1];
     args[0] = whenType;
-    fn_ = getBuiltinFunction(analyzer, "case", args, CompareMode.IS_SUPERTYPE_OF);
+    fn_ = getBuiltinFunction(analyzer, "case", args,
+        CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
     Preconditions.checkNotNull(fn_);
     type_ = returnType;
   }
 
   private boolean isCase() { return !isDecode(); }
   private boolean isDecode() { return decodeExpr_ != null; }
+  public boolean hasCaseExpr() { return hasCaseExpr_; }
+  public boolean hasElseExpr() { return hasElseExpr_; }
 
   @Override
   public Expr clone() { return new CaseExpr(this); }

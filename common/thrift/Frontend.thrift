@@ -19,6 +19,7 @@ include "Types.thrift"
 include "ImpalaInternalService.thrift"
 include "PlanNodes.thrift"
 include "Planner.thrift"
+include "RuntimeProfile.thrift"
 include "Descriptors.thrift"
 include "Data.thrift"
 include "Results.thrift"
@@ -27,6 +28,7 @@ include "TCLIService.thrift"
 include "Status.thrift"
 include "CatalogObjects.thrift"
 include "CatalogService.thrift"
+include "LineageGraph.thrift"
 
 // These are supporting structs for JniFrontend.java, which serves as the glue
 // between our C++ execution environment and the Java frontend.
@@ -114,32 +116,49 @@ struct TGetDataSrcsResult {
   4: required list<string> api_versions
 }
 
-// Used by DESCRIBE <table> statements to control what information is returned and how to
-// format the output.
-enum TDescribeTableOutputStyle {
-  // The default output style if no options are specified for DESCRIBE <table>.
+// Used by DESCRIBE DATABASE <db> and DESCRIBE <table> statements to control
+// what information is returned and how to format the output.
+enum TDescribeOutputStyle {
+  // The default output style if no options are specified for
+  // DESCRIBE DATABASE <db> and DESCRIBE <table>.
   MINIMAL,
-  // Output additional information on the table in formatted style.
-  // Set for DESCRIBE FORMATTED statements.
+
+  // Output additional information on the database or table.
+  // Set for both DESCRIBE DATABASE FORMATTED|EXTENDED <db>
+  // and DESCRIBE FORMATTED|EXTENDED <table> statements.
+  EXTENDED,
   FORMATTED
+}
+
+// Arguments to DescribeDb, which returns a list of properties for a given database.
+// What information is returned is controlled by the given TDescribeOutputStyle.
+// NOTE: This struct should only be used for intra-process communication.
+struct TDescribeDbParams {
+  1: required string db
+
+  // Controls the output style for this describe command.
+  2: required TDescribeOutputStyle output_style
 }
 
 // Arguments to DescribeTable, which returns a list of column descriptors and additional
 // metadata for a given table. What information is returned is controlled by the
-// given TDescribeTableOutputStyle.
+// given TDescribeOutputStyle.
 // NOTE: This struct should only be used for intra-process communication.
 struct TDescribeTableParams {
   1: required string db
   2: required string table_name
 
   // Controls the output style for this describe command.
-  3: required TDescribeTableOutputStyle output_style
+  3: required TDescribeOutputStyle output_style
+
+  // Struct type with fields to display for the MINIMAL output style.
+  4: optional Types.TColumnType result_struct
 }
 
-// Results of a call to describeTable()
+// Results of a call to describeDb() and describeTable()
 // NOTE: This struct should only be used for intra-process communication.
-struct TDescribeTableResult {
-  // Output from a DESCRIBE TABLE command.
+struct TDescribeResult {
+  // Output from a DESCRIBE DATABASE command or a DESCRIBE TABLE command.
   1: required list<Data.TResultRow> results
 }
 
@@ -182,6 +201,15 @@ struct TShowTablesParams {
   // Optional pattern to match tables names. If not set, all tables from the given
   // database are returned.
   2: optional string show_pattern
+}
+
+// Parameters for SHOW FILES commands
+struct TShowFilesParams {
+  1: required CatalogObjects.TTableName table_name
+
+  // An optional partition spec. Set if this operation should apply to a specific
+  // partition rather than the base table.
+  2: optional list<CatalogObjects.TPartitionKeyValue> partition_spec
 }
 
 // Parameters for SHOW [CURRENT] ROLES and SHOW ROLE GRANT GROUP <groupName> commands
@@ -354,6 +382,9 @@ struct TQueryExecRequest {
 
   // List of replica hosts.  Used by the host_idx field of TScanRangeLocation.
   12: required list<Types.TNetworkAddress> host_list
+
+  // Column lineage graph
+  13: optional LineageGraph.TLineageGraph lineage_graph
 }
 
 enum TCatalogOpType {
@@ -361,7 +392,8 @@ enum TCatalogOpType {
   SHOW_DBS,
   SHOW_STATS,
   USE,
-  DESCRIBE,
+  DESCRIBE_TABLE,
+  DESCRIBE_DB,
   SHOW_FUNCTIONS,
   RESET_METADATA,
   DDL,
@@ -369,6 +401,8 @@ enum TCatalogOpType {
   SHOW_DATA_SRCS,
   SHOW_ROLES,
   SHOW_GRANT_ROLE,
+  SHOW_FILES,
+  SHOW_CREATE_FUNCTION
 }
 
 // TODO: Combine SHOW requests with a single struct that contains a field
@@ -378,6 +412,9 @@ struct TCatalogOpRequest {
 
   // Parameters for USE commands
   2: optional TUseDbParams use_db_params
+
+  // Parameters for DESCRIBE DATABASE db commands
+  17: optional TDescribeDbParams describe_db_params
 
   // Parameters for DESCRIBE table commands
   3: optional TDescribeTableParams describe_table_params
@@ -414,6 +451,15 @@ struct TCatalogOpRequest {
 
   // Parameters for SHOW CREATE TABLE
   10: optional CatalogObjects.TTableName show_create_table_params
+
+  // Parameters for SHOW FILES
+  14: optional TShowFilesParams show_files_params
+
+  // Column lineage graph
+  15: optional LineageGraph.TLineageGraph lineage_graph
+
+  // Parameters for SHOW_CREATE_FUNCTION
+  16: optional TGetFunctionsParams show_create_function_params
 }
 
 // Parameters for the SET query option command
@@ -496,13 +542,16 @@ struct TExecRequest {
 
   // List of catalog objects accessed by this request. May be empty in this
   // case that the query did not access any Catalog objects.
-  8: optional list<TAccessEvent> access_events
+  8: optional set<TAccessEvent> access_events
 
   // List of warnings that were generated during analysis. May be empty.
   9: required list<string> analysis_warnings
 
   // Set iff stmt_type is SET
   10: optional TSetQueryOptionRequest set_query_option_request
+
+  // Timeline of planner's operation, for profiling
+  11: optional RuntimeProfile.TEventSequence timeline
 }
 
 // Parameters to FeSupport.cacheJar().
@@ -596,6 +645,14 @@ struct TUpdateCatalogCacheResponse {
   1: required Types.TUniqueId catalog_service_id
 }
 
+// Sent from the impalad BE to FE with the latest cluster membership snapshot resulting
+// from the Membership heartbeat.
+struct TUpdateMembershipRequest {
+  1: required set<string> hostnames
+  2: required set<string> ip_addresses
+  3: i32 num_nodes
+}
+
 // Contains all interesting statistics from a single 'memory pool' in the JVM.
 // All numeric values are measured in bytes.
 struct TJvmMemoryPool {
@@ -656,4 +713,9 @@ struct TGetHadoopConfigResponse {
 
 struct TGetAllHadoopConfigsResponse {
   1: optional map<string, string> configs;
+}
+
+// BE startup options
+struct TStartupOptions {
+  1: optional bool compute_lineage
 }

@@ -1,10 +1,8 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # Targeted tests for decimal type.
 #
 import logging
 import pytest
-import os
 from copy import copy
 from tests.common.test_vector import *
 from tests.common.impala_test_suite import *

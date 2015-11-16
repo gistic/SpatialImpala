@@ -1,13 +1,19 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # py.test configuration module
 #
 import logging
 import os
 from common.test_result_verifier import QueryTestResult
+from tests.util.filesystem_utils import FILESYSTEM, ISILON_WEBHDFS_PORT
 
 logging.basicConfig(level=logging.INFO, format='%(threadName)s: %(message)s')
 LOG = logging.getLogger('test_configuration')
+
+def _get_default_nn_http_addr():
+  """Return the namenode ip and webhdfs port if the default shouldn't be used"""
+  if FILESYSTEM == 'isilon':
+    return "%s:%s" % (os.getenv("ISILON_NAMENODE"), ISILON_WEBHDFS_PORT)
+  return None
 
 def pytest_addoption(parser):
   """Adds a new command line options to py.test"""
@@ -36,7 +42,7 @@ def pytest_addoption(parser):
   parser.addoption("--minicluster_xml_conf", default=default_xml_path, help=\
                    "The full path to the HDFS xml configuration file")
 
-  parser.addoption("--namenode_http_address", default=None, help=\
+  parser.addoption("--namenode_http_address", default=_get_default_nn_http_addr(), help=\
                    "The host:port for the HDFS Namenode's WebHDFS interface. Takes" \
                    " precedence over any configuration read from --minicluster_xml_conf")
 
@@ -52,6 +58,7 @@ def pytest_addoption(parser):
                    "If running on a cluster, specify the scale factor"\
                    "Ex. --scale_factor=500gb")
 
+# KERBEROS TODO: I highly doubt that the default is correct.  Try "hive".
   parser.addoption("--hive_service_name", dest="hive_service_name",
                    default="Hive Metastore Server", help="The principal service name "\
                    "for the hive metastore client when using kerberos.")
@@ -62,6 +69,9 @@ def pytest_addoption(parser):
   parser.addoption("--sanity", action="store_true", default=False,
                    help="Runs a single test vector from each test to provide a quick "\
                    "sanity check at the cost of lower test coverage.")
+
+  parser.addoption("--skip_hbase", action="store_true", default=False,
+                   help="Skip HBase tests")
 
 def pytest_assertrepr_compare(op, left, right):
   """

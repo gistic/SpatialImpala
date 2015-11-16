@@ -24,10 +24,12 @@
 #include "runtime/exec-env.h"
 #include "service/impala-server.h"
 
-using namespace apache::thrift;
+#include "common/names.h"
 
-using namespace std;
-using namespace boost;
+DECLARE_string(ssl_server_certificate);
+DECLARE_string(ssl_private_key);
+
+using namespace apache::thrift;
 using namespace impala;
 
 InProcessImpalaServer::InProcessImpalaServer(const string& hostname, int backend_port,
@@ -64,7 +66,7 @@ Status InProcessImpalaServer::StartWithClientServers(int beeswax_port, int hs2_p
   // Wait for up to 1s for the backend server to start
   RETURN_IF_ERROR(WaitForServer(hostname_, backend_port_, 100, 100));
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status InProcessImpalaServer::StartAsBackendOnly(bool use_statestore) {
@@ -74,17 +76,17 @@ Status InProcessImpalaServer::StartAsBackendOnly(bool use_statestore) {
                                      &be_server, &impala_server_));
   be_server_.reset(be_server);
   RETURN_IF_ERROR(be_server_->Start());
-  return Status::OK;
+  return Status::OK();
 }
 
 Status InProcessImpalaServer::Join() {
   be_server_->Join();
-  return Status::OK;
+  return Status::OK();
 }
 
 InProcessStatestore::InProcessStatestore(int statestore_port, int webserver_port)
     : webserver_(new Webserver(webserver_port)),
-      metrics_(new Metrics()),
+      metrics_(new MetricGroup("statestore")),
       statestore_port_(statestore_port),
       statestore_(new Statestore(metrics_.get())) {
   AddDefaultUrlCallbacks(webserver_.get());
@@ -98,6 +100,11 @@ Status InProcessStatestore::Start() {
 
   statestore_server_.reset(new ThriftServer("StatestoreService", processor,
       statestore_port_, NULL, metrics_.get(), 5));
+  if (EnableInternalSslConnections()) {
+    LOG(INFO) << "Enabling SSL for Statestore";
+    EXIT_IF_ERROR(statestore_server_->EnableSsl(
+        FLAGS_ssl_server_certificate, FLAGS_ssl_private_key));
+  }
   statestore_main_loop_.reset(
       new Thread("statestore", "main-loop", &Statestore::MainLoop, statestore_.get()));
 

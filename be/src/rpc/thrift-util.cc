@@ -45,13 +45,21 @@
 #include <thrift/protocol/TCompactProtocol.h>
 #pragma clang diagnostic pop
 
-using namespace std;
+#include "common/names.h"
+
 using namespace apache::thrift;
 using namespace apache::thrift::transport;
 using namespace apache::thrift::server;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::concurrency;
-using namespace boost;
+
+// Thrift defines operator< but does not implement it. This is a stub
+// implementation so we can link.
+bool Apache::Hadoop::Hive::Partition::operator<(
+    const Apache::Hadoop::Hive::Partition& x) const {
+  DCHECK(false) << "This should not get called.";
+  return false;
+}
 
 namespace impala {
 
@@ -93,6 +101,10 @@ bool TUniqueId::operator<(const TUniqueId& that) const {
   return (hi < that.hi) || (hi == that.hi &&  lo < that.lo);
 }
 
+bool TAccessEvent::operator<(const TAccessEvent& that) const {
+  return this->name < that.name;
+}
+
 static void ThriftOutputFunction(const char* output) {
   VLOG_QUERY << output;
 }
@@ -116,7 +128,7 @@ Status WaitForServer(const string& host, int port, int num_retries,
       socket.setConnTimeout(500);
       socket.open();
       socket.close();
-      return Status::OK;
+      return Status::OK();
     } catch (const TException& e) {
       VLOG_QUERY << "Connection failed: " << e.what();
     }
@@ -159,4 +171,10 @@ bool TNetworkAddressComparator(const TNetworkAddress& a, const TNetworkAddress& 
   if (cmp == 0) return a.port < b.port;
   return false;
 }
+
+bool IsTimeoutTException(const TException& e) {
+  // String taken from Thrift's TSocket.cpp
+  return strstr(e.what(), "EAGAIN (timed out)") != NULL;
+}
+
 }

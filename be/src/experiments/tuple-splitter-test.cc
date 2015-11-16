@@ -33,8 +33,8 @@
 #define UNUSED_UPPER_BITS_MASK  0xFFFF000000000000
 #define POINTER_LOWER_BITS_MASK 0x0000FFFFFFFFFFFF
 
-using namespace boost;
-using namespace std;
+#include "common/names.h"
+
 using namespace impala;
 
 inline void Memcpy16(uint8_t* dst, uint8_t* src) {
@@ -96,11 +96,11 @@ class DataPartitioner {
     size_ = size;
     hash_offset_ = hash_offset;
 
-    bytes_allocated_ = ADD_COUNTER(profile, "BytesAllocated", TCounterType::BYTES);
-    bytes_copied_ = ADD_COUNTER(profile, "BytesCopied", TCounterType::BYTES);
-    add_time_ = ADD_COUNTER(profile, "AddTime", TCounterType::CPU_TICKS);
-    split_time_ = ADD_COUNTER(profile, "SplitTime", TCounterType::CPU_TICKS);
-    splits_ = ADD_COUNTER(profile, "Splits", TCounterType::UNIT);
+    bytes_allocated_ = ADD_COUNTER(profile, "BytesAllocated", TUnit::BYTES);
+    bytes_copied_ = ADD_COUNTER(profile, "BytesCopied", TUnit::BYTES);
+    add_time_ = ADD_COUNTER(profile, "AddTime", TUnit::CPU_TICKS);
+    split_time_ = ADD_COUNTER(profile, "SplitTime", TUnit::CPU_TICKS);
+    splits_ = ADD_COUNTER(profile, "Splits", TUnit::UNIT);
 
     // Max of tuple size and cache line
     int min_size_per_partition = max(size, 64);
@@ -440,4 +440,3 @@ int main(int argc, char **argv) {
   LOG(ERROR) << "Done.";
   return 0;
 }
-

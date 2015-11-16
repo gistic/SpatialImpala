@@ -32,23 +32,26 @@ from alltypesagg WHERE id = 1006
 double, double, double, double
 ====
 ---- QUERY
-# Includes one row which is null
+# Includes one row which is null, and test the aliases for variance() as well
 SELECT variance(tinyint_col), variance(smallint_col), variance(int_col),
-variance(bigint_col), variance(float_col), variance(double_col)
+variance(bigint_col), variance(float_col), variance(double_col),
+var_samp(double_col), variance_samp(double_col)
 from alltypesagg WHERE id >= 1000 AND id < 1006
 ---- RESULTS
-2.5,2.5,2.5,250,3.025,255.025
+2.5,2.5,2.5,250,3.025,255.025,255.025,255.025
 ---- TYPES
-double, double, double, double, double, double
+double, double, double, double, double, double,double, double
 ====
 ---- QUERY
+# Test population variance (including the var_pop() alias)
 SELECT variance_pop(tinyint_col), variance_pop(smallint_col), variance_pop(int_col),
-variance_pop(bigint_col), variance_pop(float_col), variance_pop(double_col)
+variance_pop(bigint_col), variance_pop(float_col), variance_pop(double_col),
+var_pop(double_col)
 from alltypesagg WHERE id >= 1000 AND id < 1006
 ---- RESULTS
-2,2,2,200,2.42,204.02
+2,2,2,200,2.42,204.02,204.02
 ---- TYPES
-double, double, double, double, double, double
+double, double, double, double, double, double, double
 ====
 ---- QUERY
 SELECT round(stddev(tinyint_col), 5),
@@ -56,12 +59,13 @@ SELECT round(stddev(tinyint_col), 5),
        round(stddev(int_col), 5),
        round(stddev(bigint_col), 5),
        round(stddev(float_col), 5),
-       round(stddev(double_col), 5)
+       round(stddev(double_col), 5),
+       round(stddev_samp(double_col), 5)
 from alltypesagg WHERE id >= 1000 AND id < 1006
 ---- RESULTS
-1.58114,1.58114,1.58114,15.81139,1.73925,15.96950
+1.58114,1.58114,1.58114,15.81139,1.73925,15.96950,15.96950
 ---- TYPES
-double, double, double, double, double, double
+double, double, double, double, double, double, double
 ====
 ---- QUERY
 # no grouping exprs, cols contain nulls except for bool cols
@@ -926,8 +930,36 @@ group by day
 int, string, string
 ====
 ---- QUERY
+# Test group_concat distinct with multiple agg columns
+select day, group_concat(string_col, '->'), group_concat(date_string_col),
+group_concat(distinct date_string_col)
+from (select * from alltypesagg where id % 250 = day order by id limit 99999) a
+group by day order by day
+---- RESULTS: VERIFY_IS_EQUAL_SORTED
+1,'1->251->501->751','01/01/10, 01/01/10, 01/01/10, 01/01/10','01/01/10'
+2,'2->252->502->752','01/02/10, 01/02/10, 01/02/10, 01/02/10','01/02/10'
+3,'3->253->503->753','01/03/10, 01/03/10, 01/03/10, 01/03/10','01/03/10'
+4,'4->254->504->754','01/04/10, 01/04/10, 01/04/10, 01/04/10','01/04/10'
+5,'5->255->505->755','01/05/10, 01/05/10, 01/05/10, 01/05/10','01/05/10'
+6,'6->256->506->756','01/06/10, 01/06/10, 01/06/10, 01/06/10','01/06/10'
+7,'7->257->507->757','01/07/10, 01/07/10, 01/07/10, 01/07/10','01/07/10'
+8,'8->258->508->758','01/08/10, 01/08/10, 01/08/10, 01/08/10','01/08/10'
+9,'9->259->509->759','01/09/10, 01/09/10, 01/09/10, 01/09/10','01/09/10'
+10,'10->260->510->760','01/10/10, 01/10/10, 01/10/10, 01/10/10','01/10/10'
+---- TYPES
+int, string, string, string
+====
+---- QUERY
 # Test group_concat with null result
 select group_concat(string_col) from alltypesagg where string_col = NULL;
+---- RESULTS
+'NULL'
+---- TYPES
+string
+====
+---- QUERY
+# Test group_concat distinct with null result
+select group_concat(distinct string_col) from alltypesagg where string_col = NULL;
 ---- RESULTS
 'NULL'
 ---- TYPES
@@ -952,10 +984,19 @@ select group_concat('abc', 'xy') from functional.alltypesagg where id % 1000 = d
 string
 ====
 ---- QUERY
+# Same as last query test, now adding the "distinct" clause
+select group_concat(distinct 'abc', 'xy') from functional.alltypesagg
+where id % 1000 = day
+---- RESULTS
+'abc'
+---- TYPES
+string
+====
+---- QUERY
 # Test group_concat when separator varies by row.
 select group_concat(cast(id as string), cast ((10 - id) as string))
 from functional.alltypesagg
-where id < 10 and day != null
+where id < 10 and day is not null
 group by day
 ---- RESULTS
 '0918273645546372819'
@@ -1092,22 +1133,85 @@ select histogram(timestamp_col) from functional.alltypestiny;
 STRING
 ====
 ---- QUERY
-select histogram(d1) from functional.decimal_tbl;
+select
+appx_median(bool_col),
+appx_median(tinyint_col),
+appx_median(smallint_col),
+appx_median(int_col),
+appx_median(float_col),
+appx_median(double_col),
+appx_median(string_col),
+appx_median(timestamp_col)
+from alltypestiny
 ---- RESULTS
-'1234, 2345, 12345, 12345, 132842'
+true,1,1,1,1.100000023841858,10.1,'1',2009-03-01 00:00:00
 ---- TYPES
-STRING
+BOOLEAN, TINYINT, SMALLINT, INT, FLOAT, DOUBLE, STRING, TIMESTAMP
 ====
 ---- QUERY
-select appx_median(d1) from functional.decimal_tbl;
+# IMPALA-1419: Agg fn containing arithmetic expr on NULL fails
+select count(null * 1) from functional.alltypes
 ---- RESULTS
-'12345'
+0
 ---- TYPES
-STRING
+BIGINT
 ====
 ---- QUERY
-select sample(d1) from functional.decimal_tbl;
+# IMPALA-1898: ordinal in group/order by combined with explicit select-list alias
+# that match columns in underlying table
+select extract(timestamp_col, 'year') as timestamp_col,
+       extract(timestamp_col, 'month') as month,
+       sum(tinyint_col)
+from functional.alltypes
+group by 1, 2
+order by 1, 2;
+---- RESULTS
+2009,1,1395
+2009,2,1260
+2009,3,1395
+2009,4,1350
+2009,5,1395
+2009,6,1350
+2009,7,1395
+2009,8,1395
+2009,9,1350
+2009,10,1395
+2009,11,1350
+2009,12,1395
+2010,1,1395
+2010,2,1260
+2010,3,1395
+2010,4,1350
+2010,5,1395
+2010,6,1350
+2010,7,1395
+2010,8,1395
+2010,9,1350
+2010,10,1395
+2010,11,1350
+2010,12,1395
 ---- TYPES
-# Results are unstable, just check that this doesn't crash
-STRING
+INT,INT,BIGINT
+====
+---- QUERY
+# IMPALA-2089: Tests correct elimination of redundant predicates.
+# The equivalences between inline-view slots are enforced inside the inline-view plan.
+# Equivalences between simple grouping slots (with SlotRef grouping exprs) are enforced
+# at the scan, and equivalences between grouping slots with complex grouping exprs are
+# enforced at the aggregation.
+select t2.timestamp_col, t1.int_col_1
+from
+(select coalesce(t1.smallint_col, t1.month, t1.month) as int_col,
+        (count(t1.int_col)) <= (coalesce(t1.smallint_col, t1.month, t1.month)) as boolean_col,
+        (t1.bigint_col) + (t1.smallint_col) as int_col_1
+ from functional.alltypes t1
+ group by coalesce(t1.smallint_col, t1.month, t1.month), (t1.bigint_col) + (t1.smallint_col)
+ having (t1.bigint_col) + (t1.smallint_col) != (count(t1.bigint_col + t1.smallint_col))
+) t1
+inner join functional.alltypes t2
+  on (t2.month = t1.int_col and t2.month = t1.int_col_1 and t2.tinyint_col = t1.int_col)
+where t2.int_col IN (t1.int_col_1, t1.int_col)
+---- RESULTS
+---- TYPES
+TIMESTAMP,BIGINT
 ====

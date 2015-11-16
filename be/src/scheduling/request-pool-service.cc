@@ -18,11 +18,13 @@
 #include <string>
 
 #include "common/logging.h"
-#include "rpc/thrift-util.h"
-#include "util/jni-util.h"
+#include "rpc/jni-thrift-util.h"
+#include "util/mem-info.h"
 #include "util/parse-util.h"
+#include "util/time.h"
 
-using namespace std;
+#include "common/names.h"
+
 using namespace impala;
 
 DEFINE_string(fair_scheduler_allocation_path, "", "Path to the fair scheduler "
@@ -34,7 +36,7 @@ DEFINE_string(llama_site_path, "", "Path to the Llama configuration file "
 // configuration files are not provided. The default values for this 'default pool'
 // are the same as the default values for pools defined via the fair scheduler
 // allocation file and Llama configurations.
-DEFINE_int64(default_pool_max_requests, 20, "Maximum number of concurrent outstanding "
+DEFINE_int64(default_pool_max_requests, 200, "Maximum number of concurrent outstanding "
     "requests allowed to run before queueing incoming requests. A negative value "
     "indicates no limit. 0 indicates no requests will be admitted. Ignored if "
     "fair_scheduler_config_path and llama_site_path are set.");
@@ -44,7 +46,7 @@ DEFINE_string(default_pool_mem_limit, "", "Maximum amount of memory that all "
     "('<float>[mM]'), gigabytes ('<float>[gG]'), or percentage of the physical memory "
     "('<int>%'). 0 or not setting indicates no limit. Defaults to bytes if no unit is "
     "given. Ignored if fair_scheduler_config_path and llama_site_path are set.");
-DEFINE_int64(default_pool_max_queued, 50, "Maximum number of requests allowed to be "
+DEFINE_int64(default_pool_max_queued, 200, "Maximum number of requests allowed to be "
     "queued before rejecting requests. A negative value or 0 indicates requests "
     "will always be rejected once the maximum number of concurrent requests are "
     "executing. Ignored if fair_scheduler_config_path and "
@@ -60,7 +62,14 @@ DECLARE_bool(enable_rm);
 // Pool name used when the configuration files are not specified.
 const string DEFAULT_POOL_NAME = "default-pool";
 
-RequestPoolService::RequestPoolService() {
+const string RESOLVE_POOL_METRIC_NAME = "request-pool-service.resolve-pool-duration-ms";
+
+RequestPoolService::RequestPoolService(MetricGroup* metrics) :
+    metrics_(metrics), resolve_pool_ms_metric_(NULL) {
+  DCHECK(metrics_ != NULL);
+  resolve_pool_ms_metric_ =
+      StatsMetric<double>::CreateAndRegister(metrics_, RESOLVE_POOL_METRIC_NAME);
+
   if (FLAGS_fair_scheduler_allocation_path.empty() &&
       FLAGS_llama_site_path.empty()) {
     if (FLAGS_enable_rm) {
@@ -71,7 +80,7 @@ RequestPoolService::RequestPoolService() {
     default_pool_only_ = true;
     bool is_percent; // not used
     int64_t bytes_limit = ParseUtil::ParseMemSpec(FLAGS_default_pool_mem_limit,
-        &is_percent);
+        &is_percent, MemInfo::physical_mem());
     // -1 indicates an error occurred
     if (bytes_limit < 0) {
       LOG(ERROR) << "Unable to parse default pool mem limit from '"
@@ -126,14 +135,18 @@ Status RequestPoolService::ResolveRequestPool(const string& requested_pool_name,
   if (default_pool_only_) {
     resolved_pool->__set_resolved_pool(DEFAULT_POOL_NAME);
     resolved_pool->__set_has_access(true);
-    return Status::OK;
+    return Status::OK();
   }
 
   TResolveRequestPoolParams params;
   params.__set_user(user);
   params.__set_requested_pool(requested_pool_name);
-  return JniUtil::CallJniMethod(request_pool_service_, resolve_request_pool_id_, params,
-      resolved_pool);
+
+  int64_t start_time = MonotonicMillis();
+  Status status = JniUtil::CallJniMethod(request_pool_service_, resolve_request_pool_id_,
+      params, resolved_pool);
+  resolve_pool_ms_metric_->Update(MonotonicMillis() - start_time);
+  return status;
 }
 
 Status RequestPoolService::GetPoolConfig(const string& pool_name,
@@ -144,7 +157,7 @@ Status RequestPoolService::GetPoolConfig(const string& pool_name,
     pool_config->__set_mem_limit(
         FLAGS_disable_pool_mem_limits ? -1 : default_pool_mem_limit_);
     pool_config->__set_max_queued(FLAGS_default_pool_max_queued);
-    return Status::OK;
+    return Status::OK();
   }
 
   TPoolConfigParams params;
@@ -153,5 +166,5 @@ Status RequestPoolService::GetPoolConfig(const string& pool_name,
         request_pool_service_, get_pool_config_id_, params, pool_config));
   if (FLAGS_disable_pool_max_requests) pool_config->__set_max_requests(-1);
   if (FLAGS_disable_pool_mem_limits) pool_config->__set_mem_limit(-1);
-  return Status::OK;
+  return Status::OK();
 }

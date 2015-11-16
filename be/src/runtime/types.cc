@@ -13,13 +13,68 @@
 // limitations under the License.
 
 #include "runtime/types.h"
+
 #include <ostream>
 #include <sstream>
+#include <boost/foreach.hpp>
 
-using namespace std;
+#include "gen-cpp/TCLIService_constants.h"
+
+#include "common/names.h"
+
 using namespace apache::hive::service::cli::thrift;
 
 namespace impala {
+
+ColumnType::ColumnType(const std::vector<TTypeNode>& types, int* idx)
+  : len(-1), precision(-1), scale(-1) {
+  DCHECK_GE(*idx, 0);
+  DCHECK_LT(*idx, types.size());
+  const TTypeNode& node = types[*idx];
+  switch (node.type) {
+    case TTypeNodeType::SCALAR: {
+      DCHECK(node.__isset.scalar_type);
+      const TScalarType scalar_type = node.scalar_type;
+      type = ThriftToType(scalar_type.type);
+      if (type == TYPE_CHAR || type == TYPE_VARCHAR) {
+        DCHECK(scalar_type.__isset.len);
+        len = scalar_type.len;
+      } else if (type == TYPE_DECIMAL) {
+        DCHECK(scalar_type.__isset.precision);
+        DCHECK(scalar_type.__isset.scale);
+        precision = scalar_type.precision;
+        scale = scalar_type.scale;
+      }
+      break;
+    }
+    case TTypeNodeType::STRUCT:
+      type = TYPE_STRUCT;
+      for (int i = 0; i < node.struct_fields.size(); ++i) {
+        ++(*idx);
+        children.push_back(ColumnType(types, idx));
+        field_names.push_back(node.struct_fields[i].name);
+      }
+      break;
+    case TTypeNodeType::ARRAY:
+      DCHECK(!node.__isset.scalar_type);
+      DCHECK_LT(*idx, types.size() - 1);
+      type = TYPE_ARRAY;
+      ++(*idx);
+      children.push_back(ColumnType(types, idx));
+      break;
+    case TTypeNodeType::MAP:
+      DCHECK(!node.__isset.scalar_type);
+      DCHECK_LT(*idx, types.size() - 2);
+      type = TYPE_MAP;
+      ++(*idx);
+      children.push_back(ColumnType(types, idx));
+      ++(*idx);
+      children.push_back(ColumnType(types, idx));
+      break;
+    default:
+      DCHECK(false) << node.type;
+  }
+}
 
 PrimitiveType ThriftToType(TPrimitiveType::type ttype) {
   switch (ttype) {
@@ -63,6 +118,10 @@ TPrimitiveType::type ToThrift(PrimitiveType ptype) {
     case TYPE_BINARY: return TPrimitiveType::BINARY;
     case TYPE_DECIMAL: return TPrimitiveType::DECIMAL;
     case TYPE_CHAR: return TPrimitiveType::CHAR;
+    case TYPE_STRUCT:
+    case TYPE_ARRAY:
+    case TYPE_MAP:
+      DCHECK(false) << "NYI: " << ptype;
     default: return TPrimitiveType::INVALID_TYPE;
   }
 }
@@ -71,7 +130,7 @@ string TypeToString(PrimitiveType t) {
   switch (t) {
     case INVALID_TYPE: return "INVALID";
     case TYPE_NULL: return "NULL";
-    case TYPE_BOOLEAN: return "BOOL";
+    case TYPE_BOOLEAN: return "BOOLEAN";
     case TYPE_TINYINT: return "TINYINT";
     case TYPE_SMALLINT: return "SMALLINT";
     case TYPE_INT: return "INT";
@@ -86,6 +145,9 @@ string TypeToString(PrimitiveType t) {
     case TYPE_BINARY: return "BINARY";
     case TYPE_DECIMAL: return "DECIMAL";
     case TYPE_CHAR: return "CHAR";
+    case TYPE_STRUCT: return "STRUCT";
+    case TYPE_ARRAY: return "ARRAY";
+    case TYPE_MAP: return "MAP";
   };
   return "";
 }
@@ -110,34 +172,122 @@ string TypeToOdbcString(PrimitiveType t) {
     case TYPE_BINARY: return "binary";
     case TYPE_DECIMAL: return "decimal";
     case TYPE_CHAR: return "char";
+    case TYPE_STRUCT: return "struct";
+    case TYPE_ARRAY: return "array";
+    case TYPE_MAP: return "map";
   };
   return "unknown";
 }
 
-TTypeId::type TypeToHiveServer2Type(PrimitiveType t) {
-  switch (t) {
+void ColumnType::ToThrift(TColumnType* thrift_type) const {
+  thrift_type->types.push_back(TTypeNode());
+  TTypeNode& node = thrift_type->types.back();
+  if (IsComplexType()) {
+    if (type == TYPE_ARRAY) {
+      node.type = TTypeNodeType::ARRAY;
+    } else if (type == TYPE_MAP) {
+      node.type = TTypeNodeType::MAP;
+    } else {
+      DCHECK_EQ(type, TYPE_STRUCT);
+      node.type = TTypeNodeType::STRUCT;
+      node.__set_struct_fields(vector<TStructField>());
+      BOOST_FOREACH(const string& field_name, field_names) {
+        node.struct_fields.push_back(TStructField());
+        node.struct_fields.back().name = field_name;
+      }
+    }
+    BOOST_FOREACH(const ColumnType& child, children) {
+      child.ToThrift(thrift_type);
+    }
+  } else {
+    node.type = TTypeNodeType::SCALAR;
+    node.__set_scalar_type(TScalarType());
+    TScalarType& scalar_type = node.scalar_type;
+    scalar_type.__set_type(impala::ToThrift(type));
+    if (type == TYPE_CHAR || type == TYPE_VARCHAR) {
+      DCHECK_NE(len, -1);
+      scalar_type.__set_len(len);
+    } else if (type == TYPE_DECIMAL) {
+      DCHECK_NE(precision, -1);
+      DCHECK_NE(scale, -1);
+      scalar_type.__set_precision(precision);
+      scalar_type.__set_scale(scale);
+    }
+  }
+}
+
+TTypeEntry ColumnType::ToHs2Type() const {
+  TPrimitiveTypeEntry type_entry;
+  switch (type) {
     // Map NULL_TYPE to BOOLEAN, otherwise Hive's JDBC driver won't
     // work for queries like "SELECT NULL" (IMPALA-914).
-    case TYPE_NULL: return TTypeId::BOOLEAN_TYPE;
-    case TYPE_BOOLEAN: return TTypeId::BOOLEAN_TYPE;
-    case TYPE_TINYINT: return TTypeId::TINYINT_TYPE;
-    case TYPE_SMALLINT: return TTypeId::SMALLINT_TYPE;
-    case TYPE_INT: return TTypeId::INT_TYPE;
-    case TYPE_BIGINT: return TTypeId::BIGINT_TYPE;
-    case TYPE_FLOAT: return TTypeId::FLOAT_TYPE;
-    case TYPE_DOUBLE: return TTypeId::DOUBLE_TYPE;
-    case TYPE_TIMESTAMP: return TTypeId::TIMESTAMP_TYPE;
-    case TYPE_STRING: return TTypeId::STRING_TYPE;
-    case TYPE_VARCHAR: return TTypeId::STRING_TYPE;
-    case TYPE_BINARY: return TTypeId::BINARY_TYPE;
-    case TYPE_DECIMAL: return TTypeId::DECIMAL_TYPE;
-    // TODO: update when hs2 has char(n)
-    case TYPE_CHAR: return TTypeId::STRING_TYPE;
+    case TYPE_NULL:
+      type_entry.__set_type(TTypeId::BOOLEAN_TYPE);
+      break;
+    case TYPE_BOOLEAN:
+      type_entry.__set_type(TTypeId::BOOLEAN_TYPE);
+      break;
+    case TYPE_TINYINT:
+      type_entry.__set_type(TTypeId::TINYINT_TYPE);
+      break;
+    case TYPE_SMALLINT:
+      type_entry.__set_type(TTypeId::SMALLINT_TYPE);
+      break;
+    case TYPE_INT:
+      type_entry.__set_type(TTypeId::INT_TYPE);
+      break;
+    case TYPE_BIGINT:
+      type_entry.__set_type(TTypeId::BIGINT_TYPE);
+      break;
+    case TYPE_FLOAT:
+      type_entry.__set_type(TTypeId::FLOAT_TYPE);
+      break;
+    case TYPE_DOUBLE:
+      type_entry.__set_type(TTypeId::DOUBLE_TYPE);
+      break;
+    case TYPE_TIMESTAMP:
+      type_entry.__set_type(TTypeId::TIMESTAMP_TYPE);
+      break;
+    case TYPE_STRING:
+      type_entry.__set_type(TTypeId::STRING_TYPE);
+      break;
+    case TYPE_BINARY:
+      type_entry.__set_type(TTypeId::BINARY_TYPE);
+      break;
+    case TYPE_DECIMAL: {
+      TTypeQualifierValue tprecision;
+      tprecision.__set_i32Value(precision);
+      TTypeQualifierValue tscale;
+      tscale.__set_i32Value(scale);
+
+      TTypeQualifiers type_quals;
+      type_quals.qualifiers[g_TCLIService_constants.PRECISION] = tprecision;
+      type_quals.qualifiers[g_TCLIService_constants.SCALE] = tscale;
+      type_entry.__set_typeQualifiers(type_quals);
+      type_entry.__set_type(TTypeId::DECIMAL_TYPE);
+      break;
+    }
+    case TYPE_CHAR:
+    case TYPE_VARCHAR: {
+      TTypeQualifierValue tmax_len;
+      tmax_len.__set_i32Value(len);
+
+      TTypeQualifiers type_quals;
+      type_quals.qualifiers[g_TCLIService_constants.CHARACTER_MAXIMUM_LENGTH] = tmax_len;
+      type_entry.__set_typeQualifiers(type_quals);
+      type_entry.__set_type(
+          (type == TYPE_CHAR) ? TTypeId::CHAR_TYPE : TTypeId::VARCHAR_TYPE);
+      break;
+    }
     default:
       // HiveServer2 does not have a type for invalid, date and datetime.
-      DCHECK(false) << "bad TypeToTValueType() type: " << TypeToString(t);
-      return TTypeId::STRING_TYPE;
+      DCHECK(false) << "bad TypeToTValueType() type: " << DebugString();
+      type_entry.__set_type(TTypeId::STRING_TYPE);
   };
+
+  TTypeEntry result;
+  result.__set_primitiveEntry(type_entry);
+  return result;
 }
 
 string ColumnType::DebugString() const {

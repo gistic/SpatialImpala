@@ -111,7 +111,7 @@ public class LikePredicate extends Predicate {
     }
 
     fn_ = getBuiltinFunction(analyzer, op_.toString(), collectChildReturnTypes(),
-        CompareMode.IS_SUPERTYPE_OF);
+        CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
     Preconditions.checkState(fn_ != null);
     Preconditions.checkState(fn_.getReturnType().isBoolean());
 
@@ -132,4 +132,6 @@ public class LikePredicate extends Predicate {
 
   @Override
   public Expr clone() { return new LikePredicate(this); }
+
+  public Operator getOp() { return op_; }
 }

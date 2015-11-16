@@ -31,43 +31,54 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
 public class CastExpr extends Expr {
+  // Only set for explicit casts. Null for implicit casts.
+  private final TypeDef targetTypeDef_;
 
-  private final Type targetType_;
-
-  // true if this is a "pre-analyzed" implicit cast
+  // True if this is a "pre-analyzed" implicit cast.
   private final boolean isImplicit_;
 
   // True if this cast does not change the type.
   private boolean noOp_ = false;
 
-  public CastExpr(Type targetType, Expr e, boolean isImplicit) {
+  /**
+   * C'tor for "pre-analyzed" implicit casts.
+   */
+  public CastExpr(Type targetType, Expr e) {
     super();
-    Preconditions.checkArgument(targetType.isValid());
-    this.targetType_ = targetType;
-    this.isImplicit_ = isImplicit;
+    Preconditions.checkState(targetType.isValid());
     Preconditions.checkNotNull(e);
-    if (isImplicit) {
-      // replace existing implicit casts
-      if (e instanceof CastExpr) {
-        CastExpr castExpr = (CastExpr) e;
-        if (castExpr.isImplicit()) e = castExpr.getChild(0);
-      }
-      children_.add(e);
-
-      // Implicit casts don't call analyze()
-      // TODO: this doesn't seem like the cleanest approach but there are places
-      // we generate these (e.g. table loading) where there is no analyzer object.
-      try {
-        analyze();
-        computeNumDistinctValues();
-      } catch (AnalysisException ex) {
-        Preconditions.checkState(false,
-          "Implicit casts should never throw analysis exception.");
-      }
-      isAnalyzed_ = true;
-    } else {
-      children_.add(e);
+    type_ = targetType;
+    targetTypeDef_ = null;
+    isImplicit_ = true;
+    // replace existing implicit casts
+    if (e instanceof CastExpr) {
+      CastExpr castExpr = (CastExpr) e;
+      if (castExpr.isImplicit()) e = castExpr.getChild(0);
     }
+    children_.add(e);
+
+    // Implicit casts don't call analyze()
+    // TODO: this doesn't seem like the cleanest approach but there are places
+    // we generate these (e.g. table loading) where there is no analyzer object.
+    try {
+      analyze();
+      computeNumDistinctValues();
+    } catch (AnalysisException ex) {
+      Preconditions.checkState(false,
+          "Implicit casts should never throw analysis exception.");
+    }
+    isAnalyzed_ = true;
+  }
+
+  /**
+   * C'tor for explicit casts.
+   */
+  public CastExpr(TypeDef targetTypeDef, Expr e) {
+    Preconditions.checkNotNull(targetTypeDef);
+    Preconditions.checkNotNull(e);
+    isImplicit_ = false;
+    targetTypeDef_ = targetTypeDef;
+    children_.add(e);
   }
 
   /**
@@ -75,7 +86,7 @@ public class CastExpr extends Expr {
    */
   protected CastExpr(CastExpr other) {
     super(other);
-    targetType_ = other.targetType_;
+    targetTypeDef_ = other.targetTypeDef_;
     isImplicit_ = other.isImplicit_;
     noOp_ = other.noOp_;
   }
@@ -122,6 +133,24 @@ public class CastExpr extends Expr {
               beSymbol, null, null, true));
           continue;
         }
+        if (fromType.getPrimitiveType() == PrimitiveType.VARCHAR
+            && toType.getPrimitiveType() == PrimitiveType.CHAR) {
+          // Allow casting from VARCHAR(N) to CHAR(M)
+          String beSymbol = "impala::CastFunctions::CastToChar";
+          db.addBuiltin(ScalarFunction.createBuiltin(getFnName(ScalarType.CHAR),
+              Lists.newArrayList((Type) ScalarType.VARCHAR), false, ScalarType.CHAR,
+              beSymbol, null, null, true));
+          continue;
+        }
+        if (fromType.getPrimitiveType() == PrimitiveType.CHAR
+            && toType.getPrimitiveType() == PrimitiveType.VARCHAR) {
+          // Allow casting from CHAR(N) to VARCHAR(M)
+          String beSymbol = "impala::CastFunctions::CastToStringVal";
+          db.addBuiltin(ScalarFunction.createBuiltin(getFnName(ScalarType.VARCHAR),
+              Lists.newArrayList((Type) ScalarType.CHAR), false, ScalarType.VARCHAR,
+              beSymbol, null, null, true));
+          continue;
+        }
         // Disable no-op casts
         if (fromType.equals(toType) && !fromType.isDecimal()) continue;
         String beClass = toType.isDecimal() || fromType.isDecimal() ?
@@ -137,7 +166,7 @@ public class CastExpr extends Expr {
   @Override
   public String toSqlImpl() {
     if (isImplicit_) return getChild(0).toSql();
-    return "CAST(" + getChild(0).toSql() + " AS " + targetType_.toString() + ")";
+    return "CAST(" + getChild(0).toSql() + " AS " + targetTypeDef_.toString() + ")";
   }
 
   @Override
@@ -158,7 +187,7 @@ public class CastExpr extends Expr {
   public String debugString() {
     return Objects.toStringHelper(this)
         .add("isImplicit", isImplicit_)
-        .add("target", targetType_)
+        .add("target", type_)
         .addValue(super.debugString())
         .toString();
   }
@@ -168,61 +197,80 @@ public class CastExpr extends Expr {
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
     if (isAnalyzed_) return;
+    Preconditions.checkState(!isImplicit_);
     super.analyze(analyzer);
+    targetTypeDef_.analyze(analyzer);
+    type_ = targetTypeDef_.getType();
     analyze();
   }
 
   private void analyze() throws AnalysisException {
-    targetType_.analyze();
-    if (targetType_.isComplexType()) {
+    Preconditions.checkNotNull(type_);
+    if (type_.isComplexType()) {
       throw new AnalysisException(
-          "Unsupported cast to complex type: " + targetType_.toSql());
+          "Unsupported cast to complex type: " + type_.toSql());
     }
 
-    if (children_.get(0) instanceof NumericLiteral &&
-        targetType_.isFloatingPointType()) {
+    boolean readyForCharCast =
+        children_.get(0).getType().getPrimitiveType() == PrimitiveType.STRING ||
+        children_.get(0).getType().getPrimitiveType() == PrimitiveType.CHAR;
+    if (type_.getPrimitiveType() == PrimitiveType.CHAR && !readyForCharCast) {
+      // Back end functions only exist to cast string types to CHAR, there is not a cast
+      // for every type since it is redundant with STRING. Casts to go through 2 casts:
+      // (1) cast to string, to stringify the value
+      // (2) cast to CHAR, to truncate or pad with spaces
+      CastExpr tostring = new CastExpr(ScalarType.STRING, children_.get(0));
+      tostring.analyze();
+      children_.set(0, tostring);
+    }
+
+    if (children_.get(0) instanceof NumericLiteral && type_.isFloatingPointType()) {
       // Special case casting a decimal literal to a floating point number. The
       // decimal literal can be interpreted as either and we want to avoid casts
       // since that can result in loss of accuracy.
-      ((NumericLiteral)children_.get(0)).explicitlyCastToFloat(targetType_);
+      ((NumericLiteral)children_.get(0)).explicitlyCastToFloat(type_);
     }
 
     if (children_.get(0).getType().isNull()) {
       // Make sure BE never sees TYPE_NULL
-      uncheckedCastChild(targetType_, 0);
+      uncheckedCastChild(type_, 0);
     }
 
     // Ensure child has non-null type (even if it's a null literal). This is required
     // for the UDF interface.
     if (children_.get(0) instanceof NullLiteral) {
       NullLiteral nullChild = (NullLiteral)(children_.get(0));
-      nullChild.uncheckedCastTo(targetType_);
+      nullChild.uncheckedCastTo(type_);
     }
 
     Type childType = children_.get(0).type_;
     Preconditions.checkState(!childType.isNull());
-    if (childType.equals(targetType_)) {
+    if (childType.equals(type_)) {
       noOp_ = true;
-      type_ = targetType_;
       return;
     }
 
-    FunctionName fnName = new FunctionName(Catalog.BUILTINS_DB, getFnName(targetType_));
+    FunctionName fnName = new FunctionName(Catalog.BUILTINS_DB, getFnName(type_));
     Type[] args = { childType };
     Function searchDesc = new Function(fnName, args, Type.INVALID, false);
     if (isImplicit_) {
-      fn_ = Catalog.getBuiltin(searchDesc, CompareMode.IS_SUPERTYPE_OF);
+      fn_ = Catalog.getBuiltin(searchDesc, CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
       Preconditions.checkState(fn_ != null);
     } else {
       fn_ = Catalog.getBuiltin(searchDesc, CompareMode.IS_IDENTICAL);
+      if (fn_ == null) {
+        // allow for promotion from CHAR to STRING; only if no exact match is found
+        fn_ = Catalog.getBuiltin(searchDesc.promoteCharsToStrings(),
+            CompareMode.IS_IDENTICAL);
+      }
     }
     if (fn_ == null) {
       throw new AnalysisException("Invalid type cast of " + getChild(0).toSql() +
-          " from " + childType + " to " + targetType_);
+          " from " + childType + " to " + type_);
     }
-    Preconditions.checkState(targetType_.matchesType(fn_.getReturnType()),
-        targetType_ + " != " + fn_.getReturnType());
-    type_ = targetType_;
+
+    Preconditions.checkState(type_.matchesType(fn_.getReturnType()),
+        type_ + " != " + fn_.getReturnType());
   }
 
   /**
@@ -246,7 +294,7 @@ public class CastExpr extends Expr {
     if (obj instanceof CastExpr) {
       CastExpr other = (CastExpr) obj;
       return isImplicit_ == other.isImplicit_
-          && targetType_.equals(other.targetType_)
+          && type_.equals(other.type_)
           && super.equals(obj);
     }
     // Ignore implicit casts when comparing expr trees.

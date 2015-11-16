@@ -26,6 +26,7 @@
 #include "exec/read-write-util.h"
 #include "exec/text-converter.inline.h"
 #include "exprs/expr-context.h"
+#include "runtime/array-value-builder.h"
 #include "runtime/descriptors.h"
 #include "runtime/hdfs-fs-cache.h"
 #include "runtime/runtime-state.h"
@@ -42,10 +43,10 @@
 #include "util/string-parser.h"
 #include "gen-cpp/PlanNodes_types.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
 using namespace llvm;
-using namespace std;
 
 const char* FieldLocation::LLVM_CLASS_NAME = "struct.impala::FieldLocation";
 const char* HdfsScanner::LLVM_CLASS_NAME = "class.impala::HdfsScanner";
@@ -54,13 +55,19 @@ HdfsScanner::HdfsScanner(HdfsScanNode* scan_node, RuntimeState* state)
     : scan_node_(scan_node),
       state_(state),
       context_(NULL),
+      stream_(NULL),
+      scanner_conjunct_ctxs_(NULL),
+      template_tuple_(NULL),
       tuple_byte_size_(scan_node->tuple_desc()->byte_size()),
       tuple_(NULL),
       batch_(NULL),
+      tuple_mem_(NULL),
       num_errors_in_file_(0),
       num_null_bytes_(scan_node->tuple_desc()->num_null_bytes()),
+      parse_status_(Status::OK()),
       decompression_type_(THdfsCompression::NONE),
       data_buffer_pool_(new MemPool(scan_node->mem_tracker())),
+      decompress_timer_(NULL),
       write_tuples_fn_(NULL) {
 }
 
@@ -71,38 +78,53 @@ HdfsScanner::~HdfsScanner() {
 Status HdfsScanner::Prepare(ScannerContext* context) {
   context_ = context;
   stream_ = context->GetStream();
-  RETURN_IF_ERROR(scan_node_->GetConjunctCtxs(&conjunct_ctxs_));
+
+  // Clone the scan node's conjuncts map. The cloned contexts must be closed by the
+  // caller.
+  HdfsScanNode::ConjunctsMap::const_iterator iter = scan_node_->conjuncts_map().begin();
+  for (; iter != scan_node_->conjuncts_map().end(); ++iter) {
+    RETURN_IF_ERROR(Expr::CloneIfNotExists(iter->second,
+        scan_node_->runtime_state(), &scanner_conjuncts_map_[iter->first]));
+  }
+  DCHECK(scanner_conjuncts_map_.find(scan_node_->tuple_desc()->id()) !=
+         scanner_conjuncts_map_.end());
+  scanner_conjunct_ctxs_ = &scanner_conjuncts_map_[scan_node_->tuple_desc()->id()];
+
   template_tuple_ = scan_node_->InitTemplateTuple(
       state_, context_->partition_descriptor()->partition_key_value_ctxs());
+  template_tuple_map_[scan_node_->tuple_desc()] = template_tuple_;
   StartNewRowBatch();
   decompress_timer_ = ADD_TIMER(scan_node_->runtime_profile(), "DecompressionTime");
-  return Status::OK;
+  return Status::OK();
 }
 
 void HdfsScanner::Close() {
   if (decompressor_.get() != NULL) decompressor_->Close();
-  Expr::Close(conjunct_ctxs_, state_);
+  HdfsScanNode::ConjunctsMap::const_iterator iter = scanner_conjuncts_map_.begin();
+  for (; iter != scanner_conjuncts_map_.end(); ++iter) {
+    Expr::Close(iter->second, state_);
+  }
 }
 
 Status HdfsScanner::InitializeWriteTuplesFn(HdfsPartitionDescriptor* partition,
     THdfsFileFormat::type type, const string& scanner_name) {
-  if (!scan_node_->tuple_desc()->string_slots().empty() &&
-        ((partition->escape_char() != '\0') || scan_node_->requires_compaction())) {
+  if (!scan_node_->tuple_desc()->string_slots().empty()
+      && partition->escape_char() != '\0') {
     // Cannot use codegen if there are strings slots and we need to
     // compact (i.e. copy) the data.
     scan_node_->IncNumScannersCodegenDisabled();
-    return Status::OK;
+    return Status::OK();
   }
 
   write_tuples_fn_ = reinterpret_cast<WriteTuplesFn>(scan_node_->GetCodegenFn(type));
   if (write_tuples_fn_ == NULL) {
     scan_node_->IncNumScannersCodegenDisabled();
-    return Status::OK;
+    return Status::OK();
   }
   VLOG(2) << scanner_name << "(node_id=" << scan_node_->id()
           << ") using llvm codegend functions.";
   scan_node_->IncNumScannersCodegenEnabled();
-  return Status::OK;
+  return Status::OK();
 }
 
 void HdfsScanner::StartNewRowBatch() {
@@ -121,6 +143,24 @@ int HdfsScanner::GetMemory(MemPool** pool, Tuple** tuple_mem, TupleRow** tuple_r
   return batch_->capacity() - batch_->num_rows();
 }
 
+int HdfsScanner::GetCollectionMemory(ArrayValueBuilder* builder, MemPool** pool,
+    Tuple** tuple_mem, TupleRow** tuple_row_mem) {
+  DCHECK(parse_status_.ok()) << "Don't overwrite parse_status_"
+      << parse_status_.GetDetail();
+  *pool = builder->pool();
+  int max_num_rows = builder->GetFreeMemory(tuple_mem);
+  if (max_num_rows == 0) {
+    parse_status_ = state_->SetMemLimitExceeded(ErrorMsg(
+        TErrorCode::COLLECTION_ALLOC_FAILED,
+        PrintPath(builder->tuple_desc().tuple_path())));
+    return 0;
+  }
+  // Treat tuple as a single-tuple row
+  *tuple_row_mem = reinterpret_cast<TupleRow*>(tuple_mem);
+  return max_num_rows;
+}
+
+// TODO(skye): have this check scan_node_->ReachedLimit() and get rid of manual check?
 Status HdfsScanner::CommitRows(int num_rows) {
   DCHECK(batch_ != NULL);
   DCHECK_LE(num_rows, batch_->capacity() - batch_->num_rows());
@@ -133,14 +173,16 @@ Status HdfsScanner::CommitRows(int num_rows) {
     context_->ReleaseCompletedResources(batch_, /* done */ false);
     scan_node_->AddMaterializedRowBatch(batch_);
     StartNewRowBatch();
-
-    // Free local allocations made by this thread's conjuncts.
-    ExprContext::FreeLocalAllocations(conjunct_ctxs_);
   }
 
   if (context_->cancelled()) return Status::CANCELLED;
-  RETURN_IF_ERROR(state_->QueryMaintenance());
-  return Status::OK;
+  RETURN_IF_ERROR(state_->CheckQueryState());
+  // Free local expr allocations for this thread
+  HdfsScanNode::ConjunctsMap::const_iterator iter = scanner_conjuncts_map_.begin();
+  for (; iter != scanner_conjuncts_map_.end(); ++iter) {
+    ExprContext::FreeLocalAllocations(iter->second);
+  }
+  return Status::OK();
 }
 
 void HdfsScanner::AddFinalRowBatch() {
@@ -232,7 +274,7 @@ bool HdfsScanner::WriteCompleteTuple(MemPool* pool, FieldLocation* fields,
 
     SlotDescriptor* desc = scan_node_->materialized_slots()[i];
     bool error = !text_converter_->WriteSlot(desc, tuple,
-        fields[i].start, len, scan_node_->requires_compaction(), need_escape, pool);
+        fields[i].start, len, false, need_escape, pool);
     error_fields[i] = error;
     *error_in_row |= error;
   }
@@ -264,7 +306,7 @@ bool HdfsScanner::WriteCompleteTuple(MemPool* pool, FieldLocation* fields,
 //   store { i8, %"struct.impala::StringValue" }* %tuple_ptr,
 //         { i8, %"struct.impala::StringValue" }** %1
 //   br label %parse
-// 
+//
 // parse:                                            ; preds = %entry
 //   %data_ptr = getelementptr %"struct.impala::FieldLocation"* %fields, i32 0, i32 0
 //   %len_ptr = getelementptr %"struct.impala::FieldLocation"* %fields, i32 0, i32 1
@@ -285,12 +327,12 @@ bool HdfsScanner::WriteCompleteTuple(MemPool* pool, FieldLocation* fields,
 //   %6 = trunc i16 %5 to i8
 //   %val = trunc i8 %6 to i1
 //   br i1 %val, label %parse3, label %eval_fail
-// 
+//
 // parse3:                                           ; preds = %parse
 //   %7 = zext i1 %error_in_row2 to i8
 //   store i8 %7, i8* %error_in_row
 //   ret i1 true
-// 
+//
 // eval_fail:                                        ; preds = %parse
 //   ret i1 false
 // }
@@ -305,9 +347,6 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
     if (slot_desc->type().type == TYPE_TIMESTAMP) return NULL;
     if (slot_desc->type().type == TYPE_DECIMAL) return NULL;
   }
-
-  // TODO: can't codegen yet if strings need to be copied
-  if (node->requires_compaction()) return NULL;
 
   // Cast away const-ness.  The codegen only sets the cached typed llvm struct.
   TupleDescriptor* tuple_desc = const_cast<TupleDescriptor*>(node->tuple_desc());
@@ -469,8 +508,8 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
           conjunct_ctxs[conjunct_idx]->root()->GetCodegendComputeFn(state, &conjunct_fn);
       if (!status.ok()) {
         stringstream ss;
-        ss << "Failed to codegen conjunct: " << status.GetErrorMsg();
-        state->LogError(ss.str());
+        ss << "Failed to codegen conjunct: " << status.GetDetail();
+        state->LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()));
         fn->eraseFromParent();
         return NULL;
       }
@@ -531,7 +570,7 @@ Status HdfsScanner::UpdateDecompressor(const THdfsCompression::type& compression
     }
     decompression_type_ = compression;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsScanner::UpdateDecompressor(const string& codec) {
@@ -544,7 +583,7 @@ Status HdfsScanner::UpdateDecompressor(const string& codec) {
     return Status(ss.str());
   }
   RETURN_IF_ERROR(UpdateDecompressor(type->second));
-  return Status::OK;
+  return Status::OK();
 }
 
 bool HdfsScanner::ReportTupleParseError(FieldLocation* fields, uint8_t* errors,
@@ -562,7 +601,7 @@ bool HdfsScanner::ReportTupleParseError(FieldLocation* fields, uint8_t* errors,
     stringstream ss;
     ss << "file: " << stream_->filename() << endl << "record: ";
     LogRowParseError(row_idx, &ss);
-    state_->LogError(ss.str());
+    state_->LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()), 2);
   }
 
   ++num_errors_in_file_;
@@ -590,8 +629,17 @@ void HdfsScanner::ReportColumnParseError(const SlotDescriptor* desc,
        << desc->col_pos() - scan_node_->num_partition_keys()
        << " TO " << desc->type()
        << " (Data is: " << string(data,len) << ")";
-    if (state_->LogHasSpace()) state_->LogError(ss.str());
+    if (state_->LogHasSpace()) {
+      state_->LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()), 2);
+    }
+
     if (state_->abort_on_error() && parse_status_.ok()) parse_status_ = Status(ss.str());
   }
 }
 
+string HdfsScanner::PrintPath(const SchemaPath& path, int subpath_idx) const {
+  SchemaPath::const_iterator subpath_end =
+      subpath_idx == -1 ? path.end() : path.begin() + subpath_idx + 1;
+  SchemaPath subpath(path.begin(), subpath_end);
+  return impala::PrintPath(*scan_node_->hdfs_table(), subpath);
+}

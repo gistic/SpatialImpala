@@ -20,7 +20,7 @@
 #include "runtime/raw-value.h"
 #include "gen-cpp/PlanNodes_types.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -28,11 +28,12 @@ UnionNode::UnionNode(ObjectPool* pool, const TPlanNode& tnode,
                      const DescriptorTbl& descs)
     : ExecNode(pool, tnode, descs),
       tuple_id_(tnode.union_node.tuple_id),
+      tuple_desc_(NULL),
       const_result_expr_idx_(0),
       child_idx_(0),
       child_row_batch_(NULL),
-      child_eos_(false),
-      child_row_idx_(0) {
+      child_row_idx_(0),
+      child_eos_(false) {
 }
 
 Status UnionNode::Init(const TPlanNode& tnode) {
@@ -52,10 +53,11 @@ Status UnionNode::Init(const TPlanNode& tnode) {
     RETURN_IF_ERROR(Expr::CreateExprTrees(pool_, result_texpr_lists[i], &ctxs));
     result_expr_ctx_lists_.push_back(ctxs);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status UnionNode::Prepare(RuntimeState* state) {
+  SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Prepare(state));
   tuple_desc_ = state->desc_tbl().GetTupleDescriptor(tuple_id_);
   DCHECK(tuple_desc_ != NULL);
@@ -68,21 +70,24 @@ Status UnionNode::Prepare(RuntimeState* state) {
 
   // Prepare const expr lists.
   for (int i = 0; i < const_result_expr_ctx_lists_.size(); ++i) {
-    RETURN_IF_ERROR(Expr::Prepare(const_result_expr_ctx_lists_[i], state, row_desc()));
-    state->AddExprCtxsToFree(const_result_expr_ctx_lists_[i]);
+    RETURN_IF_ERROR(Expr::Prepare(
+        const_result_expr_ctx_lists_[i], state, row_desc(), expr_mem_tracker()));
+    AddExprCtxsToFree(const_result_expr_ctx_lists_[i]);
     DCHECK_EQ(const_result_expr_ctx_lists_[i].size(), materialized_slots_.size());
   }
 
   // Prepare result expr lists.
   for (int i = 0; i < result_expr_ctx_lists_.size(); ++i) {
-    RETURN_IF_ERROR(Expr::Prepare(result_expr_ctx_lists_[i], state, child(i)->row_desc()));
-    state->AddExprCtxsToFree(result_expr_ctx_lists_[i]);
+    RETURN_IF_ERROR(Expr::Prepare(
+        result_expr_ctx_lists_[i], state, child(i)->row_desc(), expr_mem_tracker()));
+    AddExprCtxsToFree(result_expr_ctx_lists_[i]);
     DCHECK_EQ(result_expr_ctx_lists_[i].size(), materialized_slots_.size());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status UnionNode::Open(RuntimeState* state) {
+  SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Open(state));
   // Open const expr lists.
   for (int i = 0; i < const_result_expr_ctx_lists_.size(); ++i) {
@@ -97,7 +102,7 @@ Status UnionNode::Open(RuntimeState* state) {
   // available for clients to fetch after this Open() has succeeded.
   if (!children_.empty()) RETURN_IF_ERROR(OpenCurrentChild(state));
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status UnionNode::OpenCurrentChild(RuntimeState* state) {
@@ -109,16 +114,16 @@ Status UnionNode::OpenCurrentChild(RuntimeState* state) {
   RETURN_IF_ERROR(child(child_idx_)->GetNext(state, child_row_batch_.get(),
       &child_eos_));
   child_row_idx_ = 0;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status UnionNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
+  SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
-  SCOPED_TIMER(runtime_profile_->total_time_counter());
+  RETURN_IF_ERROR(QueryMaintenance(state));
   // Create new tuple buffer for row_batch.
-  int tuple_buffer_size = row_batch->capacity() * tuple_desc_->byte_size();
+  int tuple_buffer_size = row_batch->MaxTupleBufferSize();
   Tuple* tuple = Tuple::Create(tuple_buffer_size, row_batch->tuple_data_pool());
 
   // Fetch from children, evaluate corresponding exprs and materialize.
@@ -129,13 +134,14 @@ Status UnionNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
     // Start (or continue) consuming row batches from current child.
     while (true) {
       RETURN_IF_CANCELLED(state);
-      RETURN_IF_ERROR(state->QueryMaintenance());
+      RETURN_IF_ERROR(QueryMaintenance(state));
 
       // Continue materializing exprs on child_row_batch_ into row batch.
-      if (EvalAndMaterializeExprs(
-              result_expr_ctx_lists_[child_idx_], false, &tuple, row_batch)) {
+      RETURN_IF_ERROR(EvalAndMaterializeExprs(result_expr_ctx_lists_[child_idx_], false,
+          &tuple, row_batch));
+      if (row_batch->AtCapacity() || ReachedLimit()) {
         *eos = ReachedLimit();
-        return Status::OK;
+        return Status::OK();
       }
 
       // Fetch new batch if one is available, otherwise move on to next child.
@@ -151,9 +157,12 @@ Status UnionNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
     // transfered all resources. It is not OK to close the child above in the case when
     // ReachedLimit() is true as we may end up releasing resources that are referenced
     // by the output row_batch.
-    child(child_idx_)->Close(state);
-    ++child_idx_;
     child_row_batch_.reset();
+
+    // Unless we are inside a subplan expecting to call Open()/GetNext() on the child
+    // again, the child can be closed at this point.
+    if (!IsInSubplan()) child(child_idx_)->Close(state);
+    ++child_idx_;
   }
 
   // Evaluate and materialize the const expr lists exactly once.
@@ -161,17 +170,27 @@ Status UnionNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
     // Only evaluate the const expr lists by the first fragment instance.
     if (state->fragment_ctx().fragment_instance_idx == 0) {
       // Materialize expr results into row_batch.
-      EvalAndMaterializeExprs(
-          const_result_expr_ctx_lists_[const_result_expr_idx_], true,
-          &tuple, row_batch);
+      RETURN_IF_ERROR(EvalAndMaterializeExprs(
+          const_result_expr_ctx_lists_[const_result_expr_idx_], true, &tuple,
+          row_batch));
+
     }
     ++const_result_expr_idx_;
     *eos = ReachedLimit();
-    if (*eos || row_batch->AtCapacity()) return Status::OK;
+    if (*eos || row_batch->AtCapacity()) return Status::OK();
   }
 
   *eos = true;
-  return Status::OK;
+  return Status::OK();
+}
+
+Status UnionNode::Reset(RuntimeState* state) {
+  child_row_idx_ = 0;
+  const_result_expr_idx_ = 0;
+  child_idx_ = 0;
+  child_row_batch_.reset();
+  child_eos_ = false;
+  return ExecNode::Reset(state);
 }
 
 void UnionNode::Close(RuntimeState* state) {
@@ -186,11 +205,11 @@ void UnionNode::Close(RuntimeState* state) {
   ExecNode::Close(state);
 }
 
-bool UnionNode::EvalAndMaterializeExprs(const vector<ExprContext*>& ctxs, bool const_exprs,
-                                        Tuple** tuple, RowBatch* row_batch) {
+Status UnionNode::EvalAndMaterializeExprs(const vector<ExprContext*>& ctxs,
+    bool const_exprs, Tuple** tuple, RowBatch* row_batch) {
   // Make sure there are rows left in the batch.
   if (!const_exprs && child_row_idx_ >= child_row_batch_->num_rows()) {
-    return false;
+    return Status::OK();
   }
   // Execute the body at least once.
   bool done = true;
@@ -218,8 +237,9 @@ bool UnionNode::EvalAndMaterializeExprs(const vector<ExprContext*>& ctxs, bool c
     for (int i = 0; i < ctxs.size(); ++i) {
       // our exprs correspond to materialized slots
       SlotDescriptor* slot_desc = materialized_slots_[i];
-      RawValue::Write(ctxs[i]->GetValue(child_row), *tuple, slot_desc,
-          row_batch->tuple_data_pool());
+      const void* value = ctxs[i]->GetValue(child_row);
+      RETURN_IF_ERROR(ctxs[i]->root()->GetFnContextError(ctxs[i]));
+      RawValue::Write(value, *tuple, slot_desc, row_batch->tuple_data_pool());
     }
 
     if (EvalConjuncts(conjunct_ctxs, num_conjunct_ctxs, row)) {
@@ -234,13 +254,10 @@ bool UnionNode::EvalAndMaterializeExprs(const vector<ExprContext*>& ctxs, bool c
       // the tuple assembled for the previous row.
       (*tuple)->Init(tuple_desc_->byte_size());
     }
-
-    if (row_batch->AtCapacity() || ReachedLimit()) {
-      return true;
-    }
+    if (row_batch->AtCapacity() || ReachedLimit()) return Status::OK();
   } while (!done);
 
-  return false;
+  return Status::OK();
 }
 
 }

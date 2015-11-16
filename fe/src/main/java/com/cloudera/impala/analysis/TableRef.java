@@ -15,38 +15,85 @@
 package com.cloudera.impala.analysis;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
+import com.cloudera.impala.analysis.Path.PathType;
 import com.cloudera.impala.authorization.Privilege;
+import com.cloudera.impala.authorization.PrivilegeRequestBuilder;
 import com.cloudera.impala.catalog.Table;
+import com.cloudera.impala.catalog.TableLoadingException;
+import com.cloudera.impala.catalog.View;
 import com.cloudera.impala.common.AnalysisException;
+import com.cloudera.impala.common.Pair;
+import com.cloudera.impala.planner.PlanNode;
+import com.cloudera.impala.planner.JoinNode.DistributionMode;
+import com.cloudera.impala.thrift.TAccessEvent;
+import com.cloudera.impala.thrift.TCatalogObjectType;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
 /**
- * Superclass of all table references, including references to inline views, catalog or
- * local views, or base tables (Hdfs, HBase or DataSource tables). Contains the join
+ * Superclass of all table references, including references to views, base tables
+ * (Hdfs, HBase or DataSource tables), and nested collections. Contains the join
  * specification. An instance of a TableRef (and not a subclass thereof) represents
  * an unresolved table reference that must be resolved during analysis. All resolved
  * table references are subclasses of TableRef.
+ *
+ * The analysis of table refs follows a two-step process:
+ *
+ * 1. Resolution: A table ref's path is resolved and then the generic TableRef is
+ * replaced by a concrete table ref (a BaseTableRef, CollectionTabeRef or ViewRef)
+ * in the originating stmt and that is given the resolved path. This step is driven by
+ * Analyzer.resolveTableRef() which calls into TableRef.analyze().
+ *
+ * 2. Analysis/registration: After resolution, the concrete table ref is analyzed
+ * to register a tuple descriptor for its resolved path and register other table-ref
+ * specific state with the analyzer (e.g., whether it is outer/semi joined, etc.).
+ *
+ * Therefore, subclasses of TableRef should never call the analyze() of its superclass.
+ *
+ * TODO for 2.3: The current TableRef class hierarchy and the related two-phase analysis
+ * feels convoluted and is hard to follow. We should reorganize the TableRef class
+ * structure for clarity of analysis and avoid a table ref 'switching genders' in between
+ * resolution and registration.
+ *
+ * TODO for 2.3: Rename this class to CollectionRef and re-consider the naming and
+ * structure of all subclasses.
  */
 public class TableRef implements ParseNode {
-  // Table or view name that is fully qualified in analyze().
-  // Equivalent to alias_ for local view refs.
-  protected TableName name_;
-  protected final String alias_;
+  // Path to a collection type. Not set for inline views.
+  protected List<String> rawPath_;
+
+  // Legal aliases of this table ref. Contains the explicit alias as its sole element if
+  // there is one. Otherwise, contains the two implicit aliases. Implicit aliases are set
+  // in the c'tor of the corresponding resolved table ref (subclasses of TableRef) during
+  // analysis. By convention, for table refs with multiple implicit aliases, aliases_[0]
+  // contains the fully-qualified implicit alias to ensure that aliases_[0] always
+  // uniquely identifies this table ref regardless of whether it has an explicit alias.
+  protected String[] aliases_;
+
+  // Indicates whether this table ref is given an explicit alias,
+  protected boolean hasExplicitAlias_;
 
   protected JoinOperator joinOp_;
   protected ArrayList<String> joinHints_;
-  protected Expr onClause_;
   protected List<String> usingColNames_;
 
-  // set after analyzeJoinHints(); true if explicitly set via hints
-  private boolean isBroadcastJoin_;
-  private boolean isPartitionedJoin_;
+  // Hinted distribution mode for this table ref; set after analyzeJoinHints()
+  // TODO: Move join-specific members out of TableRef.
+  private DistributionMode distrMode_ = DistributionMode.NONE;
+
+  /////////////////////////////////////////
+  // BEGIN: Members that need to be reset()
+
+  // Resolution of rawPath_ if applicable. Result of analysis.
+  protected Path resolvedPath_;
+
+  protected Expr onClause_;
 
   // the ref to the left of us, if we're part of a JOIN clause
   protected TableRef leftTblRef_;
@@ -58,13 +105,27 @@ public class TableRef implements ParseNode {
   // all (logical) TupleIds referenced in the On clause
   protected List<TupleId> onClauseTupleIds_ = Lists.newArrayList();
 
+  // All physical tuple ids that this table ref is correlated with:
+  // Tuple ids of root descriptors from outer query blocks that this table ref
+  // (if a CollectionTableRef) or contained CollectionTableRefs (if an InlineViewRef)
+  // are rooted at. Populated during analysis.
+  protected List<TupleId> correlatedTupleIds_ = Lists.newArrayList();
+
   // analysis output
   protected TupleDescriptor desc_;
 
-  public TableRef(TableName tableName, String alias) {
+  // END: Members that need to be reset()
+  /////////////////////////////////////////
+
+  public TableRef(List<String> path, String alias) {
     super();
-    name_ = tableName;
-    alias_ = alias;
+    rawPath_ = path;
+    if (alias != null) {
+      aliases_ = new String[] { alias.toLowerCase() };
+      hasExplicitAlias_ = true;
+    } else {
+      hasExplicitAlias_ = false;
+    }
     isAnalyzed_ = false;
   }
 
@@ -72,31 +133,89 @@ public class TableRef implements ParseNode {
    * C'tor for cloning.
    */
   protected TableRef(TableRef other) {
-    super();
-    this.name_ = other.name_;
-    this.alias_ = other.alias_;
-    this.joinOp_ = other.joinOp_;
-    this.joinHints_ =
+    rawPath_ = other.rawPath_;
+    resolvedPath_ = other.resolvedPath_;
+    aliases_ = other.aliases_;
+    hasExplicitAlias_ = other.hasExplicitAlias_;
+    joinOp_ = other.joinOp_;
+    joinHints_ =
         (other.joinHints_ != null) ? Lists.newArrayList(other.joinHints_) : null;
-    this.usingColNames_ =
+    onClause_ = (other.onClause_ != null) ? other.onClause_.clone() : null;
+    usingColNames_ =
         (other.usingColNames_ != null) ? Lists.newArrayList(other.usingColNames_) : null;
-    this.onClause_ = (other.onClause_ != null) ? other.onClause_.clone().reset() : null;
-    isAnalyzed_ = false;
-  }
-
-  @Override
-  public void analyze(Analyzer analyzer) throws AnalysisException {
-    throw new AnalysisException("Unresolved table reference: " + tableRefToSql());
+    distrMode_ = other.distrMode_;
+    // The table ref links are created at the statement level, so cloning a set of linked
+    // table refs is the responsibility of the statement.
+    leftTblRef_ = null;
+    isAnalyzed_ = other.isAnalyzed_;
+    onClauseTupleIds_ = Lists.newArrayList(other.onClauseTupleIds_);
+    correlatedTupleIds_ = Lists.newArrayList(other.correlatedTupleIds_);
+    desc_ = other.desc_;
   }
 
   /**
-   * Creates and returns a empty TupleDescriptor registered with the analyzer. The
-   * returned tuple descriptor must have its source table set via descTbl.setTable()).
+   * Resolves this table ref's raw path and adds privilege requests and audit events
+   * for the referenced catalog entities.
+   */
+  @Override
+  public void analyze(Analyzer analyzer) throws AnalysisException {
+    try {
+      resolvedPath_ = analyzer.resolvePath(rawPath_, PathType.TABLE_REF);
+    } catch (AnalysisException e) {
+      if (!analyzer.hasMissingTbls()) {
+        // Register privilege requests to prefer reporting an authorization error over
+        // an analysis error. We should not accidentally reveal the non-existence of a
+        // table/database if the user is not authorized.
+        if (rawPath_.size() > 1) {
+          analyzer.registerPrivReq(new PrivilegeRequestBuilder()
+              .onTable(rawPath_.get(0), rawPath_.get(1))
+              .allOf(getPrivilegeRequirement()).toRequest());
+        }
+        analyzer.registerPrivReq(new PrivilegeRequestBuilder()
+            .onTable(analyzer.getDefaultDb(), rawPath_.get(0))
+            .allOf(getPrivilegeRequirement()).toRequest());
+      }
+      throw e;
+    } catch (TableLoadingException e) {
+      throw new AnalysisException(String.format(
+          "Failed to load metadata for table: '%s'", Joiner.on(".").join(rawPath_)), e);
+    }
+
+    if (resolvedPath_.isRootedAtTable()) {
+      // Add access event for auditing.
+      Table table = resolvedPath_.getRootTable();
+      if (table instanceof View) {
+        View view = (View) table;
+        if (!view.isLocalView()) {
+          analyzer.addAccessEvent(new TAccessEvent(
+              table.getFullName(), TCatalogObjectType.VIEW,
+              getPrivilegeRequirement().toString()));
+        }
+      } else {
+        analyzer.addAccessEvent(new TAccessEvent(
+            table.getFullName(), TCatalogObjectType.TABLE,
+            getPrivilegeRequirement().toString()));
+      }
+
+      // Add privilege requests for authorization.
+      TableName tableName = table.getTableName();
+      analyzer.registerPrivReq(new PrivilegeRequestBuilder()
+          .onTable(tableName.getDb(), tableName.getTbl())
+          .allOf(getPrivilegeRequirement()).toRequest());
+    }
+  }
+
+  /**
+   * Creates and returns a empty TupleDescriptor registered with the analyzer
+   * based on the resolvedPath_.
    * This method is called from the analyzer when registering this table reference.
    */
   public TupleDescriptor createTupleDescriptor(Analyzer analyzer)
       throws AnalysisException {
-    throw new AnalysisException("Unresolved table reference: " + tableRefToSql());
+    TupleDescriptor result = analyzer.getDescTbl().createTupleDescriptor(
+        getClass().getSimpleName() + " " + getUniqueAlias());
+    result.setPath(resolvedPath_);
+    return result;
   }
 
   /**
@@ -115,47 +234,69 @@ public class TableRef implements ParseNode {
     return (joinOp_ == null ? JoinOperator.INNER_JOIN : joinOp_);
   }
 
-  public TableName getName() { return name_; }
+  /**
+   * Returns true if this table ref has a resolved path that is rooted at a registered
+   * tuple descriptor, false otherwise.
+   */
+  public boolean isRelative() { return false; }
 
   /**
-   * Replaces name_ with the fully-qualified table name.
+   * Indicates if this TableRef directly or indirectly references another TableRef from
+   * an outer query block.
    */
-  protected void setFullyQualifiedTableName(Analyzer analyzer) {
-    name_ = analyzer.getFqTableName(name_);
-  }
+  public boolean isCorrelated() { return !correlatedTupleIds_.isEmpty(); }
+
+  public List<String> getPath() { return rawPath_; }
+  public Path getResolvedPath() { return resolvedPath_; }
+
+  /**
+   * Returns all legal aliases of this table ref.
+   */
+  public String[] getAliases() { return aliases_; }
+
+  /**
+   * Returns the explicit alias or the fully-qualified implicit alias. The returned alias
+   * is guaranteed to be unique (i.e., column/field references against the alias cannot
+   * be ambiguous).
+   */
+  public String getUniqueAlias() { return aliases_[0]; }
 
   /**
    * Returns true if this table ref has an explicit alias.
+   * Note that getAliases().length() == 1 does not imply an explicit alias because
+   * nested collection refs have only a single implicit alias.
    */
-  public boolean hasExplicitAlias() { return alias_ != null; }
+  public boolean hasExplicitAlias() { return hasExplicitAlias_; }
 
   /**
-   * Return alias by which this table is referenced in select block.
+   * Returns the explicit alias if this table ref has one, null otherwise.
    */
-  public String getAlias() {
-    if (alias_ == null) return name_.toString().toLowerCase();
-    return alias_;
+  public String getExplicitAlias() {
+    if (hasExplicitAlias()) return getUniqueAlias();
+    return null;
   }
 
-  public TableName getAliasAsName() {
-    if (alias_ != null) return new TableName(null, alias_);
-    return name_;
+  public Table getTable() {
+    Preconditions.checkNotNull(resolvedPath_);
+    return resolvedPath_.getRootTable();
   }
-
   public ArrayList<String> getJoinHints() { return joinHints_; }
   public Expr getOnClause() { return onClause_; }
   public List<String> getUsingClause() { return usingColNames_; }
-  public String getExplicitAlias() { return alias_; }
-  public Table getTable() { return getDesc().getTable(); }
   public void setJoinOp(JoinOperator op) { this.joinOp_ = op; }
   public void setOnClause(Expr e) { this.onClause_ = e; }
   public void setUsingClause(List<String> colNames) { this.usingColNames_ = colNames; }
   public TableRef getLeftTblRef() { return leftTblRef_; }
   public void setLeftTblRef(TableRef leftTblRef) { this.leftTblRef_ = leftTblRef; }
   public void setJoinHints(ArrayList<String> hints) { this.joinHints_ = hints; }
-  public boolean isBroadcastJoin() { return isBroadcastJoin_; }
-  public boolean isPartitionedJoin() { return isPartitionedJoin_; }
+  public boolean isBroadcastJoin() { return distrMode_ == DistributionMode.BROADCAST; }
+  public boolean isPartitionedJoin() {
+    return distrMode_ == DistributionMode.PARTITIONED;
+  }
+  public DistributionMode getDistributionMode() { return distrMode_; }
   public List<TupleId> getOnClauseTupleIds() { return onClauseTupleIds_; }
+  public List<TupleId> getCorrelatedTupleIds() { return correlatedTupleIds_; }
+  public boolean isAnalyzed() { return isAnalyzed_; }
   public boolean isResolved() { return !getClass().equals(TableRef.class); }
 
   /**
@@ -174,7 +315,7 @@ public class TableRef implements ParseNode {
   public TupleId getId() {
     Preconditions.checkState(isAnalyzed_);
     // after analyze(), desc should be set.
-    Preconditions.checkState(desc_ != null);
+    Preconditions.checkNotNull(desc_);
     return desc_.getId();
   }
 
@@ -225,19 +366,19 @@ public class TableRef implements ParseNode {
           throw new AnalysisException(
               joinOp_.toString() + " does not support BROADCAST.");
         }
-        if (isPartitionedJoin_) {
+        if (isPartitionedJoin()) {
           throw new AnalysisException("Conflicting JOIN hint: " + hint);
         }
-        isBroadcastJoin_ = true;
+        distrMode_ = DistributionMode.BROADCAST;
         analyzer.setHasPlanHints();
       } else if (hint.equalsIgnoreCase("SHUFFLE")) {
         if (joinOp_ == JoinOperator.CROSS_JOIN) {
           throw new AnalysisException("CROSS JOIN does not support SHUFFLE.");
         }
-        if (isBroadcastJoin_) {
+        if (isBroadcastJoin()) {
           throw new AnalysisException("Conflicting JOIN hint: " + hint);
         }
-        isPartitionedJoin_ = true;
+        distrMode_ = DistributionMode.PARTITIONED;
         analyzer.setHasPlanHints();
       } else {
         analyzer.addWarning("JOIN hint not recognized: " + hint);
@@ -255,7 +396,7 @@ public class TableRef implements ParseNode {
     analyzeJoinHints(analyzer);
     if (joinOp_ == JoinOperator.CROSS_JOIN) {
       // A CROSS JOIN is always a broadcast join, regardless of the join hints
-      isBroadcastJoin_ = true;
+      distrMode_ = DistributionMode.BROADCAST;
     }
 
     if (usingColNames_ != null) {
@@ -265,41 +406,45 @@ public class TableRef implements ParseNode {
       for (String colName: usingColNames_) {
         // check whether colName exists both for our table and the one
         // to the left of us
-        if (leftTblRef_.getDesc().getTable().getColumn(colName) == null) {
+        Path leftColPath = new Path(leftTblRef_.getDesc(),
+            Lists.newArrayList(colName.toLowerCase()));
+        if (!leftColPath.resolve()) {
           throw new AnalysisException(
               "unknown column " + colName + " for alias "
-              + leftTblRef_.getAlias() + " (in \"" + this.toSql() + "\")");
+              + leftTblRef_.getUniqueAlias() + " (in \"" + this.toSql() + "\")");
         }
-        if (desc_.getTable().getColumn(colName) == null) {
+        Path rightColPath = new Path(desc_,
+            Lists.newArrayList(colName.toLowerCase()));
+        if (!rightColPath.resolve()) {
           throw new AnalysisException(
               "unknown column " + colName + " for alias "
-              + getAlias() + " (in \"" + this.toSql() + "\")");
+              + getUniqueAlias() + " (in \"" + this.toSql() + "\")");
         }
 
         // create predicate "<left>.colName = <right>.colName"
         BinaryPredicate eqPred =
             new BinaryPredicate(BinaryPredicate.Operator.EQ,
-              new SlotRef(leftTblRef_.getAliasAsName(), colName),
-              new SlotRef(getAliasAsName(), colName));
+              new SlotRef(Path.createRawPath(leftTblRef_.getUniqueAlias(), colName)),
+              new SlotRef(Path.createRawPath(getUniqueAlias(), colName)));
         onClause_ = CompoundPredicate.createConjunction(eqPred, onClause_);
       }
     }
 
     // at this point, both 'this' and leftTblRef have been analyzed and registered;
     // register the tuple ids of the TableRefs on the nullable side of an outer join
-    boolean lhsIsNullable = false;
-    boolean rhsIsNullable = false;
     if (joinOp_ == JoinOperator.LEFT_OUTER_JOIN
         || joinOp_ == JoinOperator.FULL_OUTER_JOIN) {
       analyzer.registerOuterJoinedTids(getId().asList(), this);
-      rhsIsNullable = true;
     }
     if (joinOp_ == JoinOperator.RIGHT_OUTER_JOIN
         || joinOp_ == JoinOperator.FULL_OUTER_JOIN) {
       analyzer.registerOuterJoinedTids(leftTblRef_.getAllTupleIds(), this);
-      lhsIsNullable = true;
     }
-
+    // register the tuple ids of a full outer join
+    if (joinOp_ == JoinOperator.FULL_OUTER_JOIN) {
+      analyzer.registerFullOuterJoinedTids(leftTblRef_.getAllTupleIds(), this);
+      analyzer.registerFullOuterJoinedTids(getId().asList(), this);
+    }
     // register the tuple id of the rhs of a left semi join
     TupleId semiJoinedTupleId = null;
     if (joinOp_ == JoinOperator.LEFT_SEMI_JOIN
@@ -330,33 +475,48 @@ public class TableRef implements ParseNode {
             "analytic expression not allowed in ON clause: " + toSql());
       }
       Set<TupleId> onClauseTupleIds = Sets.newHashSet();
-      for (Expr e: onClause_.getConjuncts()) {
-        // Outer join clause conjuncts are registered for this particular table ref
-        // (ie, can only be evaluated by the plan node that implements this join).
-        // The exception are conjuncts that only pertain to the nullable side
-        // of the outer join; those can be evaluated directly when materializing tuples
-        // without violating outer join semantics.
-        analyzer.registerOnClauseConjuncts(e, this);
+      List<Expr> conjuncts = onClause_.getConjuncts();
+      // Outer join clause conjuncts are registered for this particular table ref
+      // (ie, can only be evaluated by the plan node that implements this join).
+      // The exception are conjuncts that only pertain to the nullable side
+      // of the outer join; those can be evaluated directly when materializing tuples
+      // without violating outer join semantics.
+      analyzer.registerOnClauseConjuncts(conjuncts, this);
+      for (Expr e: conjuncts) {
         List<TupleId> tupleIds = Lists.newArrayList();
         e.getIds(tupleIds, null);
         onClauseTupleIds.addAll(tupleIds);
       }
       onClauseTupleIds_.addAll(onClauseTupleIds);
-    } else if (getJoinOp().isOuterJoin() || getJoinOp().isSemiJoin()) {
-      throw new AnalysisException(joinOp_.toString() + " requires an ON or USING clause.");
-    }
-
-    // Make constant expressions from inline view refs nullable in its substitution map.
-    if (lhsIsNullable && leftTblRef_ instanceof InlineViewRef) {
-      ((InlineViewRef) leftTblRef_).makeOutputNullable(analyzer);
-    }
-    if (rhsIsNullable && this instanceof InlineViewRef) {
-      ((InlineViewRef) this).makeOutputNullable(analyzer);
+    } else if (!isRelative() && !isCorrelated()
+        && (getJoinOp().isOuterJoin() || getJoinOp().isSemiJoin())) {
+      throw new AnalysisException(
+          joinOp_.toString() + " requires an ON or USING clause.");
+    } else {
+      // Indicate that this table ref has an empty ON-clause.
+      analyzer.registerOnClauseConjuncts(Collections.<Expr>emptyList(), this);
     }
   }
 
-  public void invertJoin() {
+  /**
+   * Inverts the join whose rhs is represented by this table ref. If necessary, this
+   * function modifies the registered analysis state associated with this table ref,
+   * as well as the chain of left table references in refPlans as appropriate.
+   * Requires that this is the very first join in a series of joins.
+   */
+  public void invertJoin(List<Pair<TableRef, PlanNode>> refPlans, Analyzer analyzer) {
+    // Assert that this is the first join in a series of joins.
     Preconditions.checkState(leftTblRef_.leftTblRef_ == null);
+    // Find a table ref that references 'this' as its left table (if any) and change
+    // it to reference 'this.leftTblRef_ 'instead, because 'this.leftTblRef_' will
+    // become the new rhs of the inverted join.
+    for (Pair<TableRef, PlanNode> refPlan: refPlans) {
+      if (refPlan.first.leftTblRef_ == this) {
+        refPlan.first.setLeftTblRef(leftTblRef_);
+        break;
+      }
+    }
+    if (joinOp_.isOuterJoin()) analyzer.invertOuterJoinState(this, leftTblRef_);
     leftTblRef_.setJoinOp(getJoinOp().invert());
     leftTblRef_.setLeftTblRef(this);
     leftTblRef_.setOnClause(onClause_);
@@ -366,11 +526,12 @@ public class TableRef implements ParseNode {
   }
 
   protected String tableRefToSql() {
-    // Enclose the alias in quotes if Hive cannot parse it without quotes.
-    // This is needed for view compatibility between Impala and Hive.
     String aliasSql = null;
-    if (alias_ != null) aliasSql = ToSqlUtils.getIdentSql(alias_);
-    return name_.toSql() + ((aliasSql != null) ? " " + aliasSql : "");
+    String alias = getExplicitAlias();
+    if (alias != null) aliasSql = ToSqlUtils.getIdentSql(alias);
+    List<String> path = rawPath_;
+    if (resolvedPath_ != null) path = resolvedPath_.getFullyQualifiedRawPath();
+    return ToSqlUtils.getPathSql(path) + ((aliasSql != null) ? " " + aliasSql : "");
   }
 
   @Override
@@ -397,6 +558,50 @@ public class TableRef implements ParseNode {
    */
   public Privilege getPrivilegeRequirement() { return Privilege.SELECT; }
 
+  /**
+   * Returns a deep clone of this table ref without also cloning the chain of table refs.
+   * Sets leftTblRef_ in the returned clone to null.
+   */
   @Override
-  public TableRef clone() { return new TableRef(this); }
+  protected TableRef clone() { return new TableRef(this); }
+
+  /**
+   * Deep copies the given list of table refs and returns the clones in a new list.
+   * The linking structure in the original table refs is preserved in the clones,
+   * i.e., if the table refs were originally linked, then the corresponding clones
+   * are linked in the same way. Similarly, if the original table refs were not linked
+   * then the clones are also not linked.
+   * Assumes that the given table refs are self-contained with respect to linking, i.e.,
+   * that no table ref links to another table ref not in the list.
+   */
+  public static List<TableRef> cloneTableRefList(List<TableRef> tblRefs) {
+    List<TableRef> clonedTblRefs = Lists.newArrayListWithCapacity(tblRefs.size());
+    TableRef leftTblRef = null;
+    for (TableRef tblRef: tblRefs) {
+      TableRef tblRefClone = tblRef.clone();
+      clonedTblRefs.add(tblRefClone);
+      if (tblRef.leftTblRef_ != null) {
+        Preconditions.checkState(tblRefs.contains(tblRef.leftTblRef_));
+        tblRefClone.leftTblRef_ = leftTblRef;
+      }
+      leftTblRef = tblRefClone;
+    }
+    return clonedTblRefs;
+  }
+
+  public void reset() {
+    isAnalyzed_ = false;
+    resolvedPath_ = null;
+    if (usingColNames_ != null) {
+      // The using col names are converted into an on-clause predicate during analysis,
+      // so unset the on-clause here.
+      onClause_ = null;
+    } else if (onClause_ != null) {
+      onClause_.reset();
+    }
+    leftTblRef_ = null;
+    onClauseTupleIds_.clear();
+    desc_ = null;
+    correlatedTupleIds_.clear();
+  }
 }

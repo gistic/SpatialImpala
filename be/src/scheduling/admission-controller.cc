@@ -28,8 +28,8 @@
 #include "util/time.h"
 #include "util/runtime-profile.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
 using namespace strings;
 
 DEFINE_int64(queue_wait_timeout_ms, 60 * 1000, "Maximum amount of time (in "
@@ -155,9 +155,9 @@ static string DebugPoolStats(const string& pool_name,
     ss << "num_running=" << total_stats->num_running << ", ";
     ss << "num_queued=" << total_stats->num_queued << ", ";
     ss << "mem_usage=" <<
-        PrettyPrinter::Print(total_stats->mem_usage, TCounterType::BYTES) << ", ";
+        PrettyPrinter::Print(total_stats->mem_usage, TUnit::BYTES) << ", ";
     ss << "mem_estimate=" <<
-        PrettyPrinter::Print(total_stats->mem_estimate, TCounterType::BYTES);
+        PrettyPrinter::Print(total_stats->mem_estimate, TUnit::BYTES);
     ss << ")";
   }
   if (local_stats != NULL) {
@@ -165,16 +165,16 @@ static string DebugPoolStats(const string& pool_name,
     ss << "num_running=" << local_stats->num_running << ", ";
     ss << "num_queued=" << local_stats->num_queued << ", ";
     ss << "mem_usage=" <<
-        PrettyPrinter::Print(local_stats->mem_usage, TCounterType::BYTES) << ", ";
+        PrettyPrinter::Print(local_stats->mem_usage, TUnit::BYTES) << ", ";
     ss << "mem_estimate=" <<
-        PrettyPrinter::Print(local_stats->mem_estimate, TCounterType::BYTES);
+        PrettyPrinter::Print(local_stats->mem_estimate, TUnit::BYTES);
     ss << ")";
   }
   return ss.str();
 }
 
 AdmissionController::AdmissionController(RequestPoolService* request_pool_service,
-    Metrics* metrics, const string& backend_id)
+    MetricGroup* metrics, const string& backend_id)
     : request_pool_service_(request_pool_service),
       metrics_(metrics),
       backend_id_(backend_id),
@@ -203,7 +203,7 @@ Status AdmissionController::Init(StatestoreSubscriber* subscriber) {
     bind<void>(mem_fn(&AdmissionController::UpdatePoolStats), this, _1, _2);
   Status status = subscriber->AddTopic(IMPALA_REQUEST_QUEUE_TOPIC, true, cb);
   if (!status.ok()) {
-    status.AddErrorMsg("AdmissionController failed to register request queue topic");
+    status.AddDetail("AdmissionController failed to register request queue topic");
   }
   return status;
 }
@@ -227,17 +227,17 @@ Status AdmissionController::CanAdmitRequest(const string& pool_name,
   //  (b) Request will go over the mem limit
   //  (c) This is not admitting from the queue and there are already queued requests
   if (max_requests >= 0 && total_stats.num_running >= max_requests) {
-    return Status(Substitute(QUEUED_NUM_RUNNING, total_stats.num_running, max_requests),
-        true);
+    return Status::Expected(Substitute(QUEUED_NUM_RUNNING, total_stats.num_running,
+        max_requests));
   } else if (mem_limit >= 0 && cluster_estimated_memory >= mem_limit) {
-    return Status(Substitute(QUEUED_MEM_LIMIT,
-        PrettyPrinter::Print(query_total_estimated_mem, TCounterType::BYTES),
-        PrettyPrinter::Print(current_cluster_estimate_mem, TCounterType::BYTES),
-        PrettyPrinter::Print(mem_limit, TCounterType::BYTES)), true);
+    return Status::Expected(Substitute(QUEUED_MEM_LIMIT,
+        PrettyPrinter::Print(query_total_estimated_mem, TUnit::BYTES),
+        PrettyPrinter::Print(current_cluster_estimate_mem, TUnit::BYTES),
+        PrettyPrinter::Print(mem_limit, TUnit::BYTES)));
   } else if (!admit_from_queue && total_stats.num_queued > 0) {
-    return Status(Substitute(QUEUED_QUEUE_NOT_EMPTY, total_stats.num_queued), true);
+    return Status::Expected(Substitute(QUEUED_QUEUE_NOT_EMPTY, total_stats.num_queued));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status AdmissionController::RejectRequest(const string& pool_name,
@@ -252,12 +252,12 @@ Status AdmissionController::RejectRequest(const string& pool_name,
     reject_reason = REASON_DISABLED_MEM_LIMIT;
   } else if (mem_limit > 0 && expected_mem_usage >= mem_limit) {
     reject_reason = Substitute(REASON_REQ_OVER_MEM_LIMIT,
-        PrettyPrinter::Print(expected_mem_usage, TCounterType::BYTES),
-        PrettyPrinter::Print(mem_limit, TCounterType::BYTES));
+        PrettyPrinter::Print(expected_mem_usage, TUnit::BYTES),
+        PrettyPrinter::Print(mem_limit, TUnit::BYTES));
   } else if (total_stats->num_queued >= max_queued) {
     reject_reason = Substitute(REASON_QUEUE_FULL, max_queued, total_stats->num_queued);
   } else {
-    return Status::OK; // Not rejected
+    return Status::OK(); // Not rejected
   }
   return Status(Substitute(STATUS_REJECTED, pool_name, reject_reason));
 }
@@ -287,9 +287,9 @@ Status AdmissionController::AdmitQuery(QuerySchedule* schedule) {
     VLOG_QUERY << "Schedule for id=" << schedule->query_id()
                << " in pool_name=" << pool_name << " PoolConfig(max_requests="
                << max_requests << " max_queued=" << max_queued
-               << " mem_limit=" << PrettyPrinter::Print(mem_limit, TCounterType::BYTES)
+               << " mem_limit=" << PrettyPrinter::Print(mem_limit, TUnit::BYTES)
                << ") query cluster_mem_estimate="
-               << PrettyPrinter::Print(cluster_mem_estimate, TCounterType::BYTES);
+               << PrettyPrinter::Print(cluster_mem_estimate, TUnit::BYTES);
     VLOG_QUERY << "Stats: " << DebugPoolStats(pool_name, total_stats, local_stats);
 
     admitStatus = CanAdmitRequest(pool_name, max_requests, mem_limit, *schedule, false);
@@ -314,7 +314,7 @@ Status AdmissionController::AdmitQuery(QuerySchedule* schedule) {
       }
       VLOG_QUERY << "Admitted query id=" << schedule->query_id();
       VLOG_RPC << "Final: " << DebugPoolStats(pool_name, total_stats, local_stats);
-      return Status::OK;
+      return Status::OK();
     }
 
     Status rejectStatus = RejectRequest(pool_name, max_requests, mem_limit, max_queued,
@@ -338,7 +338,7 @@ Status AdmissionController::AdmitQuery(QuerySchedule* schedule) {
     if (pool_metrics != NULL) pool_metrics->local_queued->Increment(1L);
   }
 
-  int64_t wait_start_ms = ms_since_epoch();
+  int64_t wait_start_ms = MonotonicMillis();
   int64_t queue_wait_timeout_ms = max(0L, FLAGS_queue_wait_timeout_ms);
   // We just call Get() to block until the result is set or it times out. Note that we
   // don't hold the admission_ctrl_lock_ while we wait on this promise so we need to
@@ -347,7 +347,7 @@ Status AdmissionController::AdmitQuery(QuerySchedule* schedule) {
   // TODO: handle cancellation
   bool timed_out;
   queue_node.is_admitted.Get(queue_wait_timeout_ms, &timed_out);
-  int64_t wait_time_ms = ms_since_epoch() - wait_start_ms;
+  int64_t wait_time_ms = MonotonicMillis() - wait_start_ms;
 
   // Take the lock in order to check the result of is_admitted as there could be a race
   // with the timeout. If the Get() timed out, then we need to dequeue the request.
@@ -376,7 +376,7 @@ Status AdmissionController::AdmitQuery(QuerySchedule* schedule) {
       --total_stats->num_queued;
       if (pool_metrics != NULL) pool_metrics->local_timed_out->Increment(1L);
       return Status(Substitute(STATUS_TIME_OUT, queue_wait_timeout_ms,
-            admitStatus.GetErrorMsg()));
+            admitStatus.GetDetail()));
     }
     // The dequeue thread updates the stats (to avoid a race condition) so we do
     // not change them here.
@@ -388,12 +388,12 @@ Status AdmissionController::AdmitQuery(QuerySchedule* schedule) {
     if (pool_metrics != NULL) pool_metrics->local_admitted->Increment(1L);
     VLOG_QUERY << "Admitted queued query id=" << schedule->query_id();
     VLOG_RPC << "Final: " << DebugPoolStats(pool_name, total_stats, local_stats);
-    return Status::OK;
+    return Status::OK();
   }
 }
 
 Status AdmissionController::ReleaseQuery(QuerySchedule* schedule) {
-  if (!schedule->is_admitted()) return Status::OK; // No-op if query was not admitted
+  if (!schedule->is_admitted()) return Status::OK(); // No-op if query was not admitted
   const string& pool_name = schedule->request_pool();
   {
     lock_guard<mutex> lock(admission_ctrl_lock_);
@@ -418,7 +418,7 @@ Status AdmissionController::ReleaseQuery(QuerySchedule* schedule) {
              << DebugPoolStats(pool_name, total_stats, local_stats);
   }
   dequeue_cv_.notify_one();
-  return Status::OK;
+  return Status::OK();
 }
 
 // Statestore subscriber callback for IMPALA_REQUEST_QUEUE_TOPIC. First, add any local
@@ -537,10 +537,10 @@ void AdmissionController::UpdateClusterAggregates(const string& pool_name) {
   cluster_pool_stats_[pool_name] = total_stats;
   PoolMetrics* pool_metrics = GetPoolMetrics(pool_name);
   if (pool_metrics != NULL) {
-    pool_metrics->cluster_num_running->Update(total_stats.num_running);
-    pool_metrics->cluster_in_queue->Update(total_stats.num_queued);
-    pool_metrics->cluster_mem_usage->Update(total_stats.mem_usage);
-    pool_metrics->cluster_mem_estimate->Update(total_stats.mem_estimate);
+    pool_metrics->cluster_num_running->set_value(total_stats.num_running);
+    pool_metrics->cluster_in_queue->set_value(total_stats.num_queued);
+    pool_metrics->cluster_mem_usage->set_value(total_stats.mem_usage);
+    pool_metrics->cluster_mem_estimate->set_value(total_stats.mem_estimate);
   }
 
   if (cluster_pool_stats_[pool_name] != total_stats) {
@@ -560,7 +560,7 @@ void AdmissionController::UpdateLocalMemUsage(const string& pool_name) {
     pools_for_updates_.insert(pool_name);
     PoolMetrics* pool_metrics = GetPoolMetrics(pool_name);
     if (pool_metrics != NULL) {
-      pool_metrics->local_mem_usage->Update(current_usage);
+      pool_metrics->local_mem_usage->set_value(current_usage);
     }
   }
 }
@@ -579,14 +579,14 @@ void AdmissionController::AddPoolUpdates(vector<TTopicDelta>* topic_updates) {
     topic_item.key = MakePoolTopicKey(pool_name, backend_id_);
     Status status = thrift_serializer_.Serialize(&pool_stats, &topic_item.value);
     if (!status.ok()) {
-      LOG(WARNING) << "Failed to serialize query pool stats: " << status.GetErrorMsg();
+      LOG(WARNING) << "Failed to serialize query pool stats: " << status.GetDetail();
       topic_updates->pop_back();
     }
     PoolMetrics* pool_metrics = GetPoolMetrics(pool_name);
     if (pool_metrics != NULL) {
-      pool_metrics->local_num_running->Update(pool_stats.num_running);
-      pool_metrics->local_in_queue->Update(pool_stats.num_queued);
-      pool_metrics->local_mem_usage->Update(pool_stats.mem_usage);
+      pool_metrics->local_num_running->set_value(pool_stats.num_running);
+      pool_metrics->local_in_queue->set_value(pool_stats.num_queued);
+      pool_metrics->local_mem_usage->set_value(pool_stats.mem_usage);
     }
   }
   pools_for_updates_.clear();
@@ -657,7 +657,7 @@ void AdmissionController::DequeueLoop() {
             schedule, true);
         if (!admitStatus.ok()) {
           VLOG_RPC << "Could not dequeue query id=" << queue_node->schedule.query_id()
-                   << " reason: " << admitStatus.GetErrorMsg();
+                   << " reason: " << admitStatus.GetDetail();
           break;
         }
         queue.Dequeue();
@@ -689,36 +689,41 @@ AdmissionController::GetPoolMetrics(const string& pool_name) {
   if (it != pool_metrics_map_.end()) return &it->second;
 
   PoolMetrics* pool_metrics = &pool_metrics_map_[pool_name];
-  pool_metrics->local_admitted = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_ADMITTED_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_queued = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_QUEUED_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_dequeued = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_DEQUEUED_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_rejected = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_REJECTED_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_timed_out = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_TIMED_OUT_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_completed = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_COMPLETED_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_time_in_queue_ms = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_TIME_IN_QUEUE_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->cluster_num_running = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(CLUSTER_NUM_RUNNING_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->cluster_in_queue = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(CLUSTER_IN_QUEUE_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->cluster_mem_usage = metrics_->RegisterMetric(new Metrics::BytesMetric(
-      Substitute(CLUSTER_MEM_USAGE_METRIC_KEY_FORMAT, pool_name), 0L));
-  pool_metrics->cluster_mem_estimate = metrics_->RegisterMetric(new Metrics::BytesMetric(
-      Substitute(CLUSTER_MEM_ESTIMATE_METRIC_KEY_FORMAT, pool_name), 0L));
-  pool_metrics->local_num_running = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_NUM_RUNNING_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_in_queue = metrics_->CreateAndRegisterPrimitiveMetric(
-      Substitute(LOCAL_IN_QUEUE_METRIC_KEY_FORMAT, pool_name), 0L);
-  pool_metrics->local_mem_usage = metrics_->RegisterMetric(new Metrics::BytesMetric(
-      Substitute(LOCAL_MEM_USAGE_METRIC_KEY_FORMAT, pool_name), 0L));
-  pool_metrics->local_mem_estimate = metrics_->RegisterMetric(new Metrics::BytesMetric(
-      Substitute(LOCAL_MEM_ESTIMATE_METRIC_KEY_FORMAT, pool_name), 0L));
+  pool_metrics->local_admitted = metrics_->AddCounter(
+      LOCAL_ADMITTED_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->local_queued = metrics_->AddCounter(
+      LOCAL_QUEUED_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->local_dequeued = metrics_->AddCounter(
+      LOCAL_DEQUEUED_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->local_rejected = metrics_->AddCounter(
+      LOCAL_REJECTED_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->local_timed_out = metrics_->AddCounter(
+      LOCAL_TIMED_OUT_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->local_completed = metrics_->AddCounter(
+      LOCAL_COMPLETED_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->local_time_in_queue_ms = metrics_->AddCounter(
+      LOCAL_TIME_IN_QUEUE_METRIC_KEY_FORMAT, 0L, pool_name);
+
+  pool_metrics->cluster_num_running = metrics_->AddGauge(
+      CLUSTER_NUM_RUNNING_METRIC_KEY_FORMAT, 0L, pool_name);
+
+  pool_metrics->cluster_in_queue = metrics_->AddGauge(
+      CLUSTER_IN_QUEUE_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->cluster_mem_usage = metrics_->AddGauge(
+      CLUSTER_MEM_USAGE_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->cluster_mem_estimate = metrics_->AddGauge(
+      CLUSTER_MEM_ESTIMATE_METRIC_KEY_FORMAT, 0L, pool_name);
+
+  pool_metrics->local_num_running = metrics_->AddGauge(
+      LOCAL_NUM_RUNNING_METRIC_KEY_FORMAT, 0L, pool_name);
+
+  pool_metrics->local_in_queue = metrics_->AddGauge(
+      LOCAL_IN_QUEUE_METRIC_KEY_FORMAT, 0L, pool_name);
+
+  pool_metrics->local_mem_usage = metrics_->AddGauge(
+      LOCAL_MEM_USAGE_METRIC_KEY_FORMAT, 0L, pool_name);
+  pool_metrics->local_mem_estimate = metrics_->AddGauge(
+      LOCAL_MEM_ESTIMATE_METRIC_KEY_FORMAT, 0L, pool_name);
   return pool_metrics;
 }
 }

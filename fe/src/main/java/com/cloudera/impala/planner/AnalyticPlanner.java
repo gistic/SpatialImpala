@@ -39,8 +39,7 @@ import com.cloudera.impala.analysis.SlotRef;
 import com.cloudera.impala.analysis.SortInfo;
 import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.TupleId;
-import com.cloudera.impala.common.AnalysisException;
-import com.cloudera.impala.common.IdGenerator;
+import com.cloudera.impala.analysis.TupleIsNullPredicate;
 import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.thrift.TPartitionType;
 import com.google.common.base.Preconditions;
@@ -69,29 +68,15 @@ import com.google.common.collect.Lists;
 public class AnalyticPlanner {
   private final static Logger LOG = LoggerFactory.getLogger(AnalyticPlanner.class);
 
-  // List of tuple ids materialized by the originating SelectStmt (i.e., what is returned
-  // by SelectStmt.getMaterializedTupleIds()). During analysis, conjuncts have been
-  // registered against these tuples, so we need them to find unassigned conjuncts during
-  // plan generation.
-  // If the size of this list is 1 it means the stmt has a sort after the analytics.
-  // Otherwise, the last tuple id must be analyticInfo_.getOutputTupleDesc().
-  private final List<TupleId> stmtTupleIds_;
-
   private final AnalyticInfo analyticInfo_;
   private final Analyzer analyzer_;
-  private final IdGenerator<PlanNodeId> idGenerator_;
+  private final PlannerContext ctx_;
 
-  public AnalyticPlanner(List<TupleId> stmtTupleIds,
-      AnalyticInfo analyticInfo, Analyzer analyzer,
-      IdGenerator<PlanNodeId> idGenerator) {
-    Preconditions.checkState(!stmtTupleIds.isEmpty());
-    TupleId lastStmtTupleId = stmtTupleIds.get(stmtTupleIds.size() - 1);
-    Preconditions.checkState(stmtTupleIds.size() == 1 ||
-        lastStmtTupleId.equals(analyticInfo.getOutputTupleId()));
-    stmtTupleIds_ = stmtTupleIds;
+  public AnalyticPlanner(AnalyticInfo analyticInfo, Analyzer analyzer,
+      PlannerContext ctx) {
     analyticInfo_ = analyticInfo;
     analyzer_ = analyzer;
-    idGenerator_ = idGenerator;
+    ctx_ = ctx;
   }
 
   /**
@@ -136,7 +121,6 @@ public class AnalyticPlanner {
 
     // create equiv classes for newly added slots
     analyzer_.createIdentityEquivClasses();
-
     return root;
   }
 
@@ -202,6 +186,7 @@ public class AnalyticPlanner {
   private void computeInputPartitionExprs(List<PartitionGroup> partitionGroups,
       List<Expr> groupingExprs, int numNodes, List<Expr> inputPartitionExprs) {
     inputPartitionExprs.clear();
+    Preconditions.checkState(numNodes != -1);
     // find partition group with maximum intersection
     long maxNdv = 0;
     PartitionGroup maxPg = null;
@@ -291,8 +276,37 @@ public class AnalyticPlanner {
       }
     }
 
+    // Lhs exprs to be substituted in ancestor plan nodes could have a rhs that contains
+    // TupleIsNullPredicates. TupleIsNullPredicates require specific tuple ids for
+    // evaluation. Since this sort materializes a new tuple, it's impossible to evaluate
+    // TupleIsNullPredicates referring to this sort's input after this sort,
+    // To preserve the information whether an input tuple was null or not this sort node,
+    // we materialize those rhs TupleIsNullPredicates, which are then substituted
+    // by a SlotRef into the sort's tuple in ancestor nodes (IMPALA-1519).
+    ExprSubstitutionMap inputSmap = input.getOutputSmap();
+    if (inputSmap != null) {
+      List<Expr> tupleIsNullPredsToMaterialize = Lists.newArrayList();
+      for (int i = 0; i < inputSmap.size(); ++i) {
+        Expr rhsExpr = inputSmap.getRhs().get(i);
+        // Ignore substitutions that are irrelevant at this plan node and its ancestors.
+        if (!rhsExpr.isBoundByTupleIds(input.getTupleIds())) continue;
+        rhsExpr.collect(TupleIsNullPredicate.class, tupleIsNullPredsToMaterialize);
+      }
+      Expr.removeDuplicates(tupleIsNullPredsToMaterialize);
+
+      // Materialize relevant unique TupleIsNullPredicates.
+      for (Expr tupleIsNullPred: tupleIsNullPredsToMaterialize) {
+        SlotDescriptor sortSlotDesc = analyzer_.addSlotDescriptor(sortTupleDesc);
+        sortSlotDesc.setType(tupleIsNullPred.getType());
+        sortSlotDesc.setIsMaterialized(true);
+        sortSlotDesc.setSourceExpr(tupleIsNullPred);
+        sortSlotDesc.setLabel(tupleIsNullPred.toSql());
+        sortSlotExprs.add(tupleIsNullPred.clone());
+      }
+    }
+
     SortInfo sortInfo = new SortInfo(
-        Expr.substituteList(sortExprs, sortSmap, analyzer_), isAsc, nullsFirst);
+        Expr.substituteList(sortExprs, sortSmap, analyzer_, false), isAsc, nullsFirst);
     LOG.trace("sortinfo exprs: " + Expr.debugString(sortInfo.getOrderingExprs()));
     sortInfo.setMaterializedTupleInfo(sortTupleDesc, sortSlotExprs);
     return sortInfo;
@@ -333,8 +347,7 @@ public class AnalyticPlanner {
       }
 
       SortInfo sortInfo = createSortInfo(root, sortExprs, isAsc, nullsFirst);
-      SortNode sortNode =
-          new SortNode(idGenerator_.getNextId(), root, sortInfo, false, 0);
+      SortNode sortNode = new SortNode(ctx_.getNextNodeId(), root, sortInfo, false, 0);
 
       // if this sort group does not have partitioning exprs, we want the sort
       // to be executed like a regular distributed sort
@@ -382,7 +395,7 @@ public class AnalyticPlanner {
       Expr partitionByEq = null;
       if (!windowGroup.partitionByExprs.isEmpty()) {
         partitionByEq = createNullMatchingEquals(
-            Expr.substituteList(windowGroup.partitionByExprs, sortSmap, analyzer_),
+            Expr.substituteList(windowGroup.partitionByExprs, sortSmap, analyzer_, false),
             sortTupleId, bufferedSmap);
         LOG.trace("partitionByEq: " + partitionByEq.debugString());
       }
@@ -395,12 +408,11 @@ public class AnalyticPlanner {
         LOG.trace("orderByEq: " + orderByEq.debugString());
       }
 
-      root = new AnalyticEvalNode(idGenerator_.getNextId(), root, stmtTupleIds_,
+      root = new AnalyticEvalNode(ctx_.getNextNodeId(), root,
           windowGroup.analyticFnCalls, windowGroup.partitionByExprs,
-          windowGroup.orderByElements,
-          windowGroup.window, analyticInfo_.getOutputTupleDesc(),
-          windowGroup.physicalIntermediateTuple,
-          windowGroup.physicalOutputTuple, windowGroup.logicalToPhysicalSmap,
+          windowGroup.orderByElements, windowGroup.window,
+          windowGroup.physicalIntermediateTuple, windowGroup.physicalOutputTuple,
+          windowGroup.logicalToPhysicalSmap,
           partitionByEq, orderByEq, bufferedTupleDesc);
       root.init(analyzer_);
     }
@@ -414,11 +426,7 @@ public class AnalyticPlanner {
       ExprSubstitutionMap bufferedSmap) {
     Preconditions.checkState(!exprs.isEmpty());
     Expr result = createNullMatchingEqualsAux(exprs, 0, inputTid, bufferedSmap);
-    try {
-      result.analyze(analyzer_);
-    } catch (AnalysisException e) {
-      throw new IllegalStateException(e);
-    }
+    result.analyzeNoThrow(analyzer_);
     return result;
   }
 
@@ -438,7 +446,7 @@ public class AnalyticPlanner {
     // compare elements[i]
     Expr lhs = elements.get(i);
     Preconditions.checkState(lhs.isBound(inputTid));
-    Expr rhs = lhs.substitute(bufferedSmap, analyzer_);
+    Expr rhs = lhs.substitute(bufferedSmap, analyzer_, false);
 
     Expr bothNull = new CompoundPredicate(Operator.AND,
         new IsNullPredicate(lhs, false), new IsNullPredicate(rhs, false));
@@ -489,10 +497,23 @@ public class AnalyticPlanner {
     }
 
     /**
+     * True if this analytic function must be evaluated in its own WindowGroup.
+     */
+    private static boolean requiresIndependentEval(AnalyticExpr analyticExpr) {
+      return analyticExpr.getFnCall().getFnName().getFunction().equals(
+          AnalyticExpr.FIRST_VALUE_REWRITE);
+    }
+
+    /**
      * True if the partition exprs and ordering elements and the window of analyticExpr
      * match ours.
      */
     public boolean isCompatible(AnalyticExpr analyticExpr) {
+      if (requiresIndependentEval(analyticExprs.get(0)) ||
+          requiresIndependentEval(analyticExpr)) {
+        return false;
+      }
+
       if (!Expr.equalSets(analyticExpr.getPartitionExprs(), partitionByExprs)) {
         return false;
       }

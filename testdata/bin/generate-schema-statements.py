@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env impala-python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 
 # This script generates the "CREATE TABLE", "INSERT", and "LOAD" statements for loading
@@ -358,7 +358,7 @@ def build_db_suffix(file_format, codec, compression_type):
 # Does a hdfs directory listing and returns array with all the subdir names.
 def get_hdfs_subdirs_with_data(path):
   tmp_file = tempfile.TemporaryFile("w+")
-  cmd = "hadoop fs -du %s | grep -v '^0' | awk '{print $2}'" % path
+  cmd = "hadoop fs -du %s | grep -v '^0' | awk '{print $3}'" % path
   subprocess.call([cmd], shell = True, stderr = open('/dev/null'), stdout = tmp_file)
   tmp_file.seek(0)
 
@@ -406,6 +406,7 @@ def generate_statements(output_name, test_vectors, sections,
   # Parquet statements to be executed separately by Impala
   hive_output = Statements()
   hbase_output = Statements()
+  hbase_post_load = Statements()
 
   table_names = None
   if options.table_names:
@@ -487,6 +488,7 @@ def generate_statements(output_name, test_vectors, sections,
       if create_hive or file_format == 'hbase':
         output = hive_output
       elif codec == 'lzo':
+        # Impala CREATE TABLE doesn't allow INPUTFORMAT.
         output = hive_output
 
       # If a CREATE section is provided, use that. Otherwise a COLUMNS section
@@ -494,9 +496,6 @@ def generate_statements(output_name, test_vectors, sections,
       # sections), which is used to generate the create table statement.
       if create_hive:
         table_template = create_hive
-        if file_format == 'avro':
-          print 'CREATE section not supported'
-          continue
       elif create:
         table_template = create
         if file_format in ['avro', 'hbase']:
@@ -504,10 +503,8 @@ def generate_statements(output_name, test_vectors, sections,
           print ("CREATE section not supported with %s, "
                  "skipping: '%s'" % (file_format, table_name))
           continue
-      else:
-        assert columns, "No CREATE or COLUMNS section defined for table " + table_name
+      elif columns:
         avro_schema_dir = "%s/%s" % (AVRO_SCHEMA_DIR, data_set)
-        temp_table_name = table_name
         table_template = build_table_template(
           create_file_format, columns, partition_columns,
           row_format, avro_schema_dir, table_name)
@@ -517,15 +514,19 @@ def generate_statements(output_name, test_vectors, sections,
             os.makedirs(avro_schema_dir)
           with open("%s/%s.json" % (avro_schema_dir, table_name),"w") as f:
             f.write(avro_schema(columns))
+      else:
+        table_template = None
 
-      output.create.append(build_create_statement(table_template, table_name, db_name,
-          db_suffix, create_file_format, create_codec, data_path))
+      if table_template:
+        output.create.append(build_create_statement(table_template, table_name, db_name,
+            db_suffix, create_file_format, create_codec, data_path))
       # HBASE create table
       if file_format == 'hbase':
         # If the HBASE_COLUMN_FAMILIES section does not exist, default to 'd'
         column_families = section.get('HBASE_COLUMN_FAMILIES', 'd')
         hbase_output.create.extend(build_hbase_create_stmt(db_name, table_name,
             column_families))
+        hbase_post_load.load.append("flush '%s_hbase.%s'\n" % (db_name, table_name))
 
       # The ALTER statement in hive does not accept fully qualified table names so
       # insert a use statement. The ALTER statement is skipped for HBASE as it's
@@ -533,15 +534,22 @@ def generate_statements(output_name, test_vectors, sections,
       # TODO: Consider splitting the ALTER subsection into specific components. At the
       # moment, it assumes we're only using ALTER for partitioning the table.
       if alter and file_format != "hbase":
-        use_table = 'USE {db_name};\n'.format(db_name=db)
+        use_db = 'USE {db_name};\n'.format(db_name=db)
         if output == hive_output and codec == 'lzo':
-          if not options.force_reload:
+          # Hive ALTER TABLE ADD PARTITION doesn't handle null partitions, so
+          # we can't run the ALTER section in this case.
+          if options.force_reload:
+            # IMPALA-2278: Hive INSERT OVERWRITE won't clear out partition directories
+            # that weren't already added to the table. So, for force reload, manually
+            # delete the partition directories.
+            output.create.append(("DFS -rm -R {data_path};").format(
+              data_path=data_path));
+          else:
             # If this is not a force reload use msck repair to add the partitions
-            # into the table. This is to work around a problem where the null
-            # partition cannot be explicitly created in Hive.
-            output.create.append(use_table + 'msck repair table %s;' % (table_name,))
+            # into the table.
+            output.create.append(use_db + 'msck repair table %s;' % (table_name))
         else:
-          output.create.append(use_table + alter.format(table_name=table_name))
+          output.create.append(use_db + alter.format(table_name=table_name))
 
       # If the directory already exists in HDFS, assume that data files already exist
       # and skip loading the data. Otherwise, the data is generated using either an
@@ -580,6 +588,8 @@ def generate_statements(output_name, test_vectors, sections,
   hive_output.write_to_file('load-' + output_name + '-hive-generated.sql')
   hbase_output.create.append("exit")
   hbase_output.write_to_file('load-' + output_name + '-hbase-generated.create')
+  hbase_post_load.load.append("exit")
+  hbase_post_load.write_to_file('post-load-' + output_name + '-hbase-generated.sql')
 
 def parse_schema_template_file(file_name):
   VALID_SECTION_NAMES = ['DATASET', 'BASE_TABLE_NAME', 'COLUMNS', 'PARTITION_COLUMNS',

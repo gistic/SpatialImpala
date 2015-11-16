@@ -16,45 +16,86 @@
 # setup your environment. If $IMPALA_HOME is undefined
 # this script will set it to the current working directory.
 
-export JAVA_HOME=${JAVA_HOME:-/usr/java/default}
-if [ ! -d $JAVA_HOME ] ; then
-    echo "Error! JAVA_HOME must be set to the location of your JDK!"
-    exit 1
+# Setting up Impala binary toolchain. The default path is /opt/bin-toolchain but can be
+# set to any path that contains the necessary dependencies in the format of
+#   /opt/bin-toolchain/package-X.Y.Z
+: ${IMPALA_TOOLCHAIN=}
+: ${USE_SYSTEM_GCC=0}
+
+# Export both variables
+export USE_SYSTEM_GCC
+export IMPALA_TOOLCHAIN
+
+export JAVA_HOME="${JAVA_HOME:-/usr/java/default}"
+if [ ! -d "$JAVA_HOME" ] ; then
+  echo "JAVA_HOME must be set to the location of your JDK!"
+  return 1
+fi
+export JAVA="$JAVA_HOME/bin/java"
+if [[ ! -e "$JAVA" ]]; then
+  echo "Could not find java binary at $JAVA" >&2
+  return 1
 fi
 
 if [ -z $IMPALA_HOME ]; then
-    this=${0/-/} # login-shells often have leading '-' chars
-    shell_exec=`basename $SHELL`
-    if [ "$this" = "$shell_exec" ]; then
-        # Assume we're already in IMPALA_HOME
-        interactive=1
-        export IMPALA_HOME=`pwd`
-    else
-        interactive=0
-        while [ -h "$this" ]; do
-            ls=`ls -ld "$this"`
-            link=`expr "$ls" : '.*-> \(.*\)$'`
-            if expr "$link" : '.*/.*' > /dev/null; then
-                this="$link"
-            else
-                this=`dirname "$this"`/"$link"
-            fi
-        done
-
-        # convert relative path to absolute path
-        bin=`dirname "$this"`
-        script=`basename "$this"`
-        bin=`cd "$bin"; pwd`
-        this="$bin/$script"
-
-        export IMPALA_HOME=`dirname "$bin"`
-    fi
+  if [[ ! -z $ZSH_NAME ]]; then
+    export IMPALA_HOME=$(dirname $(cd $(dirname ${(%):-%x}) && pwd))
+  else
+    export IMPALA_HOME=$(dirname $(cd $(dirname "${BASH_SOURCE[0]}") && pwd))
+  fi
 fi
 
-export CDH_MAJOR_VERSION=4
+export CDH_MAJOR_VERSION=5
 export HADOOP_LZO=${HADOOP_LZO-~/hadoop-lzo}
 export IMPALA_LZO=${IMPALA_LZO-~/Impala-lzo}
-export IMPALA_AUX_TEST_HOME=${IMPALA_AUX_TEST_HOME-~/impala-auxiliary-tests}
+export IMPALA_AUX_TEST_HOME=${IMPALA_AUX_TEST_HOME-~/Impala-auxiliary-tests}
+export TARGET_FILESYSTEM=${TARGET_FILESYSTEM-"hdfs"}
+export FILESYSTEM_PREFIX=${FILESYSTEM_PREFIX-""}
+export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY-"DummySecretAccessKey"}
+export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID-"DummyAccessKeyId"}
+export S3_BUCKET=${S3_BUCKET-""}
+export HDFS_REPLICATION=${HDFS_REPLICATION-3}
+export ISILON_NAMENODE=${ISILON_NAMENODE-""}
+export DEFAULT_FS=${DEFAULT_FS-"hdfs://localhost:20500"}
+
+if [ "${TARGET_FILESYSTEM}" = "s3" ]; then
+  # Basic error checking
+  if [[ "${AWS_ACCESS_KEY_ID}" = "DummyAccessKeyId" ||\
+        "${AWS_SECRET_ACCESS_KEY}" = "DummySecretAccessKey" ]]; then
+    echo "Both AWS_ACCESS_KEY_ID and AWS_SECRET_KEY_ID
+      need to be assigned valid values and belong to the owner of the s3
+      bucket in order to access the file system"
+    return 1
+  fi
+  # Check if the s3 bucket is NULL.
+  if [[ "${S3_BUCKET}" = "" ]]; then
+    echo "The ${S3_BUCKET} cannot be an empty string for s3"
+    return 1
+  fi
+  aws s3 ls "s3://${S3_BUCKET}/" 1>/dev/null
+  if [ $? != 0 ]; then
+    echo "Access to ${S3_BUCKET} failed."
+    return 1
+  fi
+  # At this point, we've verified that:
+  #   - All the required environment variables are set.
+  #   - We are able to talk to the s3 bucket with the credentials provided.
+  export FILESYSTEM_PREFIX="s3a://${S3_BUCKET}"
+elif [ "${TARGET_FILESYSTEM}" = "isilon" ]; then
+  if [ "${ISILON_NAMENODE}" = "" ]; then
+    echo "In order to access the Isilon filesystem, ISILON_NAMENODE"
+    echo "needs to be a non-empty and valid address."
+    return 1
+  fi
+  DEFAULT_FS="hdfs://${ISILON_NAMENODE}:8020"
+  export DEFAULT_FS
+  # isilon manages its own replication.
+  export HDFS_REPLICATION=1
+elif [ "${TARGET_FILESYSTEM}" != "hdfs" ]; then
+  echo "Unsupported filesystem '$TARGET_FILESYSTEM'"
+  echo "Valid values are: hdfs, isilon, s3"
+  return 1
+fi
 
 # Directory where local cluster logs will go when running tests or loading data
 export IMPALA_TEST_CLUSTER_LOG_DIR=${IMPALA_HOME}/cluster_logs
@@ -67,31 +108,63 @@ else
 fi
 export NUM_CONCURRENT_TESTS=${NUM_CONCURRENT_TESTS-${CORES}}
 
-export IMPALA_GFLAGS_VERSION=2.0
-export IMPALA_GPERFTOOLS_VERSION=2.0
-export IMPALA_GLOG_VERSION=0.3.2
-export IMPALA_GTEST_VERSION=1.6.0
-export IMPALA_SNAPPY_VERSION=1.0.5
-export IMPALA_CYRUS_SASL_VERSION=2.1.23
-export IMPALA_OPENLDAP_VERSION=2.4.25
-export IMPALA_SQUEASEL_VERSION=3.3
-
-export IMPALA_HADOOP_VERSION=2.0.0-cdh4.5.0
-export IMPALA_HBASE_VERSION=0.94.6-cdh4.5.0
-export IMPALA_HIVE_VERSION=0.10.0-cdh4.5.0
-export IMPALA_SENTRY_VERSION=1.1.0
-# If the thrift version changes, please update ext-data-source/pom.xml
-export IMPALA_THRIFT_VERSION=0.9.0
+# Versions of toolchain dependencies (or if toolchain is not used of dependencies in
+# thirdparty)
 export IMPALA_AVRO_VERSION=1.7.4
+export IMPALA_BOOST_VERSION=1.57.0
+export IMPALA_BZIP2_VERSION=1.0.6
+export IMPALA_CYRUS_SASL_VERSION=2.1.23
+export IMPALA_GCC_VERSION=4.9.2
+export IMPALA_GFLAGS_VERSION=2.0
+export IMPALA_GLOG_VERSION=0.3.2
+export IMPALA_GPERFTOOLS_VERSION=2.0
+export IMPALA_GTEST_VERSION=1.6.0
 export IMPALA_LLVM_VERSION=3.3
-export IMPALA_PARQUET_VERSION=1.2.5
-export IMPALA_PARQUET_HADOOP_VERSION=1.5.0
-export IMPALA_PARQUET_FORMAT_VERSION=2.1.0
-export IMPALA_LLAMA_VERSION=1.0.0-cdh5.0.0-SNAPSHOT
+export IMPALA_LLVM_ASAN_VERSION=3.7.0
+export IMPALA_LZ4_VERSION=svn
+export IMPALA_MIN_BOOST_VERSION=1.46.0
+export IMPALA_OPENLDAP_VERSION=2.4.25
+export IMPALA_OPENSSL_VERSION=0.9.8zf
+export IMPALA_RAPIDJSON_VERSION=0.11
+export IMPALA_RE2_VERSION=20130115
+export IMPALA_SNAPPY_VERSION=1.0.5
+export IMPALA_SQUEASEL_VERSION=3.3
+export IMPALA_THRIFT_VERSION=0.9.0
+export IMPALA_THRIFT_JAVA_VERSION=0.9.0
+export IMPALA_ZLIB_VERSION=1.2.8
 
-# Sasl has problems with 'make install' if the path contains a ~. In our
-# packaging jobs, the path contains ~ so we'll just install somewhere else.
-export IMPALA_CYRUS_SASL_INSTALL_DIR=/tmp/impala-build/cyrus-sasl-${IMPALA_CYRUS_SASL_VERSION}/build
+
+# Some of the variables need to be overwritten to explicitely mark the patch level
+if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
+  IMPALA_AVRO_VERSION+=-p3
+  IMPALA_BZIP2_VERSION+=-p1
+  IMPALA_GLOG_VERSION+=-p1
+  IMPALA_GPERFTOOLS_VERSION+=-p1
+  IMPALA_THRIFT_VERSION+=-p2
+  IMPALA_RE2_VERSION+=-p1
+  IMPALA_LLVM_VERSION+=-p1
+fi
+
+if [[ ! -z "${IMPALA_CYRUS_SASL_INSTALL_DIR:-}" ]]
+then
+  export IMPALA_CYRUS_SASL_INSTALL_DIR # Ensure it's exported
+elif [[ "${IMPALA_HOME}" =~ "~" ]]
+then
+  # Sasl has problems with 'make install' if the path contains a ~, e.g.
+  # /some~directory/impala. In our packaging jobs, the path contains ~ so we'll
+  # just install somewhere else as a workaround.
+  export IMPALA_CYRUS_SASL_INSTALL_DIR=/tmp/impala-build/cyrus-sasl-${IMPALA_CYRUS_SASL_VERSION}/build
+else
+  export IMPALA_CYRUS_SASL_INSTALL_DIR=${IMPALA_HOME}/thirdparty/cyrus-sasl-${IMPALA_CYRUS_SASL_VERSION}/build
+fi
+
+export IMPALA_HADOOP_VERSION=2.6.0-cdh5.7.0-SNAPSHOT
+export IMPALA_HBASE_VERSION=1.0.0-cdh5.7.0-SNAPSHOT
+export IMPALA_HIVE_VERSION=1.1.0-cdh5.7.0-SNAPSHOT
+export IMPALA_SENTRY_VERSION=1.5.1-cdh5.7.0-SNAPSHOT
+export IMPALA_LLAMA_VERSION=1.0.0-cdh5.7.0-SNAPSHOT
+export IMPALA_PARQUET_VERSION=1.5.0-cdh5.7.0-SNAPSHOT
+export IMPALA_MINIKDC_VERSION=1.0.0
 
 export IMPALA_FE_DIR=$IMPALA_HOME/fe
 export IMPALA_BE_DIR=$IMPALA_HOME/be
@@ -102,33 +175,62 @@ export IMPALA_AUX_DATASET_DIR=$IMPALA_AUX_TEST_HOME/testdata/datasets
 export IMPALA_COMMON_DIR=$IMPALA_HOME/common
 export PATH=$IMPALA_HOME/bin:$PATH
 
+# Hadoop dependencies are snapshots in the Impala tree
 export HADOOP_HOME=$IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/
 export HADOOP_CONF_DIR=$IMPALA_FE_DIR/src/test/resources
+
+export HADOOP_CLASSPATH=$HADOOP_CLASSPATH:"${HADOOP_HOME}/share/hadoop/tools/lib/*"
 export MINI_DFS_BASE_DATA_DIR=$IMPALA_HOME/cdh-${CDH_MAJOR_VERSION}-hdfs-data
 export PATH=$HADOOP_HOME/bin:$PATH
 
 export LLAMA_HOME=$IMPALA_HOME/thirdparty/llama-${IMPALA_LLAMA_VERSION}/
+export MINIKDC_HOME=$IMPALA_HOME/thirdparty/llama-minikdc-${IMPALA_MINIKDC_VERSION}
+export SENTRY_HOME=$IMPALA_HOME/thirdparty/sentry-${IMPALA_SENTRY_VERSION}
+export SENTRY_CONF_DIR=$IMPALA_HOME/fe/src/test/resources
 
 export HIVE_HOME=$IMPALA_HOME/thirdparty/hive-${IMPALA_HIVE_VERSION}/
 export PATH=$HIVE_HOME/bin:$PATH
 export HIVE_CONF_DIR=$IMPALA_FE_DIR/src/test/resources
 
-### Hive looks for jar files in a single directory from HIVE_AUX_JARS_PATH plus
-### any jars in AUX_CLASSPATH. (Or a list of jars in HIVE_AUX_JARS_PATH.)
-export HIVE_AUX_JARS_PATH=${IMPALA_FE_DIR}/target
+# Hive looks for jar files in a single directory from HIVE_AUX_JARS_PATH plus
+# any jars in AUX_CLASSPATH. (Or a list of jars in HIVE_AUX_JARS_PATH.) Find the
+# Postgresql jdbc driver required for starting the Hive Metastore.
+JDBC_DRIVER=$(find $IMPALA_HOME/thirdparty/postgresql-jdbc -name '*postgres*jdbc*jar' | head -n 1)
+if [[ -z "$JDBC_DRIVER" ]]; then
+  echo Could not find Postgres JDBC driver in >&2
+  return
+fi
+export HIVE_AUX_JARS_PATH="$JDBC_DRIVER"
 export AUX_CLASSPATH=$HADOOP_LZO/build/hadoop-lzo-0.4.15.jar
+### Tell hive not to use jline
+export HADOOP_USER_CLASSPATH_FIRST=true
 
 export HBASE_HOME=$IMPALA_HOME/thirdparty/hbase-${IMPALA_HBASE_VERSION}/
 export PATH=$HBASE_HOME/bin:$PATH
 
-GPERFTOOLS_HOME=${IMPALA_HOME}/thirdparty/gperftools-${IMPALA_GPERFTOOLS_VERSION}/
-export PPROF_PATH="${PPROF_PATH:-${GPERFTOOLS_HOME}/src/pprof}"
+# Add the jars so hive can create hbase tables.
+export AUX_CLASSPATH=$AUX_CLASSPATH:$HBASE_HOME/lib/hbase-common-${IMPALA_HBASE_VERSION}.jar
+export AUX_CLASSPATH=$AUX_CLASSPATH:$HBASE_HOME/lib/hbase-client-${IMPALA_HBASE_VERSION}.jar
+export AUX_CLASSPATH=$AUX_CLASSPATH:$HBASE_HOME/lib/hbase-server-${IMPALA_HBASE_VERSION}.jar
+export AUX_CLASSPATH=$AUX_CLASSPATH:$HBASE_HOME/lib/hbase-protocol-${IMPALA_HBASE_VERSION}.jar
+export AUX_CLASSPATH=$AUX_CLASSPATH:$HBASE_HOME/lib/hbase-hadoop-compat-${IMPALA_HBASE_VERSION}.jar
+
 export HBASE_CONF_DIR=$HIVE_CONF_DIR
 
-export THRIFT_SRC_DIR=${IMPALA_HOME}/thirdparty/thrift-${IMPALA_THRIFT_VERSION}/
-export THRIFT_HOME=${THRIFT_SRC_DIR}build/
+# Optionally set the Thrift home to the toolchain
+if [[ -z $IMPALA_TOOLCHAIN ]]; then
+  THRIFT_SRC_DIR=${IMPALA_HOME}/thirdparty/thrift-${IMPALA_THRIFT_VERSION}/
+  export THRIFT_HOME=${THRIFT_SRC_DIR}build/
+else
+  export THRIFT_HOME=${IMPALA_TOOLCHAIN}/thrift-${IMPALA_THRIFT_VERSION}/
+fi
+
+export CLUSTER_DIR=${IMPALA_HOME}/testdata/cluster
 
 export IMPALA_BUILD_THREADS=`nproc`
+
+# Some environments (like the packaging build) might not have $USER set.  Fix that here.
+export USER=${USER-`id -un`}
 
 # Configure python path
 . $IMPALA_HOME/bin/set-pythonpath.sh
@@ -164,6 +266,11 @@ LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:`dirname ${LIB_JVM}`:`dirname ${LIB_HDFS}`"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_HOME}/be/build/debug/service"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_HOME}/thirdparty/snappy-${IMPALA_SNAPPY_VERSION}/build/lib"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$IMPALA_LZO/build"
+
+if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
+  LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_TOOLCHAIN}/gcc-${IMPALA_GCC_VERSION}/lib64"
+fi
+
 export LD_LIBRARY_PATH
 LD_PRELOAD="${LD_PRELOAD-}"
 export LD_PRELOAD="${LD_PRELOAD}:${LIB_JSIG}"
@@ -179,6 +286,9 @@ export CLASSPATH
 # Helper alias to script that verifies and merges Gerrit changes
 alias gerrit-verify-merge="${IMPALA_AUX_TEST_HOME}/jenkins/gerrit-verify-merge.sh"
 
+# A marker in the environment to prove that we really did source this file
+export IMPALA_CONFIG_SOURCED=1
+
 echo "IMPALA_HOME            = $IMPALA_HOME"
 echo "HADOOP_HOME            = $HADOOP_HOME"
 echo "HADOOP_CONF_DIR        = $HADOOP_CONF_DIR"
@@ -187,7 +297,7 @@ echo "HIVE_HOME              = $HIVE_HOME"
 echo "HIVE_CONF_DIR          = $HIVE_CONF_DIR"
 echo "HBASE_HOME             = $HBASE_HOME"
 echo "HBASE_CONF_DIR         = $HBASE_CONF_DIR"
-echo "PPROF_PATH             = $PPROF_PATH"
+echo "MINIKDC_HOME           = $MINIKDC_HOME"
 echo "THRIFT_HOME            = $THRIFT_HOME"
 echo "HADOOP_LZO             = $HADOOP_LZO"
 echo "IMPALA_LZO             = $IMPALA_LZO"
@@ -197,3 +307,26 @@ echo "PYTHONPATH             = $PYTHONPATH"
 echo "JAVA_HOME              = $JAVA_HOME"
 echo "LD_LIBRARY_PATH        = $LD_LIBRARY_PATH"
 echo "LD_PRELOAD             = $LD_PRELOAD"
+echo "IMPALA_TOOLCHAIN       = $IMPALA_TOOLCHAIN"
+
+# Kerberos things.  If the cluster exists and is kerberized, source
+# the required environment.  This is required for any hadoop tool to
+# work.  Note that if impala-config.sh is sourced before the
+# kerberized cluster is created, it will have to be sourced again
+# *after* the cluster is created in order to pick up these settings.
+export MINIKDC_ENV=${IMPALA_HOME}/testdata/bin/minikdc_env.sh
+if ${CLUSTER_DIR}/admin is_kerberized; then
+  . ${MINIKDC_ENV}
+  echo " *** This cluster is kerberized ***"
+  echo "KRB5_KTNAME            = $KRB5_KTNAME"
+  echo "KRB5_CONFIG            = $KRB5_CONFIG"
+  echo "KRB5_TRACE             = $KRB5_TRACE"
+  echo "HADOOP_OPTS            = $HADOOP_OPTS"
+  echo " *** This cluster is kerberized ***"
+else
+  # If the cluster *isn't* kerberized, ensure that the environment isn't
+  # polluted with kerberos items that might screw us up.  We go through
+  # everything set in the minikdc environment and explicitly unset it.
+  unset `grep export ${MINIKDC_ENV} | sed "s/.*export \([^=]*\)=.*/\1/" \
+      | sort | uniq`
+fi

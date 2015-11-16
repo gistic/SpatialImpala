@@ -19,17 +19,17 @@
 
 namespace impala {
 
-// Reference to a single slot of a tuple.
+/// Reference to a single slot of a tuple.
 class SlotRef : public Expr {
  public:
   SlotRef(const TExprNode& node);
   SlotRef(const SlotDescriptor* desc);
 
-  // TODO: this is a hack to allow aggregation nodes to work around NULL slot
-  // descriptors. Ideally the FE would dictate the type of the intermediate SlotRefs.
+  /// TODO: this is a hack to allow aggregation nodes to work around NULL slot
+  /// descriptors. Ideally the FE would dictate the type of the intermediate SlotRefs.
   SlotRef(const SlotDescriptor* desc, const ColumnType& type);
 
-  // Used for testing.  GetValue will return tuple + offset interpreted as 'type'
+  /// Used for testing.  GetValue will return tuple + offset interpreted as 'type'
   SlotRef(const ColumnType& type, int offset);
 
   virtual Status Prepare(RuntimeState* state, const RowDescriptor& row_desc,
@@ -51,6 +51,7 @@ class SlotRef : public Expr {
   virtual impala_udf::StringVal GetStringVal(ExprContext* context, TupleRow*);
   virtual impala_udf::TimestampVal GetTimestampVal(ExprContext* context, TupleRow*);
   virtual impala_udf::DecimalVal GetDecimalVal(ExprContext* context, TupleRow*);
+  virtual impala_udf::ArrayVal GetArrayVal(ExprContext* context, TupleRow*);
 
  protected:
   int tuple_idx_;  // within row

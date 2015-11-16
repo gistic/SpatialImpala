@@ -19,10 +19,12 @@
 #include "codegen/codegen-anyval.h"
 #include "codegen/llvm-codegen.h"
 #include "gen-cpp/Exprs_types.h"
+#include "runtime/array-value.h"
 #include "runtime/runtime-state.h"
 
+#include "common/names.h"
+
 using namespace impala_udf;
-using namespace std;
 using namespace llvm;
 
 namespace impala {
@@ -62,7 +64,7 @@ SlotRef::SlotRef(const ColumnType& type, int offset)
 Status SlotRef::Prepare(RuntimeState* state, const RowDescriptor& row_desc,
                         ExprContext* context) {
   DCHECK_EQ(children_.size(), 0);
-  if (slot_id_ == -1) return Status::OK;
+  if (slot_id_ == -1) return Status::OK();
 
   const SlotDescriptor* slot_desc  = state->desc_tbl().GetSlotDescriptor(slot_id_);
   if (slot_desc == NULL) {
@@ -77,10 +79,9 @@ Status SlotRef::Prepare(RuntimeState* state, const RowDescriptor& row_desc,
     error << "reference to non-materialized slot " << slot_id_;
     return Status(error.str());
   }
-  // TODO(marcel): get from runtime state
-  tuple_idx_ = row_desc.GetTupleIdx(slot_desc->parent());
+  tuple_idx_ = row_desc.GetTupleIdx(slot_desc->parent()->id());
   if (tuple_idx_ == RowDescriptor::INVALID_IDX) {
-    TupleDescriptor* d = state->desc_tbl().GetTupleDescriptor(slot_desc->parent());
+    TupleDescriptor* d = state->desc_tbl().GetTupleDescriptor(slot_desc->parent()->id());
     LOG(INFO) << "invalid idx: " << slot_desc->DebugString()
               << "\nparent=" << d->DebugString()
               << "\nrow=" << row_desc.DebugString();
@@ -92,7 +93,7 @@ Status SlotRef::Prepare(RuntimeState* state, const RowDescriptor& row_desc,
   tuple_is_nullable_ = row_desc.TupleIsNullable(tuple_idx_);
   slot_offset_ = slot_desc->tuple_offset();
   null_indicator_offset_ = slot_desc->null_indicator_offset();
-  return Status::OK;
+  return Status::OK();
 }
 
 int SlotRef::GetSlotIds(vector<SlotId>* slot_ids) const {
@@ -158,7 +159,7 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   }
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
-    return Status::OK;
+    return Status::OK();
   }
 
   DCHECK_EQ(GetNumChildren(), 0);
@@ -178,7 +179,7 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   Function* ir_compute_fn_ = codegen->GetRegisteredExprFn(unique_slot_id);
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
-    return Status::OK;
+    return Status::OK();
   }
 
   LLVMContext& context = codegen->context();
@@ -283,7 +284,7 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   // *Val. The optimizer does a better job when there is a phi node for each value, rather
   // than having get_slot_block generate an AnyVal and having a single phi node over that.
   // TODO: revisit this code, can possibly be simplified
-  if (type().IsVarLen()) {
+  if (type().IsVarLenStringType()) {
     DCHECK(ptr != NULL);
     DCHECK(len != NULL);
     PHINode* ptr_phi = builder.CreatePHI(ptr->getType(), 2, "ptr_phi");
@@ -364,7 +365,7 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   *fn = codegen->FinalizeFunction(*fn);
   codegen->RegisterExprFn(unique_slot_id, *fn);
   ir_compute_fn_ = *fn;
-  return Status::OK;
+  return Status::OK();
 }
 
 BooleanVal SlotRef::GetBooleanVal(ExprContext* context, TupleRow* row) {
@@ -457,6 +458,14 @@ DecimalVal SlotRef::GetDecimalVal(ExprContext* context, TupleRow* row) {
       DCHECK(false);
       return DecimalVal::null();
   }
+}
+
+ArrayVal SlotRef::GetArrayVal(ExprContext* context, TupleRow* row) {
+  DCHECK(type_.IsCollectionType());
+  Tuple* t = row->GetTuple(tuple_idx_);
+  if (t == NULL || t->IsNull(null_indicator_offset_)) return ArrayVal::null();
+  ArrayValue* array_value = reinterpret_cast<ArrayValue*>(t->GetSlot(slot_offset_));
+  return ArrayVal(array_value->ptr, array_value->num_tuples);
 }
 
 }

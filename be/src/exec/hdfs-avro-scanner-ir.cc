@@ -25,12 +25,12 @@ int HdfsAvroScanner::DecodeAvroData(int max_tuples, MemPool* pool, uint8_t** dat
   int num_to_commit = 0;
   for (int i = 0; i < max_tuples; ++i) {
     InitTuple(template_tuple_, tuple);
-    MaterializeTuple(pool, data, tuple);
+    MaterializeTuple(*avro_header_->schema.get(), pool, data, tuple);
     tuple_row->SetTuple(scan_node_->tuple_idx(), tuple);
     if (EvalConjuncts(tuple_row)) {
       ++num_to_commit;
       tuple_row = next_row(tuple_row);
-      tuple = next_tuple(tuple);
+      tuple = next_tuple(tuple_byte_size_, tuple);
     }
   }
   return num_to_commit;
@@ -123,12 +123,7 @@ void HdfsAvroScanner::ReadAvroVarchar(PrimitiveType type, int max_len, uint8_t**
     int str_len = std::min(static_cast<int>(len), max_len);
     DCHECK(str_len >= 0);
     sv->len = str_len;
-    if (scan_node_->requires_compaction()) {
-      sv->ptr = reinterpret_cast<char*>(pool->Allocate(str_len));
-      memcpy(sv->ptr, *data, str_len);
-    } else {
-      sv->ptr = reinterpret_cast<char*>(*data);
-    }
+    sv->ptr = reinterpret_cast<char*>(*data);
   }
   *data += len;
 }
@@ -140,7 +135,7 @@ void HdfsAvroScanner::ReadAvroChar(PrimitiveType type, int max_len, uint8_t** da
     DCHECK(type == TYPE_CHAR);
     ColumnType ctype = ColumnType::CreateCharType(max_len);
     int str_len = std::min(static_cast<int>(len), max_len);
-    if (ctype.IsVarLen()) {
+    if (ctype.IsVarLenStringType()) {
       StringValue* sv = reinterpret_cast<StringValue*>(slot);
       sv->ptr = reinterpret_cast<char*>(pool->Allocate(max_len));
       sv->len = max_len;
@@ -161,12 +156,7 @@ void HdfsAvroScanner::ReadAvroString(PrimitiveType type, uint8_t** data,
     DCHECK(type == TYPE_STRING);
     StringValue* sv = reinterpret_cast<StringValue*>(slot);
     sv->len = len;
-    if (scan_node_->requires_compaction()) {
-      sv->ptr = reinterpret_cast<char*>(pool->Allocate(len));
-      memcpy(sv->ptr, *data, len);
-    } else {
-      sv->ptr = reinterpret_cast<char*>(*data);
-    }
+    sv->ptr = reinterpret_cast<char*>(*data);
   }
   *data += len;
 }

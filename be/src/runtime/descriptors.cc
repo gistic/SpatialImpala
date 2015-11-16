@@ -15,6 +15,7 @@
 #include "runtime/descriptors.h"
 
 #include <boost/algorithm/string/join.hpp>
+#include <gutil/strings/substitute.h>
 #include <ios>
 #include <sstream>
 
@@ -28,9 +29,11 @@
 #include "exprs/expr.h"
 #include "runtime/runtime-state.h"
 
+#include "common/names.h"
+
+using boost::algorithm::join;
 using namespace llvm;
-using namespace std;
-using namespace boost::algorithm;
+using namespace strings;
 
 namespace impala {
 
@@ -46,11 +49,14 @@ ostream& operator<<(ostream& os, const NullIndicatorOffset& null_indicator) {
   return os;
 }
 
-SlotDescriptor::SlotDescriptor(const TSlotDescriptor& tdesc)
+SlotDescriptor::SlotDescriptor(
+    const TSlotDescriptor& tdesc, const TupleDescriptor* parent,
+    const TupleDescriptor* collection_item_descriptor)
   : id_(tdesc.id),
-    type_(tdesc.slotType),
-    parent_(tdesc.parent),
-    col_pos_(tdesc.columnPos),
+    type_(ColumnType::FromThrift(tdesc.slotType)),
+    parent_(parent),
+    collection_item_descriptor_(collection_item_descriptor),
+    col_path_(tdesc.materializedPath),
     tuple_offset_(tdesc.byteOffset),
     null_indicator_offset_(tdesc.nullIndicatorByte, tdesc.nullIndicatorBit),
     slot_idx_(tdesc.slotIdx),
@@ -60,32 +66,77 @@ SlotDescriptor::SlotDescriptor(const TSlotDescriptor& tdesc)
     is_null_fn_(NULL),
     set_not_null_fn_(NULL),
     set_null_fn_(NULL) {
+  DCHECK_NE(type_.type, TYPE_STRUCT);
+  DCHECK(parent_ != NULL) << tdesc.parent;
+  if (type_.IsCollectionType()) {
+    DCHECK(tdesc.__isset.itemTupleId);
+    DCHECK(collection_item_descriptor_ != NULL) << tdesc.itemTupleId;
+  } else {
+    DCHECK(!tdesc.__isset.itemTupleId);
+    DCHECK(collection_item_descriptor == NULL);
+  }
+}
+
+bool SlotDescriptor::ColPathLessThan(const SlotDescriptor* a, const SlotDescriptor* b) {
+  int common_levels = min(a->col_path().size(), b->col_path().size());
+  for (int i = 0; i < common_levels; ++i) {
+    if (a->col_path()[i] == b->col_path()[i]) continue;
+    return a->col_path()[i] < b->col_path()[i];
+  }
+  return a->col_path().size() < b->col_path().size();
 }
 
 string SlotDescriptor::DebugString() const {
   stringstream out;
   out << "Slot(id=" << id_ << " type=" << type_.DebugString()
-      << " col=" << col_pos_ << " offset=" << tuple_offset_
-      << " null=" << null_indicator_offset_.DebugString()
+      << " col_path=[";
+  if (col_path_.size() > 0) out << col_path_[0];
+  for (int i = 1; i < col_path_.size(); ++i) {
+    out << ",";
+    out << col_path_[i];
+  }
+  out << "]";
+  if (collection_item_descriptor_ != NULL) {
+    out << " collection_item_tuple_id=" << collection_item_descriptor_->id();
+  }
+  out << " offset=" << tuple_offset_ << " null=" << null_indicator_offset_.DebugString()
       << " slot_idx=" << slot_idx_ << " field_idx=" << field_idx_
       << ")";
   return out.str();
+}
+
+ColumnDescriptor::ColumnDescriptor(const TColumnDescriptor& tdesc)
+  : name_(tdesc.name),
+    type_(ColumnType::FromThrift(tdesc.type)) {
+}
+
+string ColumnDescriptor::DebugString() const {
+  return Substitute("$0: $1", name_, type_.DebugString());
 }
 
 TableDescriptor::TableDescriptor(const TTableDescriptor& tdesc)
   : name_(tdesc.tableName),
     database_(tdesc.dbName),
     id_(tdesc.id),
-    num_cols_(tdesc.numCols),
-    num_clustering_cols_(tdesc.numClusteringCols),
-    col_names_(tdesc.colNames) {
+    num_clustering_cols_(tdesc.numClusteringCols) {
+  for (int i = 0; i < tdesc.columnDescriptors.size(); ++i) {
+    col_descs_.push_back(ColumnDescriptor(tdesc.columnDescriptors[i]));
+  }
+}
+
+string TableDescriptor::fully_qualified_name() const {
+  return Substitute("$0.$1", database_, name_);
 }
 
 string TableDescriptor::DebugString() const {
+  vector<string> cols;
+  BOOST_FOREACH(const ColumnDescriptor& col_desc, col_descs_) {
+    cols.push_back(col_desc.DebugString());
+  }
   stringstream out;
-  out << "#cols=" << num_cols_ << " #clustering_cols=" << num_clustering_cols_;
-  out << " col_names=[";
-  out << join(col_names_, ":");
+  out << "#cols=" << num_cols() << " #clustering_cols=" << num_clustering_cols_;
+  out << " cols=[";
+  out << join(cols, ", ");
   out << "]";
   return out.str();
 }
@@ -120,20 +171,20 @@ Status HdfsPartitionDescriptor::PrepareExprs(RuntimeState* state) {
     // TODO: RowDescriptor should arguably be optional in Prepare for known literals
     exprs_prepared_ = true;
     // Partition exprs are not used in the codegen case.  Don't codegen them.
-    RETURN_IF_ERROR(Expr::Prepare(partition_key_value_ctxs_, state, RowDescriptor()));
-    state->AddExprCtxsToFree(partition_key_value_ctxs_);
+    RETURN_IF_ERROR(Expr::Prepare(partition_key_value_ctxs_, state, RowDescriptor(),
+                                  state->instance_mem_tracker()));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsPartitionDescriptor::OpenExprs(RuntimeState* state) {
-  if (exprs_opened_) return Status::OK;
+  if (exprs_opened_) return Status::OK();
   exprs_opened_ = true;
   return Expr::Open(partition_key_value_ctxs_, state);
 }
 
 void HdfsPartitionDescriptor::CloseExprs(RuntimeState* state) {
-  if (exprs_closed_) return;
+  if (exprs_closed_ || !exprs_prepared_) return;
   exprs_closed_ = true;
   Expr::Close(partition_key_value_ctxs_, state);
 }
@@ -220,15 +271,34 @@ TupleDescriptor::TupleDescriptor(const TTupleDescriptor& tdesc)
     num_null_bytes_(tdesc.numNullBytes),
     num_materialized_slots_(0),
     slots_(),
+    has_varlen_slots_(false),
+    tuple_path_(tdesc.tuplePath),
     llvm_struct_(NULL) {
 }
 
 void TupleDescriptor::AddSlot(SlotDescriptor* slot) {
   slots_.push_back(slot);
-  if (slot->type().IsVarLen() && slot->is_materialized()) {
-    string_slots_.push_back(slot);
+  if (slot->is_materialized()) {
+    ++num_materialized_slots_;
+    if (slot->type().IsVarLenStringType()) {
+      string_slots_.push_back(slot);
+      has_varlen_slots_ = true;
+    }
+    if (slot->type().IsCollectionType()) {
+      collection_slots_.push_back(slot);
+      has_varlen_slots_ = true;
+    }
   }
-  if (slot->is_materialized()) ++num_materialized_slots_;
+}
+
+bool TupleDescriptor::ContainsStringData() const {
+  if (!string_slots_.empty()) return true;
+  for (int i = 0; i < collection_slots_.size(); ++i) {
+    if (collection_slots_[i]->collection_item_descriptor_->ContainsStringData()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 string TupleDescriptor::DebugString() const {
@@ -243,6 +313,12 @@ string TupleDescriptor::DebugString() const {
     out << slots_[i]->DebugString();
   }
   out << "]";
+  out << " tuple_path=[";
+  for (size_t i = 0; i < tuple_path_.size(); ++i) {
+    if (i > 0) out << ", ";
+    out << tuple_path_[i];
+  }
+  out << "]";
   out << ")";
   return out.str();
 }
@@ -252,11 +328,29 @@ RowDescriptor::RowDescriptor(const DescriptorTbl& desc_tbl,
                              const vector<bool>& nullable_tuples)
   : tuple_idx_nullable_map_(nullable_tuples) {
   DCHECK_EQ(nullable_tuples.size(), row_tuples.size());
+  DCHECK_GT(row_tuples.size(), 0);
   for (int i = 0; i < row_tuples.size(); ++i) {
     tuple_desc_map_.push_back(desc_tbl.GetTupleDescriptor(row_tuples[i]));
     DCHECK(tuple_desc_map_.back() != NULL);
   }
   InitTupleIdxMap();
+  InitHasVarlenSlots();
+}
+
+RowDescriptor::RowDescriptor(const RowDescriptor& lhs_row_desc,
+    const RowDescriptor& rhs_row_desc) {
+  tuple_desc_map_.insert(tuple_desc_map_.end(), lhs_row_desc.tuple_desc_map_.begin(),
+      lhs_row_desc.tuple_desc_map_.end());
+  tuple_desc_map_.insert(tuple_desc_map_.end(), rhs_row_desc.tuple_desc_map_.begin(),
+      rhs_row_desc.tuple_desc_map_.end());
+  tuple_idx_nullable_map_.insert(tuple_idx_nullable_map_.end(),
+      lhs_row_desc.tuple_idx_nullable_map_.begin(),
+      lhs_row_desc.tuple_idx_nullable_map_.end());
+  tuple_idx_nullable_map_.insert(tuple_idx_nullable_map_.end(),
+      rhs_row_desc.tuple_idx_nullable_map_.begin(),
+      rhs_row_desc.tuple_idx_nullable_map_.end());
+  InitTupleIdxMap();
+  InitHasVarlenSlots();
 }
 
 RowDescriptor::RowDescriptor(const vector<TupleDescriptor*>& tuple_descs,
@@ -264,13 +358,16 @@ RowDescriptor::RowDescriptor(const vector<TupleDescriptor*>& tuple_descs,
   : tuple_desc_map_(tuple_descs),
     tuple_idx_nullable_map_(nullable_tuples) {
   DCHECK_EQ(nullable_tuples.size(), tuple_descs.size());
+  DCHECK_GT(tuple_descs.size(), 0);
   InitTupleIdxMap();
+  InitHasVarlenSlots();
 }
 
 RowDescriptor::RowDescriptor(TupleDescriptor* tuple_desc, bool is_nullable)
   : tuple_desc_map_(1, tuple_desc),
     tuple_idx_nullable_map_(1, is_nullable) {
   InitTupleIdxMap();
+  InitHasVarlenSlots();
 }
 
 void RowDescriptor::InitTupleIdxMap() {
@@ -283,6 +380,16 @@ void RowDescriptor::InitTupleIdxMap() {
   tuple_idx_map_.resize(max_id + 1, INVALID_IDX);
   for (int i = 0; i < tuple_desc_map_.size(); ++i) {
     tuple_idx_map_[tuple_desc_map_[i]->id()] = i;
+  }
+}
+
+void RowDescriptor::InitHasVarlenSlots() {
+  has_varlen_slots_ = false;
+  for (int i = 0; i < tuple_desc_map_.size(); ++i) {
+    if (tuple_desc_map_[i]->HasVarlenSlots()) {
+      has_varlen_slots_ = true;
+      break;
+    }
   }
 }
 
@@ -302,6 +409,13 @@ int RowDescriptor::GetTupleIdx(TupleId id) const {
 bool RowDescriptor::TupleIsNullable(int tuple_idx) const {
   DCHECK_LT(tuple_idx, tuple_idx_nullable_map_.size());
   return tuple_idx_nullable_map_[tuple_idx];
+}
+
+bool RowDescriptor::IsAnyTupleNullable() const {
+  for (int i = 0; i < tuple_idx_nullable_map_.size(); ++i) {
+    if (tuple_idx_nullable_map_[i]) return true;
+  }
+  return false;
 }
 
 void RowDescriptor::ToThrift(vector<TTupleId>* row_tuple_ids) {
@@ -373,7 +487,12 @@ Status DescriptorTbl::Create(ObjectPool* pool, const TDescriptorTable& thrift_tb
 
   for (size_t i = 0; i < thrift_tbl.slotDescriptors.size(); ++i) {
     const TSlotDescriptor& tdesc = thrift_tbl.slotDescriptors[i];
-    SlotDescriptor* slot_d = pool->Add(new SlotDescriptor(tdesc));
+    // Tuple descriptors are already populated in tbl
+    TupleDescriptor* parent = (*tbl)->GetTupleDescriptor(tdesc.parent);
+    TupleDescriptor* collection_item_descriptor = tdesc.__isset.itemTupleId ?
+        (*tbl)->GetTupleDescriptor(tdesc.itemTupleId) : NULL;
+    SlotDescriptor* slot_d = pool->Add(
+        new SlotDescriptor(tdesc, parent, collection_item_descriptor));
     (*tbl)->slot_desc_map_[tdesc.id] = slot_d;
 
     // link to parent
@@ -383,7 +502,7 @@ Status DescriptorTbl::Create(ObjectPool* pool, const TDescriptorTable& thrift_tb
     }
     entry->second->AddSlot(slot_d);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 TableDescriptor* DescriptorTbl::GetTableDescriptor(TableId id) const {

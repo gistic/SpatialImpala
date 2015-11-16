@@ -22,6 +22,7 @@ import java_cup.runtime.Symbol;
 
 import org.apache.hadoop.hive.ql.parse.BaseSemanticAnalyzer;
 
+import com.cloudera.impala.catalog.ScalarType;
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.thrift.TExprNode;
@@ -35,7 +36,7 @@ public class StringLiteral extends LiteralExpr {
 
   public StringLiteral(String value) {
     this.value_ = value;
-    type_ = Type.STRING;
+    type_ = ScalarType.STRING;
   }
 
   public StringLiteral(String value, Type type) {
@@ -95,12 +96,12 @@ public class StringLiteral extends LiteralExpr {
     if (targetType.equals(this.type_)) {
       return this;
     } else if (targetType.isStringType()) {
-      return new StringLiteral(value_, targetType);
+      type_ = targetType;
     } else if (targetType.isNumericType()) {
       return convertToNumber();
     } else if (targetType.isDateType()) {
       // Let the BE do the cast so it is in Boost format
-      return new CastExpr(targetType, this, true);
+      return new CastExpr(targetType, this);
     }
     return this;
   }
@@ -154,7 +155,8 @@ public class StringLiteral extends LiteralExpr {
 
   @Override
   public int compareTo(LiteralExpr o) {
-    if (!(o instanceof StringLiteral)) return -1;
+    int ret = super.compareTo(o);
+    if (ret != 0) return ret;
     StringLiteral other = (StringLiteral) o;
     return value_.compareTo(other.getStringValue());
   }

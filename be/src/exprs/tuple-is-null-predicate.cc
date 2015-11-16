@@ -18,19 +18,16 @@
 
 #include "gen-cpp/Exprs_types.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
 BooleanVal TupleIsNullPredicate::GetBooleanVal(ExprContext* ctx, TupleRow* row) {
-  bool result = true;
+  int count = 0;
   for (int i = 0; i < tuple_idxs_.size(); ++i) {
-    if (row->GetTuple(tuple_idxs_[i]) != NULL) {
-      result = false;
-      break;
-    }
+    count += row->GetTuple(tuple_idxs_[i]) == NULL;
   }
-  return BooleanVal(result);
+  return BooleanVal(!tuple_idxs_.empty() && count == tuple_idxs_.size());
 }
 
 TupleIsNullPredicate::TupleIsNullPredicate(const TExprNode& node)
@@ -46,9 +43,15 @@ Status TupleIsNullPredicate::Prepare(RuntimeState* state, const RowDescriptor& r
   // Resolve tuple ids to tuple indexes.
   for (int i = 0; i < tuple_ids_.size(); ++i) {
     int32_t tuple_idx = row_desc.GetTupleIdx(tuple_ids_[i]);
+    if (tuple_idx == RowDescriptor::INVALID_IDX) {
+      // This should not happen and indicates a planner issue. This code is tricky
+      // so rather than crashing, do this as a stop gap.
+      // TODO: remove this code and replace with DCHECK.
+      return Status("Invalid plan. TupleIsNullPredicate has invalid tuple idx.");
+    }
     if (row_desc.TupleIsNullable(tuple_idx)) tuple_idxs_.push_back(tuple_idx);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status TupleIsNullPredicate::GetCodegendComputeFn(RuntimeState* state,

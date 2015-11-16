@@ -29,9 +29,7 @@
     if (!status.ok()) { \
       (adaptor)->WriteErrorLog(); \
       (adaptor)->WriteFileErrors(); \
-      string error_msg; \
-      status.GetErrorMsg(&error_msg); \
-      (env)->ThrowNew((adaptor)->impala_exc_cl(), error_msg.c_str()); \
+      (env)->ThrowNew((adaptor)->impala_exc_cl(), status.GetDetail().c_str()); \
       return; \
     } \
   } while (false)
@@ -40,19 +38,7 @@
   do { \
     Status status = (stmt); \
     if (!status.ok()) { \
-      string error_msg; \
-      status.GetErrorMsg(&error_msg); \
-      (env)->ThrowNew((impala_exc_cl), error_msg.c_str()); \
-      return; \
-    } \
-  } while (false)
-
-#define SET_TSTATUS_IF_ERROR(stmt, tstatus) \
-  do { \
-    Status status = (stmt); \
-    if (!status.ok()) { \
-      (tstatus)->status_code = TStatusCode::INTERNAL_ERROR; \
-      status.GetErrorMsgs(&(tstatus)->error_msgs); \
+      (env)->ThrowNew((impala_exc_cl), status.GetDetail().c_str()); \
       return; \
     } \
   } while (false)
@@ -61,9 +47,7 @@
   do { \
     Status status = (stmt); \
     if (!status.ok()) { \
-      string error_msg; \
-      status.GetErrorMsg(&error_msg); \
-      (env)->ThrowNew((impala_exc_cl), error_msg.c_str()); \
+      (env)->ThrowNew((impala_exc_cl), status.GetDetail().c_str()); \
       return (ret); \
     } \
   } while (false)
@@ -135,114 +119,114 @@
     } \
   } while (false)
 
-// C linkage for helper functions in hdfsJniHelper.h
+/// C linkage for helper functions in hdfsJniHelper.h
 extern  "C" { extern JNIEnv* getJNIEnv(void); }
 
 namespace impala {
 
 class Status;
 
-// Utility class to push/pop a single JNI frame. "push" will push a JNI frame and the
-// d'tor will pop the JNI frame. Frames establish a scope for local references. Local
-// references go out of scope when their frame is popped, which enables the GC to clean up
-// the corresponding objects.
+/// Utility class to push/pop a single JNI frame. "push" will push a JNI frame and the
+/// d'tor will pop the JNI frame. Frames establish a scope for local references. Local
+/// references go out of scope when their frame is popped, which enables the GC to clean up
+/// the corresponding objects.
 class JniLocalFrame {
  public:
   JniLocalFrame(): env_(NULL) {}
   ~JniLocalFrame() { if (env_ != NULL) env_->PopLocalFrame(NULL); }
 
-  // Pushes a new JNI local frame. The frame can support max_local_ref local references.
-  // The number of local references created inside the frame might exceed max_local_ref,
-  // but there is no guarantee that memory will be available.
-  // Push should be called at most once.
+  /// Pushes a new JNI local frame. The frame can support max_local_ref local references.
+  /// The number of local references created inside the frame might exceed max_local_ref,
+  /// but there is no guarantee that memory will be available.
+  /// Push should be called at most once.
   Status push(JNIEnv* env, int max_local_ref=10);
 
  private:
   JNIEnv* env_;
 };
 
-// Describes one method to look up in a Java object
+/// Describes one method to look up in a Java object
 struct JniMethodDescriptor {
-  // Name of the method, case must match
+  /// Name of the method, case must match
   const std::string name;
 
-  // JNI-style method signature
+  /// JNI-style method signature
   const std::string signature;
 
-  // Handle to the method
+  /// Handle to the method
   jmethodID* method_id;
 };
 
-// Utility class for JNI-related functionality.
-// Init() should be called as soon as the native library is loaded.
-// Creates global class references, and promotes local references to global references.
-// Maintains a list of all global references for cleanup in Cleanup().
-// Attention! Lifetime of JNI components and common pitfalls:
-// 1. JNIEnv* cannot be shared among threads, so it should NOT be globally cached.
-// 2. References created via jnienv->New*() calls are local references that go out of scope
-//    at the end of a code block (and will be gc'ed by the JVM). They should NOT be cached.
-// 3. Use global references for caching classes.
-//    They need to be explicitly created and cleaned up (will not be gc'd up by the JVM).
-//    Global references can be shared among threads.
-// 4. JNI method ids and field ids are tied to the JVM that created them,
-//    and can be shared among threads. They are not "references" so there is no need
-//    to explicitly create a global reference to them.
+/// Utility class for JNI-related functionality.
+/// Init() should be called as soon as the native library is loaded.
+/// Creates global class references, and promotes local references to global references.
+/// Maintains a list of all global references for cleanup in Cleanup().
+/// Attention! Lifetime of JNI components and common pitfalls:
+/// 1. JNIEnv* cannot be shared among threads, so it should NOT be globally cached.
+/// 2. References created via jnienv->New*() calls are local references that go out of scope
+///    at the end of a code block (and will be gc'ed by the JVM). They should NOT be cached.
+/// 3. Use global references for caching classes.
+///    They need to be explicitly created and cleaned up (will not be gc'd up by the JVM).
+///    Global references can be shared among threads.
+/// 4. JNI method ids and field ids are tied to the JVM that created them,
+///    and can be shared among threads. They are not "references" so there is no need
+///    to explicitly create a global reference to them.
 class JniUtil {
  public:
-  // Call this prior to any libhdfs calls.
+  /// Call this prior to any libhdfs calls.
   static void InitLibhdfs();
 
-  // Find JniUtil class, and get JniUtil.throwableToString method id
+  /// Find JniUtil class, and get JniUtil.throwableToString method id
   static Status Init();
 
-  // Returns true if the given class could be found on the CLASSPATH in env.
-  // Returns false otherwise, or if any other error occurred (e.g. a JNI exception).
-  // This function does not log any errors or exceptions.
+  /// Returns true if the given class could be found on the CLASSPATH in env.
+  /// Returns false otherwise, or if any other error occurred (e.g. a JNI exception).
+  /// This function does not log any errors or exceptions.
   static bool ClassExists(JNIEnv* env, const char* class_str);
 
-  // Returns a global JNI reference to the class specified by class_str into class_ref.
-  // The reference is added to global_refs_ for cleanup in Deinit().
-  // Returns Status::OK if successful.
-  // Catches Java exceptions and converts their message into status.
+  /// Returns a global JNI reference to the class specified by class_str into class_ref.
+  /// The reference is added to global_refs_ for cleanup in Deinit().
+  /// Returns Status::OK if successful.
+  /// Catches Java exceptions and converts their message into status.
   static Status GetGlobalClassRef(JNIEnv* env, const char* class_str, jclass* class_ref);
 
-  // Creates a global reference from a local reference returned into global_ref.
-  // Adds global reference to global_refs_ for cleanup in Deinit().
-  // Returns Status::OK if successful.
-  // Catches Java exceptions and converts their message into status.
+  /// Creates a global reference from a local reference returned into global_ref.
+  /// Adds global reference to global_refs_ for cleanup in Deinit().
+  /// Returns Status::OK if successful.
+  /// Catches Java exceptions and converts their message into status.
   static Status LocalToGlobalRef(JNIEnv* env, jobject local_ref, jobject* global_ref);
 
   static jmethodID throwable_to_string_id() { return throwable_to_string_id_; }
   static jmethodID throwable_to_stack_trace_id() { return throwable_to_stack_trace_id_; }
 
-  // Global reference to java JniUtil class
+  /// Global reference to java JniUtil class
   static jclass jni_util_class() { return jni_util_cl_; }
 
-  // Global reference to InternalException class.
+  /// Global reference to InternalException class.
   static jclass internal_exc_class() { return internal_exc_cl_; }
 
-  // Delete all global references: class members, and those stored in global_refs_.
+  /// Delete all global references: class members, and those stored in global_refs_.
   static Status Cleanup();
 
-  // Returns the error message for 'e'. If no exception, returns Status::OK
-  // log_stack determines if the stack trace is written to the log
-  // prefix, if non-empty will be prepended to the error message.
+  /// Returns the error message for 'e'. If no exception, returns Status::OK
+  /// log_stack determines if the stack trace is written to the log
+  /// prefix, if non-empty will be prepended to the error message.
   static Status GetJniExceptionMsg(JNIEnv* env, bool log_stack = true,
       const std::string& prefix = "");
 
-  // Populates 'result' with a list of memory metrics from the Jvm. Returns Status::OK
-  // unless there is an exception.
+  /// Populates 'result' with a list of memory metrics from the Jvm. Returns Status::OK
+  /// unless there is an exception.
   static Status GetJvmMetrics(const TGetJvmMetricsRequest& request,
       TGetJvmMetricsResponse* result);
 
-  // Loads a method whose signature is in the supplied descriptor. Returns Status::OK
-  // and sets descriptor->method_id to a JNI method handle if successful, otherwise an
-  // error status is returned.
+  /// Loads a method whose signature is in the supplied descriptor. Returns Status::OK
+  /// and sets descriptor->method_id to a JNI method handle if successful, otherwise an
+  /// error status is returned.
   static Status LoadJniMethod(JNIEnv* jni_env, const jclass& jni_class,
       JniMethodDescriptor* descriptor);
 
-  // Utility methods to avoid repeating lots of the JNI call boilerplate. It seems these
-  // must be defined in the header to compile properly.
+  /// Utility methods to avoid repeating lots of the JNI call boilerplate. It seems these
+  /// must be defined in the header to compile properly.
   template <typename T>
   static Status CallJniMethod(const jobject& obj, const jmethodID& method, const T& arg) {
     JNIEnv* jni_env = getJNIEnv();
@@ -252,7 +236,7 @@ class JniUtil {
     RETURN_IF_ERROR(SerializeThriftMsg(jni_env, &arg, &request_bytes));
     jni_env->CallObjectMethod(obj, method, request_bytes);
     RETURN_ERROR_IF_EXC(jni_env);
-    return Status::OK;
+    return Status::OK();
   }
 
   template <typename R>
@@ -264,7 +248,7 @@ class JniUtil {
         jni_env->CallObjectMethod(obj, method));
     RETURN_ERROR_IF_EXC(jni_env);
     RETURN_IF_ERROR(DeserializeThriftMsg(jni_env, result_bytes, response));
-    return Status::OK;
+    return Status::OK();
   }
 
   template <typename T, typename R>
@@ -279,7 +263,7 @@ class JniUtil {
         jni_env->CallObjectMethod(obj, method, request_bytes));
     RETURN_ERROR_IF_EXC(jni_env);
     RETURN_IF_ERROR(DeserializeThriftMsg(jni_env, result_bytes, response));
-    return Status::OK;
+    return Status::OK();
   }
 
   template <typename T>
@@ -299,7 +283,7 @@ class JniUtil {
     *response = str;
     jni_env->ReleaseStringUTFChars(java_response_string, str);
     RETURN_ERROR_IF_EXC(jni_env);
-    return Status::OK;
+    return Status::OK();
   }
 
  private:
@@ -308,8 +292,8 @@ class JniUtil {
   static jmethodID throwable_to_string_id_;
   static jmethodID throwable_to_stack_trace_id_;
   static jmethodID get_jvm_metrics_id_;
-  // List of global references created with GetGlobalClassRef() or LocalToGlobalRef.
-  // All global references are deleted in Cleanup().
+  /// List of global references created with GetGlobalClassRef() or LocalToGlobalRef.
+  /// All global references are deleted in Cleanup().
   static std::vector<jobject> global_refs_;
 };
 

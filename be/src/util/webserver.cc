@@ -31,19 +31,28 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/prettywriter.h>
 
+#include "util/asan.h"
 #include "common/logging.h"
 #include "util/cpu-info.h"
 #include "util/disk-info.h"
 #include "util/mem-info.h"
 #include "util/os-info.h"
+#include "util/os-util.h"
+#include "util/process-state-info.h"
 #include "util/url-coding.h"
 #include "util/debug-util.h"
+#include "util/pretty-printer.h"
 #include "util/stopwatch.h"
 #include "rpc/thrift-util.h"
 
-using namespace std;
-using namespace boost;
-using namespace boost::filesystem;
+#include "common/names.h"
+
+using boost::algorithm::is_any_of;
+using boost::algorithm::split;
+using boost::algorithm::trim_right;
+using boost::algorithm::to_lower;
+using boost::filesystem::exists;
+using boost::upgrade_to_unique_lock;
 using namespace google;
 using namespace strings;
 using namespace rapidjson;
@@ -64,6 +73,15 @@ DEFINE_bool(enable_webserver_doc_root, true,
 DEFINE_string(webserver_certificate_file, "",
     "The location of the debug webserver's SSL certificate file, in .pem format. If "
     "empty, webserver SSL support is not enabled");
+DEFINE_string(webserver_private_key_file, "", "The full path to the private key used as a"
+    " counterpart to the public key contained in --ssl_server_certificate. If "
+    "--ssl_server_certificate is set, this option must be set as well.");
+DEFINE_string(webserver_private_key_password_cmd, "", "A Unix command whose output "
+    "returns the password used to decrypt the Webserver's certificate private key file "
+    "specified in --webserver_private_key_file. If the .PEM key file is not "
+    "password-protected, this command will not be invoked. The output of the command "
+    "will be truncated to 1024 bytes, and then all trailing whitespace will be trimmed "
+    "before it is used to decrypt the private key");
 DEFINE_string(webserver_authentication_domain, "",
     "Domain used for debug webserver authentication");
 DEFINE_string(webserver_password_file, "",
@@ -77,9 +95,13 @@ static const int DOC_FOLDER_LEN = strlen(DOC_FOLDER);
 static const uint32_t PROCESSING_COMPLETE = 1;
 static const uint32_t NOT_PROCESSED = 0;
 
-// Standard keys in the json document sent to templates for rendering. Must be kept in
+// Standard key in the json document sent to templates for rendering. Must be kept in
 // sync with the templates themselves.
 static const char* COMMON_JSON_KEY = "__common__";
+
+// Standard key used to add errors to the argument map passed to the webserver's error
+// handler.
+static const char* ERROR_KEY = "__error_msg__";
 
 // Returns $IMPALA_HOME if set, otherwise /tmp/impala_www
 const char* GetDefaultDocumentRoot() {
@@ -93,6 +115,7 @@ const char* GetDefaultDocumentRoot() {
 
   // Deliberate memory leak, but this should be called exactly once.
   string* str = new string(ss.str());
+  IGNORE_LEAKING_OBJECT(str);
   return str->c_str();
 }
 
@@ -100,13 +123,37 @@ namespace impala {
 
 const char* Webserver::ENABLE_RAW_JSON_KEY = "__raw__";
 
-Webserver::Webserver() : context_(NULL) {
+// Supported HTTP response codes
+enum ResponseCode {
+  OK = 200,
+  NOT_FOUND = 404
+};
+
+// Builds a valid HTTP header given the response code and a content type.
+string BuildHeaderString(ResponseCode response, ContentType content_type) {
+  static const string RESPONSE_TEMPLATE = "HTTP/1.1 $0 $1\r\n"
+      "Content-Type: text/$2\r\n"
+      "Content-Length: %d\r\n"
+      "X-Frame-Options: DENY\r\n"
+      "\r\n";
+
+  return Substitute(RESPONSE_TEMPLATE, response, response == OK ? "OK" : "Not found",
+      content_type == HTML ? "html" : "plain");
+}
+
+Webserver::Webserver()
+    : context_(NULL),
+      error_handler_(UrlHandler(bind<void>(&Webserver::ErrorHandler, this, _1, _2),
+          "error.tmpl", false)) {
   http_address_ = MakeNetworkAddress(
       FLAGS_webserver_interface.empty() ? "0.0.0.0" : FLAGS_webserver_interface,
       FLAGS_webserver_port);
 }
 
-Webserver::Webserver(const int port) : context_(NULL) {
+Webserver::Webserver(const int port)
+    : context_(NULL),
+      error_handler_(UrlHandler(bind<void>(&Webserver::ErrorHandler, this, _1, _2),
+          "error.tmpl", false)) {
   http_address_ = MakeNetworkAddress("0.0.0.0", port);
 }
 
@@ -114,7 +161,7 @@ Webserver::~Webserver() {
   Stop();
 }
 
-void Webserver::RootHandler(const Webserver::ArgumentMap& args, Document* document) {
+void Webserver::RootHandler(const ArgumentMap& args, Document* document) {
   Value version(GetVersionString().c_str(), document->GetAllocator());
   document->AddMember("version", version, document->GetAllocator());
   Value cpu_info(CpuInfo::DebugString().c_str(), document->GetAllocator());
@@ -125,7 +172,18 @@ void Webserver::RootHandler(const Webserver::ArgumentMap& args, Document* docume
   document->AddMember("disk_info", disk_info, document->GetAllocator());
   Value os_info(OsInfo::DebugString().c_str(), document->GetAllocator());
   document->AddMember("os_info", os_info, document->GetAllocator());
-  document->AddMember("pid", getpid(), document->GetAllocator());
+  Value process_state_info(ProcessStateInfo().DebugString().c_str(),
+    document->GetAllocator());
+  document->AddMember("process_state_info", process_state_info,
+    document->GetAllocator());
+}
+
+void Webserver::ErrorHandler(const ArgumentMap& args, Document* document) {
+  ArgumentMap::const_iterator it = args.find(ERROR_KEY);
+  if (it == args.end()) return;
+
+  Value error(it->second.c_str(), document->GetAllocator());
+  document->AddMember("error", error, document->GetAllocator());
 }
 
 void Webserver::BuildArgumentMap(const string& args, ArgumentMap* output) {
@@ -172,9 +230,25 @@ Status Webserver::Start() {
     LOG(INFO)<< "Document root disabled";
   }
 
+  string key_password;
   if (IsSecure()) {
     options.push_back("ssl_certificate");
     options.push_back(FLAGS_webserver_certificate_file.c_str());
+
+    if (!FLAGS_webserver_private_key_file.empty()) {
+      options.push_back("ssl_private_key");
+      options.push_back(FLAGS_webserver_private_key_file.c_str());
+
+      if (!FLAGS_webserver_private_key_password_cmd.empty()) {
+        if (!RunShellProcess(FLAGS_webserver_private_key_password_cmd, &key_password)) {
+          return Status(TErrorCode::SSL_PASSWORD_CMD_FAILED,
+              FLAGS_webserver_private_key_password_cmd, key_password);
+        }
+        trim_right(key_password);
+        options.push_back("ssl_private_key_password");
+        options.push_back(key_password.c_str());
+      }
+    }
   }
 
   if (!FLAGS_webserver_authentication_domain.empty()) {
@@ -197,6 +271,9 @@ Status Webserver::Start() {
 
   options.push_back("listening_ports");
   options.push_back(listening_str.c_str());
+
+  options.push_back("enable_directory_listing");
+  options.push_back("no");
 
   // Options must be a NULL-terminated list
   options.push_back(NULL);
@@ -229,10 +306,10 @@ Status Webserver::Start() {
   UrlCallback default_callback =
       bind<void>(mem_fn(&Webserver::RootHandler), this, _1, _2);
 
-  RegisterUrlCallback("/", "root.tmpl", default_callback);
+  RegisterUrlCallback("/", "root.tmpl", default_callback, false);
 
   LOG(INFO) << "Webserver started";
-  return Status::OK;
+  return Status::OK();
 }
 
 void Webserver::Stop() {
@@ -286,83 +363,88 @@ int Webserver::BeginRequestCallback(struct sq_connection* connection,
       return NOT_PROCESSED;
     }
   }
-  shared_lock<shared_mutex> lock(url_handlers_lock_);
-  UrlHandlerMap::const_iterator it = url_handlers_.find(request_info->uri);
-  if (it == url_handlers_.end()) {
-    sq_printf(connection, "HTTP/1.1 404 Not Found\r\n"
-        "Content-Type: text/plain\r\n\r\n");
-    sq_printf(connection, "No handler for URI %s\r\n\r\n", request_info->uri);
-    return PROCESSING_COMPLETE;
-  }
 
   map<string, string> arguments;
   if (request_info->query_string != NULL) {
     BuildArgumentMap(request_info->query_string, &arguments);
   }
+
+  shared_lock<shared_mutex> lock(url_handlers_lock_);
+  UrlHandlerMap::const_iterator it = url_handlers_.find(request_info->uri);
+  ResponseCode response = OK;
+  ContentType content_type = HTML;
+  const UrlHandler* url_handler = NULL;
+  if (it == url_handlers_.end()) {
+    response = NOT_FOUND;
+    arguments[ERROR_KEY] = Substitute("No URI handler for '$0'", request_info->uri);
+    url_handler = &error_handler_;
+  } else {
+    url_handler = &it->second;
+  }
+
   MonotonicStopWatch sw;
   sw.Start();
 
+  // The output of this page is accumulated into this stringstream.
+  stringstream output;
+  if (!url_handler->use_templates()) {
+    content_type = PLAIN;
+    url_handler->raw_callback()(arguments, &output);
+  } else {
+    RenderUrlWithTemplate(arguments, *url_handler, &output, &content_type);
+  }
+
+  VLOG(3) << "Rendering page " << request_info->uri << " took "
+          << PrettyPrinter::Print(sw.ElapsedTime(), TUnit::CPU_TICKS);
+
+  const string& str = output.str();
+
+  const string& headers = BuildHeaderString(response, content_type);
+  sq_printf(connection, headers.c_str(), (int)str.length());
+
+  // Make sure to use sq_write for printing the body; sq_printf truncates at 8kb
+  sq_write(connection, str.c_str(), str.length());
+  return PROCESSING_COMPLETE;
+}
+
+void Webserver::RenderUrlWithTemplate(const ArgumentMap& arguments,
+    const UrlHandler& url_handler, stringstream* output, ContentType* content_type) {
   Document document;
   document.SetObject();
   GetCommonJson(&document);
 
-  bool send_html_headers = true;
-  // The output of this page is accumulated into this stringstream.
-  stringstream output;
   bool raw_json = (arguments.find("json") != arguments.end());
+  url_handler.callback()(arguments, &document);
   if (raw_json) {
     // Callbacks may optionally be rendered as a text-only, pretty-printed Json document
     // (mostly for debugging or integration with third-party tools).
     StringBuffer strbuf;
     PrettyWriter<StringBuffer> writer(strbuf);
-    it->second.callback()(arguments, &document);
     document.Accept(writer);
-    output << strbuf.GetString();
-    send_html_headers = false;
+    (*output) << strbuf.GetString();
+    *content_type = PLAIN;
   } else {
-    it->second.callback()(arguments, &document);
     if (arguments.find("raw") != arguments.end()) {
       document.AddMember(ENABLE_RAW_JSON_KEY, "true", document.GetAllocator());
     }
     if (document.HasMember(ENABLE_RAW_JSON_KEY)) {
-      send_html_headers = false;
+      *content_type = PLAIN;
     }
 
     const string& full_template_path =
         Substitute("$0/$1/$2", FLAGS_webserver_doc_root, DOC_FOLDER,
-            it->second.template_filename());
+            url_handler.template_filename());
     ifstream tmpl(full_template_path.c_str());
     if (!tmpl.is_open()) {
-      output << "Could not open template: " << full_template_path;
-      send_html_headers = false;
+      (*output) << "Could not open template: " << full_template_path;
+      *content_type = PLAIN;
     } else {
       stringstream buffer;
       buffer << tmpl.rdbuf();
       RenderTemplate(buffer.str(), Substitute("$0/", FLAGS_webserver_doc_root), document,
-          &output);
+          output);
     }
   }
-
-  VLOG(3) << "Rendering page " << request_info->uri << " took "
-          << PrettyPrinter::Print(sw.ElapsedTime(), TCounterType::CPU_TICKS);
-
-  const string& str = output.str();
-  // Without styling, render the page as plain text
-  if (send_html_headers) {
-    sq_printf(connection, "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html\r\n"
-        "Content-Length: %d\r\n"
-        "\r\n", (int)str.length());
-  } else {
-    sq_printf(connection, "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/plain\r\n"
-        "Content-Length: %d\r\n"
-        "\r\n", (int)str.length());
-  }
-
-  // Make sure to use sq_write for printing the body; sq_printf truncates at 8kb
-  sq_write(connection, str.c_str(), str.length());
-  return PROCESSING_COMPLETE;
 }
 
 void Webserver::RegisterUrlCallback(const string& path,
@@ -374,6 +456,15 @@ void Webserver::RegisterUrlCallback(const string& path,
 
   url_handlers_.insert(
       make_pair(path, UrlHandler(callback, template_filename, is_on_nav_bar)));
+}
+
+void Webserver::RegisterUrlCallback(const string& path, const RawUrlCallback& callback) {
+  upgrade_lock<shared_mutex> lock(url_handlers_lock_);
+  upgrade_to_unique_lock<shared_mutex> writer_lock(lock);
+  DCHECK(url_handlers_.find(path) == url_handlers_.end())
+      << "Duplicate Url handler for: " << path;
+
+  url_handlers_.insert(make_pair(path, UrlHandler(callback)));
 }
 
 }

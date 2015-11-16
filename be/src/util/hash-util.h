@@ -19,28 +19,21 @@
 #include "common/logging.h"
 #include "common/compiler-util.h"
 
-// For cross compiling with clang, we need to be able to generate an IR file with
-// no sse instructions.  Attempting to load a precompiled IR file that contains
-// unsupported instructions causes llvm to fail.  We need to use #defines to control
-// the code that is built and the runtime checks to control what code is run.
-#ifdef __SSE4_2__
-#include <nmmintrin.h>
-#endif
 #include "util/cpu-info.h"
+#include "util/sse-util.h"
 
 namespace impala {
 
-// Utility class to compute hash values.
+/// Utility class to compute hash values.
 class HashUtil {
  public:
-#ifdef __SSE4_2__
-  // Compute the Crc32 hash for data using SSE4 instructions.  The input hash parameter is
-  // the current hash/seed value.
-  // This should only be called if SSE is supported.
-  // This is ~4x faster than Fnv/Boost Hash.
-  // NOTE: Any changes made to this function need to be reflected in Codegen::GetHashFn.
-  // TODO: crc32 hashes with different seeds do not result in different hash functions.
-  // The resulting hashes are correlated.
+  /// Compute the Crc32 hash for data using SSE4 instructions.  The input hash parameter is
+  /// the current hash/seed value.
+  /// This should only be called if SSE is supported.
+  /// This is ~4x faster than Fnv/Boost Hash.
+  /// NOTE: Any changes made to this function need to be reflected in Codegen::GetHashFn.
+  /// TODO: crc32 hashes with different seeds do not result in different hash functions.
+  /// The resulting hashes are correlated.
   static uint32_t CrcHash(const void* data, int32_t bytes, uint32_t hash) {
     DCHECK(CpuInfo::IsSupported(CpuInfo::SSE4_2));
     uint32_t words = bytes / sizeof(uint32_t);
@@ -48,13 +41,13 @@ class HashUtil {
 
     const uint32_t* p = reinterpret_cast<const uint32_t*>(data);
     while (words--) {
-      hash = _mm_crc32_u32(hash, *p);
+      hash = SSE4_crc32_u32(hash, *p);
       ++p;
     }
 
     const uint8_t* s = reinterpret_cast<const uint8_t*>(p);
     while (bytes--) {
-      hash = _mm_crc32_u8(hash, *s);
+      hash = SSE4_crc32_u8(hash, *s);
       ++s;
     }
 
@@ -63,12 +56,11 @@ class HashUtil {
     hash = (hash << 16) | (hash >> 16);
     return hash;
   }
-#endif
 
   static const uint64_t MURMUR_PRIME = 0xc6a4a7935bd1e995;
   static const int MURMUR_R = 47;
 
-  // Murmur2 hash implementation returning 64-bit hashes.
+  /// Murmur2 hash implementation returning 64-bit hashes.
   static uint64_t MurmurHash2_64(const void* input, int len, uint64_t seed) {
     uint64_t h = seed ^ (len * MURMUR_PRIME);
 
@@ -102,21 +94,21 @@ class HashUtil {
     return h;
   }
 
-  // default values recommended by http://isthe.com/chongo/tech/comp/fnv/
+  /// default values recommended by http://isthe.com/chongo/tech/comp/fnv/
   static const uint32_t FNV_PRIME = 0x01000193; //   16777619
   static const uint32_t FNV_SEED = 0x811C9DC5; // 2166136261
   static const uint64_t FNV64_PRIME = 1099511628211UL;
   static const uint64_t FNV64_SEED = 14695981039346656037UL;
 
-  // Implementation of the Fowler–Noll–Vo hash function. This is not as performant
-  // as boost's hash on int types (2x slower) but has bit entropy.
-  // For ints, boost just returns the value of the int which can be pathological.
-  // For example, if the data is <1000, 2000, 3000, 4000, ..> and then the mod of 1000
-  // is taken on the hash, all values will collide to the same bucket.
-  // For string values, Fnv is slightly faster than boost.
-  // IMPORTANT: FNV hash suffers from poor diffusion of the least significant bit,
-  // which can lead to poor results when input bytes are duplicated.
-  // See FnvHash64to32() for how this can be mitigated.
+  /// Implementation of the Fowler–Noll–Vo hash function. This is not as performant
+  /// as boost's hash on int types (2x slower) but has bit entropy.
+  /// For ints, boost just returns the value of the int which can be pathological.
+  /// For example, if the data is <1000, 2000, 3000, 4000, ..> and then the mod of 1000
+  /// is taken on the hash, all values will collide to the same bucket.
+  /// For string values, Fnv is slightly faster than boost.
+  /// IMPORTANT: FNV hash suffers from poor diffusion of the least significant bit,
+  /// which can lead to poor results when input bytes are duplicated.
+  /// See FnvHash64to32() for how this can be mitigated.
   static uint64_t FnvHash64(const void* data, int32_t bytes, uint64_t hash) {
     const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
     while (bytes--) {
@@ -126,30 +118,43 @@ class HashUtil {
     return hash;
   }
 
-  // Return a 32-bit hash computed by invoking FNV-64 and folding the result to 32-bits.
-  // This technique is recommended instead of FNV-32 since the LSB of an FNV hash is the
-  // XOR of the LSBs of its input bytes, leading to poor results for duplicate inputs.
-  // The input seed 'hash' is duplicated so the top half of the seed is not all zero.
+  /// Return a 32-bit hash computed by invoking FNV-64 and folding the result to 32-bits.
+  /// This technique is recommended instead of FNV-32 since the LSB of an FNV hash is the
+  /// XOR of the LSBs of its input bytes, leading to poor results for duplicate inputs.
+  /// The input seed 'hash' is duplicated so the top half of the seed is not all zero.
+  /// Data length must be at least 1 byte: zero-length data should be handled separately,
+  /// for example using CombineHash with a unique constant value to avoid returning the
+  /// hash argument. Zero-length data gives terrible results: the initial hash value is
+  /// xored with itself cancelling all bits.
   static uint32_t FnvHash64to32(const void* data, int32_t bytes, uint32_t hash) {
+    // IMPALA-2270: this function should never be used for zero-byte inputs.
+    DCHECK_GT(bytes, 0);
     uint64_t hash_u64 = hash | ((uint64_t)hash << 32);
     hash_u64 = FnvHash64(data, bytes, hash_u64);
     return (hash_u64 >> 32) ^ (hash_u64 & 0xFFFFFFFF);
   }
 
-  // Computes the hash value for data.  Will call either CrcHash or MurmurHash depending on
-  // hardware capabilities.
-  // Seed values for different steps of the query execution should use different seeds
-  // to prevent accidental key collisions. (See IMPALA-219 for more details).
+  /// Computes the hash value for data.  Will call either CrcHash or MurmurHash depending on
+  /// hardware capabilities.
+  /// Seed values for different steps of the query execution should use different seeds
+  /// to prevent accidental key collisions. (See IMPALA-219 for more details).
   static uint32_t Hash(const void* data, int32_t bytes, uint32_t seed) {
-#ifdef __SSE4_2__
     if (LIKELY(CpuInfo::IsSupported(CpuInfo::SSE4_2))) {
       return CrcHash(data, bytes, seed);
     } else {
       return MurmurHash2_64(data, bytes, seed);
     }
-#else
-    return MurmurHash2_64(data, bytes, seed);
-#endif
+  }
+
+  /// The magic number (used in hash_combine()) 0x9e3779b9 = 2^32 / (golden ratio).
+  static const uint32_t HASH_COMBINE_SEED = 0x9e3779b9;
+
+  /// Combine hashes 'value' and 'seed' to get a new hash value.  Similar to
+  /// boost::hash_combine(), but for uint32_t. This function should be used with a
+  /// constant first argument to update the hash value for zero-length values such as
+  /// NULL, boolean, and empty strings.
+  static inline uint32_t HashCombine32(uint32_t value, uint32_t seed) {
+    return seed ^ (HASH_COMBINE_SEED + value + (seed << 6) + (seed >> 2));
   }
 
 };

@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2014 Cloudera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,7 +28,8 @@ class TestSpillStress(CustomClusterTestSuite):
   @classmethod
   def setup_class(cls):
     #start impala with args
-    cls._start_impala_cluster(['--impalad_args=--"read_size=1000000"'])
+    cls._start_impala_cluster(['--impalad_args=--"read_size=200000"',
+        'catalogd_args="--load_catalog_in_background=false"'])
     super(CustomClusterTestSuite, cls).setup_class()
 
   @classmethod
@@ -83,7 +83,8 @@ class TestSpilling(CustomClusterTestSuite):
   # Reduce the IO read size. This reduces the memory required to trigger spilling.
   @pytest.mark.execute_serially
   @CustomClusterTestSuite.with_args(
-      impalad_args="--read_size=1000000")
+      impalad_args="--read_size=200000",
+      catalogd_args="--load_catalog_in_background=false")
   def test_spilling(self, vector):
     new_vector = deepcopy(vector)
     # remove this. the test cases set this explicitly.

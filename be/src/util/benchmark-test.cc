@@ -16,11 +16,12 @@
 #include <stdio.h>
 #include <iostream>
 #include <gtest/gtest.h>
+
 #include "common/object-pool.h"
 #include "util/benchmark.h"
 #include "util/cpu-info.h"
 
-using namespace std;
+#include "common/names.h"
 
 // This is not much of a test but demonstrates how to use the Benchmark
 // utility.
@@ -47,7 +48,7 @@ void TestFunction(int batch_size, void* d) {
   }
 }
 
-TEST(BenchmarkTest, Basic) { 
+TEST(BenchmarkTest, Basic) {
   MemcpyData data;
   data.src = reinterpret_cast<char*>(malloc(128));
   data.dst = reinterpret_cast<char*>(malloc(128));
@@ -74,4 +75,3 @@ int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
-

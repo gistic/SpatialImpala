@@ -108,10 +108,16 @@ public class AggregationNode extends PlanNode {
     // distinct aggs place them in the 2nd phase agg node. The conjuncts are
     // transferred to the proper place in the multi-node plan via transferConjuncts().
     if (tupleIds_.get(0).equals(aggInfo_.getResultTupleId()) && !aggInfo_.isMerge()) {
-      // Ignore predicates bound to a group-by slot because those
-      // are already evaluated below this agg node (e.g., in a scan).
+      // Ignore predicates bound by a grouping slot produced by a SlotRef grouping expr.
+      // Those predicates are already evaluated below this agg node (e.g., in a scan),
+      // because the grouping slot must be in the same equivalence class as another slot
+      // below this agg node. We must not ignore other grouping slots in order to retain
+      // conjuncts bound by those grouping slots in createEquivConjuncts() (IMPALA-2089).
+      // Those conjuncts cannot be redundant because our equivalence classes do not
+      // capture dependencies with non-SlotRef exprs.
       Set<SlotId> groupBySlots = Sets.newHashSet();
       for (int i = 0; i < aggInfo_.getGroupingExprs().size(); ++i) {
+        if (aggInfo_.getGroupingExprs().get(i).unwrapSlotRef(true) == null) continue;
         groupBySlots.add(aggInfo_.getOutputTupleDesc().getSlots().get(i).getId());
       }
       ArrayList<Expr> bindingPredicates =
@@ -121,7 +127,7 @@ public class AggregationNode extends PlanNode {
       // also add remaining unassigned conjuncts_
       assignConjuncts(analyzer);
 
-      analyzer.enforceSlotEquivalences(tupleIds_.get(0), conjuncts_, groupBySlots);
+      analyzer.createEquivConjuncts(tupleIds_.get(0), conjuncts_, groupBySlots);
     }
     // Compute the mem layout for both tuples here for simplicity.
     aggInfo_.getOutputTupleDesc().computeMemLayout();
@@ -152,7 +158,10 @@ public class AggregationNode extends PlanNode {
     // of that table (so that when we're grouping by the primary key col plus
     // some others, the estimate doesn't overshoot dramatically)
     // cardinality: product of # of distinct values produced by grouping exprs
-    cardinality_ = Expr.getNumDistinctValues(aggInfo_.getGroupingExprs());
+
+    // Any non-grouping aggregation has at least one distinct value
+    cardinality_ = aggInfo_.getGroupingExprs().isEmpty() ? 1 :
+      Expr.getNumDistinctValues(aggInfo_.getGroupingExprs());
     // take HAVING predicate into account
     LOG.trace("Agg: cardinality=" + Long.toString(cardinality_));
     if (cardinality_ > 0) {
@@ -256,6 +265,6 @@ public class AggregationNode extends PlanNode {
       perHostCardinality = Math.min(perHostCardinality, cardinality_);
     }
     perHostMemCost_ += Math.max(perHostCardinality * avgRowSize_ *
-        Planner.HASH_TBL_SPACE_OVERHEAD, MIN_HASH_TBL_MEM);
+        PlannerContext.HASH_TBL_SPACE_OVERHEAD, MIN_HASH_TBL_MEM);
   }
 }

@@ -22,14 +22,14 @@
 
 namespace impala {
 
-// Runtime counters have a two-phase lifecycle - creation and update. This is not
-// convenient for debugging where we would like to add and remove counters with a minimum
-// of boilerplate. This header adds a global debug runtime profile, and macros to
-// update-or-create counters in one line of code. Counters created this way are not
-// intended to remain in the code; they are a tool for identifying hotspots without having
-// to run a full profiler.
-// The AddCounter call adds some more overhead to each macro, and therefore they  
-// should not be used where minimal impact on performance is needed. 
+/// Runtime counters have a two-phase lifecycle - creation and update. This is not
+/// convenient for debugging where we would like to add and remove counters with a minimum
+/// of boilerplate. This header adds a global debug runtime profile, and macros to
+/// update-or-create counters in one line of code. Counters created this way are not
+/// intended to remain in the code; they are a tool for identifying hotspots without having
+/// to run a full profiler.
+/// The AddCounter call adds some more overhead to each macro, and therefore they
+/// should not be used where minimal impact on performance is needed.
 class DebugRuntimeProfile {
  public:
   static RuntimeProfile& profile() {
@@ -42,15 +42,15 @@ class DebugRuntimeProfile {
 
 #define DEBUG_SCOPED_TIMER(counter_name) \
   COUNTER_SCOPED_TIMER(DebugRuntimeProfile::profile().AddCounter(counter_name, \
-    TCounterType::CPU_TICKS))
+    TUnit::CPU_TICKS))
 
 #define DEBUG_COUNTER_ADD(counter_name, v) \
   COUNTER_ADD(DebugRuntimeProfile::profile().AddCounter(counter_name, \
-    TCounterType::UNIT), v)
+    TUnit::UNIT), v)
 
 #define DEBUG_COUNTER_SET(counter_name, v) \
   COUNTER_SET(DebugRuntimeProfile::profile().AddCounter(counter_name, \
-    TCounterType::UNIT), v)
+    TUnit::UNIT), v)
 
 #define PRETTY_PRINT_DEBUG_COUNTERS(ostream_ptr) \
   DebugRuntimeProfile::profile().PrettyPrint(ostream_ptr)

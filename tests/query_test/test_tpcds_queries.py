@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # Functional tests running the TPC-DS workload
 #
@@ -71,6 +70,9 @@ class TestTpcdsQuery(ImpalaTestSuite):
   def test_tpcds_q59(self, vector):
     self.run_test_case('tpcds-q59', vector)
 
+  def test_tpcds_q61(self, vector):
+    self.run_test_case('tpcds-q61', vector)
+
   def test_tpcds_q63(self, vector):
     self.run_test_case('tpcds-q63', vector)
 
@@ -85,6 +87,9 @@ class TestTpcdsQuery(ImpalaTestSuite):
 
   def test_tpcds_q79(self, vector):
     self.run_test_case('tpcds-q79', vector)
+
+  def test_tpcds_q88(self, vector):
+    self.run_test_case('tpcds-q88', vector)
 
   def test_tpcds_q89(self, vector):
     self.run_test_case('tpcds-q89', vector)

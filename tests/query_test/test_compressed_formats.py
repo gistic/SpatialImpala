@@ -1,11 +1,14 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 
+import os
 import pytest
+import random
+import subprocess
 from os.path import join
 from subprocess import call
 from tests.common.test_vector import *
 from tests.common.impala_test_suite import *
+from tests.common.skip import SkipIfS3, SkipIfIsilon
 
 # (file extension, table suffix) pairs
 compression_formats = [
@@ -15,6 +18,11 @@ compression_formats = [
   ('.snappy',  'snap'),
  ]
 
+
+# Missing Coverage: Compressed data written by Hive is queriable by Impala on a non-hdfs
+# filesystem.
+@SkipIfS3.hive
+@SkipIfIsilon.hive
 class TestCompressedFormats(ImpalaTestSuite):
   """
   Tests that we support compressed RC, sequence and text files and that unsupported
@@ -45,14 +53,14 @@ class TestCompressedFormats(ImpalaTestSuite):
     if file_format in ['rc', 'seq']:
       # Test that compressed RC/sequence files are supported.
       db_suffix = '_%s_%s' % (file_format, suffix)
-      self.__copy_and_query_compressed_file(
+      self._copy_and_query_compressed_file(
        'tinytable', db_suffix, suffix, '000000_0', extension)
     elif file_format is 'text':
       # TODO: How about LZO?
       if suffix in ['gzip', 'snap', 'bzip']:
         # Test that {gzip,snappy,bzip}-compressed text files are supported.
         db_suffix = '_%s_%s' % (file_format, suffix)
-        self.__copy_and_query_compressed_file(
+        self._copy_and_query_compressed_file(
           'tinytable', db_suffix, suffix, '000000_0', extension)
       else:
         # Deflate-compressed (['def']) text files (or at least text files with a
@@ -62,7 +70,7 @@ class TestCompressedFormats(ImpalaTestSuite):
       assert False, "Unknown file_format: %s" % file_format
 
   # TODO: switch to using hive metastore API rather than hive shell.
-  def __copy_and_query_compressed_file(self, table_name, db_suffix, compression_codec,
+  def _copy_and_query_compressed_file(self, table_name, db_suffix, compression_codec,
                                      file_name, extension, expected_error=None):
     # We want to create a test table with a compressed file that has a file
     # extension. We'll do this by making a copy of an existing table with hive.
@@ -102,6 +110,7 @@ class TestCompressedFormats(ImpalaTestSuite):
       call(["hive", "-e", drop_cmd]);
 
 
+@SkipIfS3.insert
 class TestTableWriters(ImpalaTestSuite):
   @classmethod
   def get_workload(cls):
@@ -111,10 +120,17 @@ class TestTableWriters(ImpalaTestSuite):
   def add_test_dimensions(cls):
     super(TestTableWriters, cls).add_test_dimensions()
     cls.TestMatrix.add_dimension(create_single_exec_option_dimension())
+    # This class tests many formats, but doesn't use the contraints
+    # Each format is tested within one test file, we constrain to text/none
+    # as each test file only needs to be run once.
+    cls.TestMatrix.add_constraint(lambda v:
+        (v.get_value('table_format').file_format =='text' and
+        v.get_value('table_format').compression_codec == 'none'))
 
   def test_seq_writer(self, vector):
-    # TODO debug this test, temporarily disabled. Some issue with zlib on some
-    # of the cluster machines.
+    # TODO debug this test, same as seq writer.
+    # This caused by a zlib failure. Suspected cause is too small a buffer
+    # passed to zlib for compression; similar to IMPALA-424
     pytest.skip()
     self.run_test_case('QueryTest/seq-writer', vector)
 
@@ -125,3 +141,78 @@ class TestTableWriters(ImpalaTestSuite):
     # TODO debug this test, same as seq writer.
     pytest.skip()
     self.run_test_case('QueryTest/text-writer', vector)
+
+@SkipIfS3.insert
+@pytest.mark.execute_serially
+class TestLargeCompressedFile(ImpalaTestSuite):
+  """ Tests that we gracefully handle when a compressed file in HDFS is larger
+  than 1GB.
+  This test creates a testing data file that is over 1GB and loads it to a table.
+  Then verifies Impala will gracefully fail the query.
+  TODO: Once IMPALA-1619 is fixed, modify the test to test > 2GB file."""
+
+  TABLE_NAME = "large_compressed_file"
+  TABLE_LOCATION = "/test-warehouse/large_compressed_file"
+  """ Name the file with ".snappy" extension to let scanner treat it
+  as a snappy compressed file."""
+  FILE_NAME = "largefile.snappy"
+  LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  MAX_FILE_SIZE = 1024 * 1024 * 1024
+
+  @classmethod
+  def get_workload(self):
+    return 'functional-query'
+
+  @classmethod
+  def add_test_dimensions(cls):
+    super(TestLargeCompressedFile, cls).add_test_dimensions()
+
+    if cls.exploration_strategy() != 'exhaustive':
+      pytest.skip("skipping if it's not exhaustive test.")
+    cls.TestMatrix.add_constraint(lambda v:
+        (v.get_value('table_format').file_format =='text' and
+        v.get_value('table_format').compression_codec == 'none'))
+
+  def teardown_method(self, method):
+    self.__drop_test_table()
+
+  def __gen_char_or_num(self):
+    return random.choice(self.LETTERS)
+
+  def __generate_file(self, file_name, file_size):
+    """Generate file with random data and a specified size."""
+    s = ''
+    for j in range(1024):
+      s = s + self.__gen_char_or_num()
+    put = subprocess.Popen(["hadoop", "fs", "-put", "-f", "-", file_name],
+                           stdin=subprocess.PIPE, bufsize=-1)
+    remain = file_size % 1024
+    for i in range(int(file_size / 1024)):
+      put.stdin.write(s)
+    put.stdin.write(s[0:remain])
+    put.stdin.close()
+    put.wait()
+
+  def test_query_large_file(self, vector):
+    self.__create_test_table();
+    dst_path = "%s/%s" % (self.TABLE_LOCATION, self.FILE_NAME)
+    file_size = self.MAX_FILE_SIZE + 1
+    self.__generate_file(dst_path, file_size)
+    self.client.execute("refresh %s" % self.TABLE_NAME)
+
+    # Query the table and check for expected error.
+    expected_error = 'Requested buffer size %dB > 1GB' % file_size
+    try:
+      result = self.client.execute("select * from %s limit 1" % self.TABLE_NAME)
+      assert False, "Query was expected to fail"
+    except Exception as e:
+      error_msg = str(e)
+      assert expected_error in error_msg
+
+  def __create_test_table(self):
+    self.__drop_test_table()
+    self.client.execute("CREATE TABLE %s (col string) LOCATION '%s'"
+      % (self.TABLE_NAME, self.TABLE_LOCATION))
+
+  def __drop_test_table(self):
+    self.client.execute("DROP TABLE IF EXISTS %s" % self.TABLE_NAME)

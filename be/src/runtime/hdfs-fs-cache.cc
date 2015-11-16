@@ -15,14 +15,17 @@
 #include "runtime/hdfs-fs-cache.h"
 
 #include <boost/thread/locks.hpp>
+#include <gutil/strings/substitute.h>
 
 #include "common/logging.h"
 #include "util/debug-util.h"
 #include "util/error-util.h"
+#include "util/hdfs-util.h"
 #include "util/test-info.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
+using namespace strings;
 
 namespace impala {
 
@@ -33,34 +36,77 @@ void HdfsFsCache::Init() {
   HdfsFsCache::instance_.reset(new HdfsFsCache());
 }
 
-hdfsFS HdfsFsCache::GetConnection(const string& host, int port) {
-  lock_guard<mutex> l(lock_);
-  HdfsFsMap::iterator i = fs_map_.find(make_pair(host, port));
-  if (i == fs_map_.end()) {
-    hdfsBuilder* hdfs_builder = hdfsNewBuilder();
-    if (!host.empty()) {
-      hdfsBuilderSetNameNode(hdfs_builder, host.c_str());
-    } else {
-      // Connect to local filesystem
-      hdfsBuilderSetNameNode(hdfs_builder, NULL);
+Status HdfsFsCache::GetConnection(const string& path, hdfsFS* fs,
+    HdfsFsMap* local_cache) {
+  string err;
+  const string& namenode = GetNameNodeFromPath(path, &err);
+  if (!err.empty()) return Status(err);
+  DCHECK(!namenode.empty());
+
+  // First, check the local cache to avoid taking the global lock.
+  if (local_cache != NULL) {
+    HdfsFsMap::iterator local_iter = local_cache->find(namenode);
+    if (local_iter != local_cache->end()) {
+      *fs = local_iter->second;
+      return Status::OK();
     }
-    hdfsBuilderSetNameNodePort(hdfs_builder, port);
-    hdfsFS conn = hdfsBuilderConnect(hdfs_builder);
-    DCHECK(conn != NULL);
-    fs_map_.insert(make_pair(make_pair(host, port), conn));
-    return conn;
-  } else {
-    return i->second;
   }
+  // Otherwise, check the global cache.
+  {
+    lock_guard<mutex> l(lock_);
+    HdfsFsMap::iterator i = fs_map_.find(namenode);
+    if (i == fs_map_.end()) {
+      hdfsBuilder* hdfs_builder = hdfsNewBuilder();
+      hdfsBuilderSetNameNode(hdfs_builder, namenode.c_str());
+      *fs = hdfsBuilderConnect(hdfs_builder);
+      if (*fs == NULL) {
+        return Status(GetHdfsErrorMsg("Failed to connect to FS: ", namenode));
+      }
+      fs_map_.insert(make_pair(namenode, *fs));
+    } else {
+      *fs = i->second;
+    }
+  }
+  DCHECK(*fs != NULL);
+  // Populate the local cache for the next lookup.
+  if (local_cache != NULL) {
+    local_cache->insert(make_pair(namenode, *fs));
+  }
+  return Status::OK();
 }
 
-hdfsFS HdfsFsCache::GetDefaultConnection() {
-  // "default" uses the default NameNode configuration from the XML configuration files.
-  return GetConnection("default", 0);
+Status HdfsFsCache::GetLocalConnection(hdfsFS* fs) {
+  return GetConnection("file:///", fs);
 }
 
-hdfsFS HdfsFsCache::GetLocalConnection() {
-  return GetConnection("", 0);
+string HdfsFsCache::GetNameNodeFromPath(const string& path, string* err) {
+  string namenode;
+  const string local_fs("file:/");
+  size_t n = path.find("://");
+
+  err->clear();
+  if (n == string::npos) {
+    if (path.compare(0, local_fs.length(), local_fs) == 0) {
+      // Hadoop Path routines strip out consecutive /'s, so recognize 'file:/blah'.
+      namenode = "file:///";
+    } else {
+      // Path is not qualified, so use the default FS.
+      namenode = "default";
+    }
+  } else if (n == 0) {
+    *err = Substitute("Path missing scheme: $0", path);
+  } else {
+    // Path is qualified, i.e. "scheme://authority/path/to/file".  Extract
+    // "scheme://authority/".
+    n = path.find('/', n + 3);
+    if (n == string::npos) {
+      *err = Substitute("Path missing '/' after authority: $0", path);
+    } else {
+      // Include the trailing '/' for local filesystem case, i.e. "file:///".
+      namenode = path.substr(0, n + 1);
+    }
+  }
+  return namenode;
 }
 
 }

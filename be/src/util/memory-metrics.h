@@ -18,6 +18,7 @@
 #include "util/metrics.h"
 
 #include <boost/thread/mutex.hpp>
+#include <boost/bind.hpp>
 #include <google/malloc_extension.h>
 
 #include "util/debug-util.h"
@@ -27,75 +28,76 @@ namespace impala {
 
 class Thread;
 
-// Specialised metric which exposes numeric properties from tcmalloc.
-class TcmallocMetric : public Metrics::PrimitiveMetric<uint64_t> {
+/// Specialised metric which exposes numeric properties from tcmalloc.
+class TcmallocMetric : public UIntGauge {
  public:
-  // Number of bytes allocated by tcmalloc, currently used by the application.
+  /// Number of bytes allocated by tcmalloc, currently used by the application.
   static TcmallocMetric* BYTES_IN_USE;
 
-  // Number of bytes of system memory reserved by tcmalloc, including that in use by the
-  // application. Does not include what tcmalloc accounts for as 'malloc metadata' in
-  // /memz. That is, this is memory reserved by tcmalloc that the application can use.
-  // Includes unmapped virtual memory.
+  /// Number of bytes of system memory reserved by tcmalloc, including that in use by the
+  /// application. Does not include what tcmalloc accounts for as 'malloc metadata' in
+  /// /memz. That is, this is memory reserved by tcmalloc that the application can use.
+  /// Includes unmapped virtual memory.
   static TcmallocMetric* TOTAL_BYTES_RESERVED;
 
-  // Number of bytes reserved and still mapped by tcmalloc that are not allocated to the
-  // application.
+  /// Number of bytes reserved and still mapped by tcmalloc that are not allocated to the
+  /// application.
   static TcmallocMetric* PAGEHEAP_FREE_BYTES;
 
-  // Number of bytes once reserved by tcmalloc, but released back to the operating system
-  // so that their use incurs a pagefault. Contributes to the total amount of virtual
-  // address space used, but not to the physical memory usage.
+  /// Number of bytes once reserved by tcmalloc, but released back to the operating system
+  /// so that their use incurs a pagefault. Contributes to the total amount of virtual
+  /// address space used, but not to the physical memory usage.
   static TcmallocMetric* PAGEHEAP_UNMAPPED_BYTES;
 
-  // Derived metric computing the amount of physical memory (in bytes) used by the
-  // process, including that actually in use and free bytes reserved by tcmalloc. Does not
-  // include the tcmalloc metadata.
-  class PhysicalBytesMetric : public Metrics::PrimitiveMetric<uint64_t> {
+  /// Derived metric computing the amount of physical memory (in bytes) used by the
+  /// process, including that actually in use and free bytes reserved by tcmalloc. Does not
+  /// include the tcmalloc metadata.
+  class PhysicalBytesMetric : public UIntGauge {
    public:
-    PhysicalBytesMetric(const std::string& key)
-        : Metrics::PrimitiveMetric<uint64_t>(key, 0) { }
+    PhysicalBytesMetric(const TMetricDef& def) : UIntGauge(def, 0) { }
 
    private:
     virtual void CalculateValue() {
       value_ = TOTAL_BYTES_RESERVED->value() - PAGEHEAP_UNMAPPED_BYTES->value();
     }
-
-    virtual void PrintValue(std::stringstream* out) {
-      (*out) << PrettyPrinter::Print(value_, TCounterType::BYTES);
-    }
   };
 
   static PhysicalBytesMetric* PHYSICAL_BYTES_RESERVED;
 
-  TcmallocMetric(const std::string& key, const std::string& tcmalloc_var)
-      : Metrics::PrimitiveMetric<uint64_t>(key, 0), tcmalloc_var_(tcmalloc_var) { }
+  static TcmallocMetric* CreateAndRegister(MetricGroup* metrics, const std::string& key,
+      const std::string& tcmalloc_var);
 
  private:
-  // Name of the tcmalloc property this metric should fetch.
+  /// Name of the tcmalloc property this metric should fetch.
   const std::string tcmalloc_var_;
 
-  virtual void CalculateValue() {
-    MallocExtension::instance()->GetNumericProperty(tcmalloc_var_.c_str(), &value_);
-  }
+  TcmallocMetric(const TMetricDef& def, const std::string& tcmalloc_var)
+      : UIntGauge(def, 0), tcmalloc_var_(tcmalloc_var) { }
 
-  virtual void PrintValue(std::stringstream* out) {
-    (*out) << PrettyPrinter::Print(value_, TCounterType::BYTES);
+  virtual void CalculateValue() {
+#ifndef ADDRESS_SANITIZER
+    MallocExtension::instance()->GetNumericProperty(tcmalloc_var_.c_str(), &value_);
+#endif
   }
 };
 
-// A JvmMetric corresponds to one value drawn from one 'memory pool' in the JVM. A memory
-// pool is an area of memory assigned for one particular aspect of memory management. For
-// example Hotspot has pools for the permanent generation, the old generation, survivor
-// space, code cache and permanently tenured objects.
-class JvmMetric : public Metrics::PrimitiveMetric<uint64_t> {
+/// A JvmMetric corresponds to one value drawn from one 'memory pool' in the JVM. A memory
+/// pool is an area of memory assigned for one particular aspect of memory management. For
+/// example Hotspot has pools for the permanent generation, the old generation, survivor
+/// space, code cache and permanently tenured objects.
+class JvmMetric : public IntGauge {
  public:
-  // Registers many Jvm memory metrics: one for every member of JvmMetricType for each
-  // pool (usually ~5 pools plus a synthetic 'total' pool).
-  static Status InitMetrics(Metrics* metrics);
+  /// Registers many Jvm memory metrics: one for every member of JvmMetricType for each
+  /// pool (usually ~5 pools plus a synthetic 'total' pool).
+  static Status InitMetrics(MetricGroup* metrics);
+
+ protected:
+  /// Searches through jvm_metrics_response_ for a matching memory pool and pulls out the
+  /// right value from that structure according to metric_type_.
+  virtual void CalculateValue();
 
  private:
-  // Each names one of the fields in TJvmMemoryPool.
+  /// Each names one of the fields in TJvmMemoryPool.
   enum JvmMetricType {
     MAX,
     INIT,
@@ -107,29 +109,23 @@ class JvmMetric : public Metrics::PrimitiveMetric<uint64_t> {
     PEAK_CURRENT
   };
 
-  // Private constructor to ensure only InitMetrics() can create JvmMetrics.
-  JvmMetric(const std::string& key, const std::string& mempool_name, JvmMetricType type);
+  static JvmMetric* CreateAndRegister(MetricGroup* metrics, const std::string& key,
+      const std::string& pool_name, JvmMetric::JvmMetricType type);
 
-  // Searches through jvm_metrics_response_ for a matching memory pool and pulls out the
-  // right value from that structure according to metric_type_.
-  virtual void CalculateValue();
+  /// Private constructor to ensure only InitMetrics() can create JvmMetrics.
+  JvmMetric(const TMetricDef& def, const std::string& mempool_name, JvmMetricType type);
 
-  // Override to ensure value is pretty-printed as bytes.
-  virtual void PrintValue(std::stringstream* out) {
-    (*out) << PrettyPrinter::Print(value_, TCounterType::BYTES);
-  }
-
-  // The name of the memory pool, defined by the Jvm.
+  /// The name of the memory pool, defined by the Jvm.
   std::string mempool_name_;
 
-  // Each metric corresponds to one value; this tells us which value from the memory pool
-  // that is.
+  /// Each metric corresponds to one value; this tells us which value from the memory pool
+  /// that is.
   JvmMetricType metric_type_;
 };
 
-// Registers common tcmalloc memory metrics. If register_jvm_metrics is true, the JVM
-// memory metrics are also registered.
-Status RegisterMemoryMetrics(Metrics* metrics, bool register_jvm_metrics);
+/// Registers common tcmalloc memory metrics. If register_jvm_metrics is true, the JVM
+/// memory metrics are also registered.
+Status RegisterMemoryMetrics(MetricGroup* metrics, bool register_jvm_metrics);
 
 }
 

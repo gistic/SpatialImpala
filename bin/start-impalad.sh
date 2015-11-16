@@ -72,13 +72,24 @@ IMPALA_CMD=${BINARY_BASE_DIR}/${BUILD_TYPE}/${BINARY}
 set +u
 # Optionally enable Java debugging.
 if [ -n "$JVM_DEBUG_PORT" ]; then
-  export JAVA_TOOL_OPTIONS="-agentlib:jdwp=transport=dt_socket,address=localhost:${JVM_DEBUG_PORT},server=y,suspend=${JVM_SUSPEND} ${JAVA_TOOL_OPTIONS}"
+  export JAVA_TOOL_OPTIONS="-agentlib:jdwp=transport=dt_socket,address=${JVM_DEBUG_PORT},server=y,suspend=${JVM_SUSPEND} ${JAVA_TOOL_OPTIONS}"
 fi
 # Optionally add additional JVM args.
 if [ -n "$JVM_ARGS" ]; then
   export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS} ${JVM_ARGS}"
 fi
-set -u
+
+# If Kerberized, source appropriate vars and set startup options
+if ${CLUSTER_DIR}/admin is_kerberized; then
+  . ${MINIKDC_ENV}
+  IMPALAD_ARGS="${IMPALAD_ARGS} -principal=${MINIKDC_PRINC_IMPALA}"
+  IMPALAD_ARGS="${IMPALAD_ARGS} -be_principal=${MINIKDC_PRINC_IMPALA_BE}"
+  IMPALAD_ARGS="${IMPALAD_ARGS} -keytab_file=${KRB5_KTNAME}"
+  IMPALAD_ARGS="${IMPALAD_ARGS} -krb5_conf=${KRB5_CONFIG}"
+  if [ "${MINIKDC_DEBUG}" = "true" ]; then
+      IMPALAD_ARGS="${IMPALAD_ARGS} -krb5_debug_file=/tmp/impalad.krb5_debug"
+  fi
+fi
 
 . ${IMPALA_HOME}/bin/set-classpath.sh
 exec ${GDB_PREFIX} ${IMPALA_CMD} ${IMPALAD_ARGS}

@@ -18,18 +18,21 @@ import java.util.ArrayList;
 
 import com.cloudera.impala.analysis.Analyzer;
 import com.cloudera.impala.analysis.TupleId;
-import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TPlanNode;
 import com.cloudera.impala.thrift.TPlanNodeType;
+import com.google.common.base.Preconditions;
 
 /**
- * Node that returns an empty result set. Used for planning query blocks with
- * a constant predicate evaluating to false or a limit 0.
+ * Node that returns an empty result set. Used for planning query blocks with a constant
+ * predicate evaluating to false or a limit 0. The result set will have zero rows, but
+ * the row descriptor must still include a materialized tuple so that the backend can
+ * construct a valid row empty batch.
  */
 public class EmptySetNode extends PlanNode {
   public EmptySetNode(PlanNodeId id, ArrayList<TupleId> tupleIds) {
     super(id, tupleIds, "EMPTYSET");
+    Preconditions.checkArgument(tupleIds.size() > 0);
   }
 
   @Override
@@ -41,7 +44,12 @@ public class EmptySetNode extends PlanNode {
   }
 
   @Override
-  public void init(Analyzer analyzer) throws InternalException {
+  public void init(Analyzer analyzer) {
+    // If the physical output tuple produced by an AnalyticEvalNode wasn't created
+    // the logical output tuple is returned by getMaterializedTupleIds(). It needs
+    // to be set as materialized (even though it isn't) to avoid failing precondition
+    // checks generating the thrift for slot refs that may reference this tuple.
+    for (TupleId id: tupleIds_) analyzer.getTupleDesc(id).setIsMaterialized(true);
     computeMemLayout(analyzer);
     computeStats(analyzer);
   }

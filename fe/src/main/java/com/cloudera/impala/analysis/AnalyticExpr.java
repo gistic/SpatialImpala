@@ -15,6 +15,7 @@
 package com.cloudera.impala.analysis;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,6 +27,7 @@ import com.cloudera.impala.analysis.AnalyticWindow.BoundaryType;
 import com.cloudera.impala.catalog.AggregateFunction;
 import com.cloudera.impala.catalog.Function;
 import com.cloudera.impala.catalog.Type;
+import com.cloudera.impala.catalog.ScalarType;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.common.TreeNode;
@@ -83,6 +85,13 @@ public class AnalyticExpr extends Expr {
   private static String ROWNUMBER = "row_number";
   private static String MIN = "min";
   private static String MAX = "max";
+  private static String PERCENT_RANK = "percent_rank";
+  private static String CUME_DIST = "cume_dist";
+  private static String NTILE = "ntile";
+
+  // Internal function used to implement FIRST_VALUE with a window rewrite and
+  // additional null handling in the backend.
+  public static String FIRST_VALUE_REWRITE = "first_value_rewrite";
 
   public AnalyticExpr(FunctionCallExpr fnCall, List<Expr> partitionExprs,
       List<OrderByElement> orderByElements, AnalyticWindow window) {
@@ -176,9 +185,13 @@ public class AnalyticExpr extends Expr {
   protected void toThrift(TExprNode msg) {
   }
 
-  public static boolean isAnalyticFn(Function fn) {
+  private static boolean isAnalyticFn(Function fn) {
     return fn instanceof AggregateFunction
         && ((AggregateFunction) fn).isAnalyticFn();
+  }
+
+  private static boolean isAnalyticFn(Function fn, String fnName) {
+    return isAnalyticFn(fn) && fn.functionName().equals(fnName);
   }
 
   public static boolean isAggregateFn(Function fn) {
@@ -186,21 +199,167 @@ public class AnalyticExpr extends Expr {
         && ((AggregateFunction) fn).isAggregateFn();
   }
 
+  public static boolean isPercentRankFn(Function fn) {
+    return isAnalyticFn(fn, PERCENT_RANK);
+  }
+
+  public static boolean isCumeDistFn(Function fn) {
+    return isAnalyticFn(fn, CUME_DIST);
+  }
+
+  public static boolean isNtileFn(Function fn) {
+    return isAnalyticFn(fn, NTILE);
+  }
+
   static private boolean isOffsetFn(Function fn) {
-    if (!isAnalyticFn(fn)) return false;
-    return fn.functionName().equals(LEAD) || fn.functionName().equals(LAG);
+    return isAnalyticFn(fn, LEAD) || isAnalyticFn(fn, LAG);
   }
 
   static private boolean isMinMax(Function fn) {
-    if (!isAnalyticFn(fn)) return false;
-    return fn.functionName().equals(MIN) || fn.functionName().equals(MAX);
+    return isAnalyticFn(fn, MIN) || isAnalyticFn(fn, MAX);
   }
 
   static private boolean isRankingFn(Function fn) {
-    if (!isAnalyticFn(fn)) return false;
-    return fn.functionName().equals(RANK)
-        || fn.functionName().equals(DENSERANK)
-        || fn.functionName().equals(ROWNUMBER);
+    return isAnalyticFn(fn, RANK) || isAnalyticFn(fn, DENSERANK) ||
+        isAnalyticFn(fn, ROWNUMBER);
+  }
+
+  /**
+   * Rewrite the following analytic functions:
+   * percent_rank(), cume_dist() and ntile()
+   *
+   * Returns a new Expr if the analytic expr is rewritten, returns null if it's not one
+   * that we want to rewrite.
+   */
+  public static Expr rewrite(AnalyticExpr analyticExpr) {
+    Function fn = analyticExpr.getFnCall().getFn();
+    if (AnalyticExpr.isPercentRankFn(fn)) {
+      return createPercentRank(analyticExpr);
+    } else if (AnalyticExpr.isCumeDistFn(fn)) {
+      return createCumeDist(analyticExpr);
+    } else if (AnalyticExpr.isNtileFn(fn)) {
+      return createNtile(analyticExpr);
+    }
+    return null;
+  }
+
+  /**
+   * Rewrite percent_rank() to the following:
+   *
+   * percent_rank() over([partition by clause] order by clause)
+   *    = (Count == 1) ? 0:(Rank - 1)/(Count - 1)
+   * where,
+   *  Rank = rank() over([partition by clause] order by clause)
+   *  Count = count() over([partition by clause])
+   */
+  private static Expr createPercentRank(AnalyticExpr analyticExpr) {
+    Preconditions.checkState(
+        AnalyticExpr.isPercentRankFn(analyticExpr.getFnCall().getFn()));
+
+    NumericLiteral zero = new NumericLiteral(BigInteger.valueOf(0), ScalarType.BIGINT);
+    NumericLiteral one = new NumericLiteral(BigInteger.valueOf(1), ScalarType.BIGINT);
+    AnalyticExpr countExpr = create("count", analyticExpr, false, false);
+    AnalyticExpr rankExpr = create("rank", analyticExpr, true, false);
+
+    ArithmeticExpr arithmeticRewrite =
+      new ArithmeticExpr(ArithmeticExpr.Operator.DIVIDE,
+        new ArithmeticExpr(ArithmeticExpr.Operator.SUBTRACT, rankExpr, one),
+        new ArithmeticExpr(ArithmeticExpr.Operator.SUBTRACT, countExpr, one));
+
+    List<Expr> ifParams = Lists.newArrayList();
+    ifParams.add(
+      new BinaryPredicate(BinaryPredicate.Operator.EQ, one, countExpr));
+    ifParams.add(zero);
+    ifParams.add(arithmeticRewrite);
+    FunctionCallExpr resultantRewrite = new FunctionCallExpr("if", ifParams);
+
+    return resultantRewrite;
+  }
+
+  /**
+   * Rewrite cume_dist() to the following:
+   *
+   * cume_dist() over([partition by clause] order by clause)
+   *    = ((Count - Rank) + 1)/Count
+   * where,
+   *  Rank = rank() over([partition by clause] order by clause DESC)
+   *  Count = count() over([partition by clause])
+   */
+  private static Expr createCumeDist(AnalyticExpr analyticExpr) {
+    Preconditions.checkState(
+        AnalyticExpr.isCumeDistFn(analyticExpr.getFnCall().getFn()));
+    AnalyticExpr rankExpr = create("rank", analyticExpr, true, true);
+    AnalyticExpr countExpr = create("count", analyticExpr, false, false);
+    NumericLiteral one = new NumericLiteral(BigInteger.valueOf(1), ScalarType.BIGINT);
+    ArithmeticExpr arithmeticRewrite =
+        new ArithmeticExpr(ArithmeticExpr.Operator.DIVIDE,
+          new ArithmeticExpr(ArithmeticExpr.Operator.ADD,
+            new ArithmeticExpr(ArithmeticExpr.Operator.SUBTRACT, countExpr, rankExpr),
+          one),
+        countExpr);
+    return arithmeticRewrite;
+  }
+
+  /**
+   * Rewrite ntile() to the following:
+   *
+   * ntile(B) over([partition by clause] order by clause)
+   *    = floor(min(Count, B) * (RowNumber - 1)/Count) + 1
+   * where,
+   *  RowNumber = row_number() over([partition by clause] order by clause)
+   *  Count = count() over([partition by clause])
+   */
+  private static Expr createNtile(AnalyticExpr analyticExpr) {
+    Preconditions.checkState(
+        AnalyticExpr.isNtileFn(analyticExpr.getFnCall().getFn()));
+    Expr bucketExpr = analyticExpr.getChild(0);
+    AnalyticExpr rowNumExpr = create("row_number", analyticExpr, true, false);
+    AnalyticExpr countExpr = create("count", analyticExpr, false, false);
+
+    List<Expr> ifParams = Lists.newArrayList();
+    ifParams.add(
+        new BinaryPredicate(BinaryPredicate.Operator.LT, bucketExpr, countExpr));
+    ifParams.add(bucketExpr);
+    ifParams.add(countExpr);
+
+    NumericLiteral one = new NumericLiteral(BigInteger.valueOf(1), ScalarType.BIGINT);
+    ArithmeticExpr minMultiplyRowMinusOne =
+        new ArithmeticExpr(ArithmeticExpr.Operator.MULTIPLY,
+          new ArithmeticExpr(ArithmeticExpr.Operator.SUBTRACT, rowNumExpr, one),
+          new FunctionCallExpr("if", ifParams));
+    ArithmeticExpr divideAddOne =
+        new ArithmeticExpr(ArithmeticExpr.Operator.ADD,
+          new ArithmeticExpr(ArithmeticExpr.Operator.INT_DIVIDE,
+            minMultiplyRowMinusOne, countExpr),
+        one);
+    return divideAddOne;
+  }
+
+  /**
+   * Create a new Analytic Expr and associate it with a new function.
+   * Takes a reference analytic expression and clones the partition expressions and the
+   * order by expressions if 'copyOrderBy' is set and optionally reverses it if
+   * 'reverseOrderBy' is set. The new function that it will be associated with is
+   * specified by fnName.
+   */
+  private static AnalyticExpr create(String fnName,
+      AnalyticExpr referenceExpr, boolean copyOrderBy, boolean reverseOrderBy) {
+    FunctionCallExpr fnExpr = new FunctionCallExpr(fnName, new ArrayList<Expr>());
+    fnExpr.setIsAnalyticFnCall(true);
+    List<OrderByElement> orderByElements = null;
+    if (copyOrderBy) {
+      if (reverseOrderBy) {
+        orderByElements = OrderByElement.reverse(referenceExpr.getOrderByElements());
+      } else {
+        orderByElements = Lists.newArrayList();
+        for (OrderByElement elem: referenceExpr.getOrderByElements()) {
+          orderByElements.add(elem.clone());
+        }
+      }
+    }
+    AnalyticExpr analyticExpr = new AnalyticExpr(fnExpr,
+        Expr.cloneList(referenceExpr.getPartitionExprs()), orderByElements, null);
+    return analyticExpr;
   }
 
   /**
@@ -216,7 +375,7 @@ public class AnalyticExpr extends Expr {
     }
     Expr rangeExpr = boundary.getExpr();
     if (!Type.isImplicitlyCastable(
-        rangeExpr.getType(), orderByElements_.get(0).getExpr().getType())) {
+        rangeExpr.getType(), orderByElements_.get(0).getExpr().getType(), false)) {
       throw new AnalysisException(
           "The value expression of a PRECEDING/FOLLOWING clause of a RANGE window must "
             + "be implicitly convertable to the ORDER BY expression's type: "
@@ -259,6 +418,29 @@ public class AnalyticExpr extends Expr {
     super.analyze(analyzer);
     type_ = getFnCall().getType();
 
+    for (Expr e: partitionExprs_) {
+      if (e.isConstant()) {
+        throw new AnalysisException(
+            "Expressions in the PARTITION BY clause must not be constant: "
+              + e.toSql() + " (in " + toSql() + ")");
+      } else if (e.getType().isComplexType()) {
+        throw new AnalysisException(String.format("PARTITION BY expression '%s' with " +
+            "complex type '%s' is not supported.", e.toSql(),
+            e.getType().toSql()));
+      }
+    }
+    for (OrderByElement e: orderByElements_) {
+      if (e.getExpr().isConstant()) {
+        throw new AnalysisException(
+            "Expressions in the ORDER BY clause must not be constant: "
+              + e.getExpr().toSql() + " (in " + toSql() + ")");
+      } else if (e.getExpr().getType().isComplexType()) {
+        throw new AnalysisException(String.format("ORDER BY expression '%s' with " +
+            "complex type '%s' is not supported.", e.getExpr().toSql(),
+            e.getExpr().getType().toSql()));
+      }
+    }
+
     if (getFnCall().getParams().isDistinct()) {
       throw new AnalysisException(
           "DISTINCT not allowed in analytic function: " + getFnCall().toSql());
@@ -300,6 +482,23 @@ public class AnalyticExpr extends Expr {
           }
         }
       }
+      if (isNtileFn(fn)) {
+        // TODO: IMPALA-2171:Remove this when ntile() can handle a non-constant argument.
+        if (!getFnCall().getChild(0).isConstant()) {
+          throw new AnalysisException("NTILE() requires a constant argument");
+        }
+        // Check if argument value is zero or negative and throw an exception if found.
+        try {
+          TColumnValue bucketValue =
+              FeSupport.EvalConstExpr(getFnCall().getChild(0), analyzer.getQueryCtx());
+          Long arg = bucketValue.getLong_val();
+          if (arg <= 0) {
+            throw new AnalysisException("NTILE() requires a positive argument: " + arg);
+          }
+        } catch (InternalException e) {
+          throw new AnalysisException(e.toString());
+        }
+      }
     }
 
     if (window_ != null) {
@@ -320,12 +519,6 @@ public class AnalyticExpr extends Expr {
           checkRangeOffsetBoundaryExpr(window_.getRightBoundary());
         }
       }
-      if (isMinMax(fn) &&
-          window_.getLeftBoundary().getType() != BoundaryType.UNBOUNDED_PRECEDING) {
-        throw new AnalysisException(
-            "'" + getFnCall().toSql() + "' is only supported with an "
-              + "UNBOUNDED PRECEDING start bound.");
-      }
     }
 
     // check nesting
@@ -336,6 +529,16 @@ public class AnalyticExpr extends Expr {
     sqlString_ = toSql();
 
     standardize(analyzer);
+
+    // min/max is not currently supported on sliding windows (i.e. start bound is not
+    // unbounded).
+    if (window_ != null && isMinMax(fn) &&
+        window_.getLeftBoundary().getType() != BoundaryType.UNBOUNDED_PRECEDING) {
+      throw new AnalysisException(
+          "'" + getFnCall().toSql() + "' is only supported with an "
+            + "UNBOUNDED PRECEDING start bound.");
+    }
+
     setChildren();
   }
 
@@ -356,6 +559,26 @@ public class AnalyticExpr extends Expr {
    *    UNBOUNDED_PRECEDING.
    * 5. Explicitly set the default window if no window was given but there
    *    are order-by elements.
+   * 6. FIRST_VALUE without UNBOUNDED PRECEDING gets rewritten to use a different window
+   *    and change the function to return the last value. We either set the fn to be
+   *    'last_value' or 'first_value_rewrite', which simply wraps the 'last_value'
+   *    implementation but allows us to handle the first rows in a partition in a special
+   *    way in the backend. There are a few cases:
+   *     a) Start bound is X FOLLOWING or CURRENT ROW (X=0):
+   *        Use 'last_value' with a window where both bounds are X FOLLOWING (or
+   *        CURRENT ROW). Setting the start bound to X following is necessary because the
+   *        X rows at the end of a partition have no rows in their window. Note that X
+   *        FOLLOWING could be rewritten as lead(X) but that would not work for CURRENT
+   *        ROW.
+   *     b) Start bound is X PRECEDING and end bound is CURRENT ROW or FOLLOWING:
+   *        Use 'first_value_rewrite' and a window with an end bound X PRECEDING. An
+   *        extra parameter '-1' is added to indicate to the backend that NULLs should
+   *        not be added for the first X rows.
+   *     c) Start bound is X PRECEDING and end bound is Y PRECEDING:
+   *        Use 'first_value_rewrite' and a window with an end bound X PRECEDING. The
+   *        first Y rows in a partition have empty windows and should be NULL. An extra
+   *        parameter with the integer constant Y is added to indicate to the backend
+   *        that NULLs should be added for the first Y rows.
    */
   private void standardize(Analyzer analyzer) {
     FunctionName analyticFnName = getFnCall().getFnName();
@@ -417,6 +640,41 @@ public class AnalyticExpr extends Expr {
       return;
     }
 
+    if (analyticFnName.getFunction().equals(FIRSTVALUE)
+        && window_ != null
+        && window_.getLeftBoundary().getType() != BoundaryType.UNBOUNDED_PRECEDING) {
+      if (window_.getLeftBoundary().getType() != BoundaryType.PRECEDING) {
+        window_ = new AnalyticWindow(window_.getType(), window_.getLeftBoundary(),
+            window_.getLeftBoundary());
+        fnCall_ = new FunctionCallExpr(new FunctionName("last_value"),
+            getFnCall().getParams());
+      } else {
+        List<Expr> paramExprs = Expr.cloneList(getFnCall().getParams().exprs());
+        if (window_.getRightBoundary().getType() == BoundaryType.PRECEDING) {
+          // The number of rows preceding for the end bound determines the number of
+          // rows at the beginning of each partition that should have a NULL value.
+          paramExprs.add(new NumericLiteral(window_.getRightBoundary().getOffsetValue(),
+              Type.BIGINT));
+        } else {
+          // -1 indicates that no NULL values are inserted even though we set the end
+          // bound to the start bound (which is PRECEDING) below; this is different from
+          // the default behavior of windows with an end bound PRECEDING.
+          paramExprs.add(new NumericLiteral(BigInteger.valueOf(-1), Type.BIGINT));
+        }
+
+        window_ = new AnalyticWindow(window_.getType(),
+            new Boundary(BoundaryType.UNBOUNDED_PRECEDING, null),
+            window_.getLeftBoundary());
+        fnCall_ = new FunctionCallExpr(new FunctionName("first_value_rewrite"),
+            new FunctionParams(paramExprs));
+        fnCall_.setIsInternalFnCall(true);
+      }
+      fnCall_.setIsAnalyticFnCall(true);
+      fnCall_.analyzeNoThrow(analyzer);
+      type_ = fnCall_.getReturnType();
+      analyticFnName = getFnCall().getFnName();
+    }
+
     // Reverse the ordering and window for windows ending with UNBOUNDED FOLLOWING,
     // and and not starting with UNBOUNDED PRECEDING.
     if (window_ != null
@@ -445,6 +703,7 @@ public class AnalyticExpr extends Expr {
     // is UNBOUNDED_PRECEDING.
     if (window_ != null
         && window_.getLeftBoundary().getType() == BoundaryType.UNBOUNDED_PRECEDING
+        && window_.getRightBoundary().getType() != BoundaryType.PRECEDING
         && analyticFnName.getFunction().equals(FIRSTVALUE)) {
       window_.setRightBoundary(new Boundary(BoundaryType.CURRENT_ROW, null));
     }

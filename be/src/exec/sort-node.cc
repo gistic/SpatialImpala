@@ -18,13 +18,14 @@
 #include "runtime/runtime-state.h"
 #include "runtime/sorted-run-merger.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
 SortNode::SortNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs)
   : ExecNode(pool, tnode, descs),
     offset_(tnode.sort_node.__isset.offset ? tnode.sort_node.offset : 0),
+    sorter_(NULL),
     num_rows_skipped_(0) {
 }
 
@@ -36,14 +37,16 @@ Status SortNode::Init(const TPlanNode& tnode) {
   RETURN_IF_ERROR(sort_exec_exprs_.Init(tnode.sort_node.sort_info, pool_));
   is_asc_order_ = tnode.sort_node.sort_info.is_asc_order;
   nulls_first_ = tnode.sort_node.sort_info.nulls_first;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SortNode::Prepare(RuntimeState* state) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Prepare(state));
-  RETURN_IF_ERROR(sort_exec_exprs_.Prepare(state, child(0)->row_desc(), row_descriptor_));
-  return Status::OK;
+  RETURN_IF_ERROR(sort_exec_exprs_.Prepare(
+      state, child(0)->row_desc(), row_descriptor_, expr_mem_tracker()));
+  AddExprCtxsToFree(sort_exec_exprs_);
+  return Status::OK();
 }
 
 Status SortNode::Open(RuntimeState* state) {
@@ -51,34 +54,42 @@ Status SortNode::Open(RuntimeState* state) {
   RETURN_IF_ERROR(ExecNode::Open(state));
   RETURN_IF_ERROR(sort_exec_exprs_.Open(state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
+  RETURN_IF_ERROR(QueryMaintenance(state));
   RETURN_IF_ERROR(child(0)->Open(state));
 
-  TupleRowComparator less_than(
-      sort_exec_exprs_.lhs_ordering_expr_ctxs(), sort_exec_exprs_.rhs_ordering_expr_ctxs(),
-      is_asc_order_, nulls_first_);
-  sorter_.reset(new Sorter(
-      less_than, sort_exec_exprs_.sort_tuple_slot_expr_ctxs(),
-      &row_descriptor_, mem_tracker(), runtime_profile(), state));
+  // These objects must be created after opening the sort_exec_exprs_. Avoid creating
+  // them after every Reset()/Open().
+  if (sorter_.get() == NULL) {
+    TupleRowComparator less_than(
+        sort_exec_exprs_.lhs_ordering_expr_ctxs(),
+        sort_exec_exprs_.rhs_ordering_expr_ctxs(),
+        is_asc_order_, nulls_first_);
+    // Create and initialize the external sort impl object
+    sorter_.reset(new Sorter(
+        less_than, sort_exec_exprs_.sort_tuple_slot_expr_ctxs(),
+        &row_descriptor_, mem_tracker(), runtime_profile(), state));
+    RETURN_IF_ERROR(sorter_->Init());
+  }
 
   // The child has been opened and the sorter created. Sort the input.
   // The final merge is done on-demand as rows are requested in GetNext().
   RETURN_IF_ERROR(SortInput(state));
 
-  // The child can be closed at this point.
-  child(0)->Close(state);
-  return Status::OK;
+  // Unless we are inside a subplan expecting to call Open()/GetNext() on the child
+  // again, the child can be closed at this point.
+  if (!IsInSubplan()) child(0)->Close(state);
+  return Status::OK();
 }
 
 Status SortNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
+  RETURN_IF_ERROR(QueryMaintenance(state));
 
   if (ReachedLimit()) {
     *eos = true;
-    return Status::OK;
+    return Status::OK();
   } else {
     *eos = false;
   }
@@ -107,7 +118,13 @@ Status SortNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
 
   COUNTER_SET(rows_returned_counter_, num_rows_returned_);
 
-  return Status::OK;
+  return Status::OK();
+}
+
+Status SortNode::Reset(RuntimeState* state) {
+  num_rows_skipped_ = 0;
+  if (sorter_.get() != NULL) sorter_->Reset();
+  return ExecNode::Reset(state);
 }
 
 void SortNode::Close(RuntimeState* state) {
@@ -138,11 +155,10 @@ Status SortNode::SortInput(RuntimeState* state) {
     RETURN_IF_ERROR(child(0)->GetNext(state, &batch, &eos));
     RETURN_IF_ERROR(sorter_->AddBatch(&batch));
     RETURN_IF_CANCELLED(state);
-    RETURN_IF_ERROR(state->QueryMaintenance());
+    RETURN_IF_ERROR(QueryMaintenance(state));
   } while(!eos);
-
   RETURN_IF_ERROR(sorter_->InputDone());
-  return Status::OK;
+  return Status::OK();
 }
 
 }

@@ -22,11 +22,12 @@ import com.cloudera.impala.catalog.StructType;
 import com.cloudera.impala.catalog.StructField;
 import com.cloudera.impala.catalog.RowFormat;
 import com.cloudera.impala.catalog.View;
-import com.cloudera.impala.analysis.ColumnDesc;
+import com.cloudera.impala.common.AnalysisException;
+import com.cloudera.impala.analysis.ColumnDef;
 import com.cloudera.impala.analysis.UnionStmt.UnionOperand;
 import com.cloudera.impala.analysis.UnionStmt.Qualifier;
 import com.cloudera.impala.thrift.TFunctionCategory;
-import com.cloudera.impala.thrift.TDescribeTableOutputStyle;
+import com.cloudera.impala.thrift.TDescribeOutputStyle;
 import com.cloudera.impala.thrift.THdfsFileFormat;
 import com.cloudera.impala.thrift.TPrivilegeLevel;
 import com.cloudera.impala.thrift.TTablePropertyType;
@@ -231,32 +232,35 @@ parser code {:
 terminal
   KW_ADD, KW_AGGREGATE, KW_ALL, KW_ALTER, KW_ANALYTIC, KW_AND, KW_ANTI, KW_API_VERSION,
   KW_ARRAY, KW_AS, KW_ASC, KW_AVRO, KW_BETWEEN, KW_BIGINT, KW_BINARY, KW_BOOLEAN, KW_BY,
-  KW_CACHED, KW_CASE, KW_CAST, KW_CHANGE, KW_CHAR, KW_CLASS, KW_CLOSE_FN, KW_COLUMN,
+  KW_CACHED, KW_CASCADE, KW_CASE, KW_CAST, KW_CHANGE, KW_CHAR, KW_CLASS, KW_CLOSE_FN, KW_COLUMN,
   KW_COLUMNS, KW_COMMENT, KW_COMPUTE, KW_CREATE, KW_CROSS, KW_CURRENT, KW_DATA,
   KW_DATABASE, KW_DATABASES, KW_DATE, KW_DATETIME, KW_DECIMAL, KW_DELIMITED, KW_DESC,
   KW_DESCRIBE, KW_DISTINCT, KW_DIV, KW_DOUBLE, KW_DROP, KW_ELSE, KW_END, KW_ESCAPED,
-  KW_EXISTS, KW_EXPLAIN, KW_EXTERNAL, KW_FALSE, KW_FIELDS, KW_FILEFORMAT, KW_FINALIZE_FN,
+  KW_EXISTS, KW_EXPLAIN, KW_EXTENDED, KW_EXTERNAL, KW_FALSE, KW_FIELDS,
+  KW_FILEFORMAT, KW_FILES, KW_FINALIZE_FN,
   KW_FIRST, KW_FLOAT, KW_FOLLOWING, KW_FOR, KW_FORMAT, KW_FORMATTED, KW_FROM, KW_FULL,
-  KW_FUNCTION, KW_FUNCTIONS, KW_GRANT, KW_GROUP, KW_HAVING, KW_IF, KW_IN, KW_INIT_FN,
-  KW_INNER, KW_INPATH, KW_INSERT, KW_INT, KW_INTERMEDIATE, KW_INTERVAL, KW_INTO,
-  KW_INVALIDATE, KW_IS, KW_JOIN, KW_LAST, KW_LEFT, KW_LIKE, KW_LIMIT, KW_LINES, KW_LOAD,
-  KW_LOCATION, KW_MAP, KW_MERGE_FN, KW_METADATA, KW_NOT, KW_NULL, KW_NULLS, KW_OFFSET,
-  KW_ON, KW_OR, KW_ORDER, KW_OUTER, KW_OVER, KW_OVERWRITE, KW_PARQUET, KW_PARQUETFILE,
-  KW_PARTITION, KW_PARTITIONED, KW_PARTITIONS, KW_PRECEDING,
-  KW_PREPARE_FN, KW_PRODUCED, KW_RANGE, KW_RCFILE, KW_REFRESH, KW_REGEXP, KW_RENAME,
-  KW_REPLACE, KW_RETURNS, KW_REVOKE, KW_RIGHT, KW_RLIKE, KW_ROLE, KW_ROLES, KW_ROW,
-  KW_ROWS, KW_SCHEMA, KW_SCHEMAS, KW_SELECT, KW_SEMI, KW_SEQUENCEFILE, KW_SERDEPROPERTIES,
-  KW_SERIALIZE_FN, KW_SET, KW_SHOW, KW_SMALLINT, KW_STORED, KW_STRAIGHT_JOIN,
-  KW_STRING, KW_STRUCT, KW_SYMBOL, KW_TABLE, KW_TABLES, KW_TBLPROPERTIES, KW_TERMINATED,
-  KW_TEXTFILE, KW_THEN,
-  KW_TIMESTAMP, KW_TINYINT, KW_STATS, KW_TO, KW_TRUE, KW_UNBOUNDED, KW_UNCACHED,
+  KW_FUNCTION, KW_FUNCTIONS, KW_GRANT, KW_GROUP, KW_HAVING, KW_IF, KW_IN, KW_INCREMENTAL,
+  KW_INIT_FN, KW_INNER, KW_INPATH, KW_INSERT, KW_INT, KW_INTERMEDIATE, KW_INTERVAL,
+  KW_INTO, KW_INVALIDATE, KW_IS, KW_JOIN, KW_LAST, KW_LEFT, KW_LIKE, KW_LIMIT, KW_LINES,
+  KW_LOAD, KW_LOCATION, KW_MAP, KW_MERGE_FN, KW_METADATA, KW_NOT, KW_NULL, KW_NULLS,
+  KW_OFFSET, KW_ON, KW_OR, KW_ORDER, KW_OUTER, KW_OVER, KW_OVERWRITE, KW_PARQUET,
+  KW_PARQUETFILE, KW_PARTITION, KW_PARTITIONED, KW_PARTITIONS, KW_PRECEDING,
+  KW_PREPARE_FN, KW_PRODUCED, KW_PURGE, KW_RANGE, KW_RCFILE, KW_RECOVER, KW_REFRESH,
+  KW_REGEXP, KW_RENAME, KW_REPLACE, KW_REPLICATION, KW_RESTRICT, KW_RETURNS,
+  KW_REVOKE, KW_RIGHT, KW_RLIKE, KW_ROLE,
+  KW_ROLES, KW_ROW, KW_ROWS, KW_SCHEMA, KW_SCHEMAS, KW_SELECT, KW_SEMI, KW_SEQUENCEFILE,
+  KW_SERDEPROPERTIES, KW_SERIALIZE_FN, KW_SET, KW_SHOW, KW_SMALLINT, KW_STORED,
+  KW_STRAIGHT_JOIN, KW_STRING, KW_STRUCT, KW_SYMBOL, KW_TABLE, KW_TABLES,
+  KW_TBLPROPERTIES, KW_TERMINATED, KW_TEXTFILE, KW_THEN, KW_TIMESTAMP,
+  KW_TINYINT, KW_TRUNCATE, KW_STATS, KW_TO, KW_TRUE, KW_UNBOUNDED, KW_UNCACHED,
   KW_UNION, KW_UPDATE_FN, KW_USE, KW_USING,
   KW_VALUES, KW_VARCHAR, KW_VIEW, KW_WHEN, KW_WHERE, KW_WITH;
 
-terminal COLON, COMMA, DOT, DOTDOTDOT, STAR, LPAREN, RPAREN, LBRACKET, RBRACKET,
-  DIVIDE, MOD, ADD, SUBTRACT;
+terminal COLON, SEMICOLON, COMMA, DOT, DOTDOTDOT, STAR, LPAREN, RPAREN, LBRACKET,
+  RBRACKET, DIVIDE, MOD, ADD, SUBTRACT;
 terminal BITAND, BITOR, BITXOR, BITNOT;
-terminal EQUAL, NOT, LESSTHAN, GREATERTHAN;
+terminal EQUAL, NOT, NOTEQUAL, LESSTHAN, GREATERTHAN;
+terminal FACTORIAL; // Placeholder terminal for postfix factorial operator
 terminal String IDENT;
 terminal String EMPTY_IDENT;
 terminal String NUMERIC_OVERFLOW;
@@ -265,6 +269,7 @@ terminal BigDecimal INTEGER_LITERAL;
 terminal BigDecimal DECIMAL_LITERAL;
 terminal String STRING_LITERAL;
 terminal String UNMATCHED_STRING_LITERAL;
+terminal String UNEXPECTED_CHAR;
 
 nonterminal StatementBase stmt;
 // Single select statement.
@@ -288,10 +293,14 @@ nonterminal ShowDbsStmt show_dbs_stmt;
 nonterminal ShowPartitionsStmt show_partitions_stmt;
 nonterminal ShowStatsStmt show_stats_stmt;
 nonterminal String show_pattern;
-nonterminal DescribeStmt describe_stmt;
+nonterminal ShowFilesStmt show_files_stmt;
+nonterminal DescribeDbStmt describe_db_stmt;
+nonterminal DescribeTableStmt describe_table_stmt;
 nonterminal ShowCreateTableStmt show_create_tbl_stmt;
-nonterminal TDescribeTableOutputStyle describe_output_style;
+nonterminal ShowCreateFunctionStmt show_create_function_stmt;
+nonterminal TDescribeOutputStyle describe_output_style;
 nonterminal LoadDataStmt load_stmt;
+nonterminal TruncateStmt truncate_stmt;
 nonterminal ResetMetadataStmt reset_metadata_stmt;
 // List of select blocks connected by UNION operators, with order by or limit.
 nonterminal QueryStmt union_with_order_by_or_limit;
@@ -327,7 +336,8 @@ nonterminal LiteralExpr literal;
 nonterminal CaseExpr case_expr;
 nonterminal ArrayList<CaseWhenClause> case_when_clause_list;
 nonterminal FunctionParams function_params;
-nonterminal SlotRef column_ref;
+nonterminal ArrayList<String> dotted_path;
+nonterminal SlotRef slot_ref;
 nonterminal ArrayList<TableRef> from_clause, table_ref_list;
 nonterminal WithClause opt_with_clause;
 nonterminal ArrayList<View> with_view_def_list;
@@ -337,6 +347,7 @@ nonterminal Subquery subquery;
 nonterminal JoinOperator join_operator;
 nonterminal opt_inner, opt_outer;
 nonterminal ArrayList<String> opt_plan_hints;
+nonterminal TypeDef type_def;
 nonterminal Type type;
 nonterminal Expr sign_chain_expr;
 nonterminal InsertStmt insert_stmt;
@@ -368,14 +379,16 @@ nonterminal CreateDataSrcStmt create_data_src_stmt;
 nonterminal DropDataSrcStmt drop_data_src_stmt;
 nonterminal ShowDataSrcsStmt show_data_srcs_stmt;
 nonterminal StructField struct_field_def;
-nonterminal ColumnDesc column_def, view_column_def;
-nonterminal ArrayList<ColumnDesc> column_def_list, view_column_def_list;
-nonterminal ArrayList<ColumnDesc> partition_column_defs, view_column_defs;
+nonterminal ColumnDef column_def, view_column_def;
+nonterminal ArrayList<ColumnDef> column_def_list, view_column_def_list;
+nonterminal ArrayList<ColumnDef> partition_column_defs, view_column_defs;
 nonterminal ArrayList<StructField> struct_field_def_list;
 // Options for DDL commands - CREATE/DROP/ALTER
 nonterminal HdfsCachingOp cache_op_val;
+nonterminal BigDecimal opt_cache_op_replication;
 nonterminal String comment_val;
 nonterminal Boolean external_val;
+nonterminal Boolean purge_val;
 nonterminal String opt_init_string_val;
 nonterminal THdfsFileFormat file_format_val;
 nonterminal THdfsFileFormat file_format_create_table_val;
@@ -400,6 +413,7 @@ nonterminal String opt_kw_column;
 // Used to simplify commands where KW_TABLE is optional
 nonterminal String opt_kw_table;
 nonterminal Boolean overwrite_val;
+nonterminal Boolean cascade_val;
 
 // For GRANT/REVOKE/AUTH DDL statements
 nonterminal ShowRolesStmt show_roles_stmt;
@@ -413,6 +427,7 @@ nonterminal PrivilegeSpec privilege_spec;
 nonterminal TPrivilegeLevel privilege;
 nonterminal Boolean opt_with_grantopt;
 nonterminal Boolean opt_grantopt_for;
+nonterminal Boolean opt_kw_role;
 
 // To avoid creating common keywords such as 'SERVER' or 'SOURCES' we treat them as
 // identifiers rather than keywords. Throws a parse exception if the identifier does not
@@ -426,33 +441,34 @@ nonterminal Boolean option_ident;
 // For Create/Drop/Show function ddl
 nonterminal FunctionArgs function_def_args;
 nonterminal FunctionArgs function_def_arg_list;
+// Accepts space separated key='v' arguments.
+nonterminal HashMap function_def_args_map;
+nonterminal CreateFunctionStmtBase.OptArg function_def_arg_key;
 nonterminal Boolean opt_is_aggregate_fn;
 nonterminal Boolean opt_is_varargs;
-nonterminal Type opt_aggregate_fn_intermediate_type;
+nonterminal TypeDef opt_aggregate_fn_intermediate_type_def;
 nonterminal CreateUdfStmt create_udf_stmt;
 nonterminal CreateUdaStmt create_uda_stmt;
 nonterminal ShowFunctionsStmt show_functions_stmt;
 nonterminal DropFunctionStmt drop_function_stmt;
 nonterminal TFunctionCategory opt_function_category;
-// Accepts space separated key='v' arguments.
-nonterminal HashMap create_function_args_map;
-nonterminal CreateFunctionStmtBase.OptArg create_function_arg_key;
 
 precedence left KW_OR;
 precedence left KW_AND;
-precedence left KW_NOT, NOT;
+precedence right KW_NOT, NOT;
 precedence left KW_BETWEEN, KW_IN, KW_IS, KW_EXISTS;
 precedence left KW_LIKE, KW_RLIKE, KW_REGEXP;
-precedence left EQUAL, LESSTHAN, GREATERTHAN;
+precedence left EQUAL, NOTEQUAL, LESSTHAN, GREATERTHAN;
 precedence left ADD, SUBTRACT;
 precedence left STAR, DIVIDE, MOD, KW_DIV;
 precedence left BITAND, BITOR, BITXOR, BITNOT;
+precedence left FACTORIAL;
 precedence left KW_ORDER, KW_BY, KW_LIMIT;
 precedence left LPAREN, RPAREN;
 // Support chaining of timestamp arithmetic exprs.
 precedence left KW_INTERVAL;
 
-// These tokens need to be at the end for create_function_args_map to accept
+// These tokens need to be at the end for function_def_args_map to accept
 // no keys. Otherwise, the grammar has shift/reduce conflicts.
 precedence left KW_COMMENT;
 precedence left KW_SYMBOL;
@@ -489,7 +505,13 @@ stmt ::=
   {: RESULT = show_data_srcs; :}
   | show_create_tbl_stmt:show_create_tbl
   {: RESULT = show_create_tbl; :}
-  | describe_stmt:describe
+  | show_create_function_stmt:show_create_function
+  {: RESULT = show_create_function; :}
+  | show_files_stmt:show_files
+  {: RESULT = show_files; :}
+  | describe_db_stmt:describe
+  {: RESULT = describe; :}
+  | describe_table_stmt:describe
   {: RESULT = describe; :}
   | alter_tbl_stmt:alter_tbl
   {: RESULT = alter_tbl; :}
@@ -531,6 +553,8 @@ stmt ::=
   {: RESULT = explain; :}
   | load_stmt: load
   {: RESULT = load; :}
+  | truncate_stmt: truncate
+  {: RESULT = truncate; :}
   | reset_metadata_stmt: reset_metadata
   {: RESULT = reset_metadata; :}
   | set_stmt:set
@@ -549,12 +573,21 @@ stmt ::=
   {: RESULT = grant_privilege; :}
   | revoke_privilege_stmt:revoke_privilege
   {: RESULT = revoke_privilege; :}
+  | stmt:s SEMICOLON
+  {: RESULT = s; :}
   ;
 
 load_stmt ::=
   KW_LOAD KW_DATA KW_INPATH STRING_LITERAL:path overwrite_val:overwrite KW_INTO KW_TABLE
   table_name:table opt_partition_spec:partition
   {: RESULT = new LoadDataStmt(table, new HdfsUri(path), overwrite, partition); :}
+  ;
+
+truncate_stmt ::=
+  KW_TRUNCATE KW_TABLE table_name:tbl_name
+  {: RESULT = new TruncateStmt(tbl_name); :}
+  | KW_TRUNCATE table_name:tbl_name
+  {: RESULT = new TruncateStmt(tbl_name); :}
   ;
 
 overwrite_val ::=
@@ -682,12 +715,14 @@ revoke_role_stmt ::=
   ;
 
 grant_privilege_stmt ::=
-  KW_GRANT privilege_spec:priv KW_TO IDENT:role opt_with_grantopt:grant_opt
+  KW_GRANT privilege_spec:priv KW_TO opt_kw_role:opt_role IDENT:role
+  opt_with_grantopt:grant_opt
   {: RESULT = new GrantRevokePrivStmt(role, priv, true, grant_opt); :}
   ;
 
 revoke_privilege_stmt ::=
-  KW_REVOKE opt_grantopt_for:grant_opt privilege_spec:priv KW_FROM IDENT:role
+  KW_REVOKE opt_grantopt_for:grant_opt privilege_spec:priv KW_FROM
+  opt_kw_role:opt_role IDENT:role
   {: RESULT = new GrantRevokePrivStmt(role, priv, false, grant_opt); :}
   ;
 
@@ -698,6 +733,8 @@ privilege_spec ::=
   {: RESULT = PrivilegeSpec.createDbScopedPriv(priv, db_name); :}
   | privilege:priv KW_ON KW_TABLE table_name:tbl_name
   {: RESULT = PrivilegeSpec.createTableScopedPriv(priv, tbl_name); :}
+  | privilege:priv LPAREN opt_ident_list:cols RPAREN KW_ON KW_TABLE table_name:tbl_name
+  {: RESULT = PrivilegeSpec.createColumnScopedPriv(priv, tbl_name, cols); :}
   | privilege:priv KW_ON uri_ident:uri_kw STRING_LITERAL:uri
   {: RESULT = PrivilegeSpec.createUriScopedPriv(priv, new HdfsUri(uri)); :}
   ;
@@ -725,6 +762,11 @@ opt_with_grantopt ::=
   {: RESULT = false; :}
   ;
 
+opt_kw_role ::=
+  KW_ROLE
+  | /* empty */
+  ;
+
 alter_tbl_stmt ::=
   KW_ALTER KW_TABLE table_name:table replace_existing_cols_val:replace KW_COLUMNS
   LPAREN column_def_list:col_defs RPAREN
@@ -741,8 +783,8 @@ alter_tbl_stmt ::=
     column_def:col_def
   {: RESULT = new AlterTableChangeColStmt(table, col_name, col_def); :}
   | KW_ALTER KW_TABLE table_name:table KW_DROP if_exists_val:if_exists
-    partition_spec:partition
-  {: RESULT = new AlterTableDropPartitionStmt(table, partition, if_exists); :}
+    partition_spec:partition purge_val:purge
+  {: RESULT = new AlterTableDropPartitionStmt(table, partition, if_exists, purge); :}
   | KW_ALTER KW_TABLE table_name:table opt_partition_spec:partition KW_SET KW_FILEFORMAT
     file_format_val:file_format
   {: RESULT = new AlterTableSetFileFormatStmt(table, partition, file_format); :}
@@ -763,6 +805,8 @@ alter_tbl_stmt ::=
     }
     RESULT = new AlterTableSetCachedStmt(table, partition, cache_op);
   :}
+  | KW_ALTER KW_TABLE table_name:table KW_RECOVER KW_PARTITIONS
+  {: RESULT = new AlterTableRecoverPartitionsStmt(table); :}
   ;
 
 table_property_type ::=
@@ -830,8 +874,8 @@ create_tbl_as_select_stmt ::=
   {:
     // Initialize with empty List of columns and partition columns. The
     // columns will be added from the query statement during analysis
-    CreateTableStmt create_stmt = new CreateTableStmt(table, new ArrayList<ColumnDesc>(),
-        new ArrayList<ColumnDesc>(), external, comment, row_format,
+    CreateTableStmt create_stmt = new CreateTableStmt(table, new ArrayList<ColumnDef>(),
+        new ArrayList<ColumnDef>(), external, comment, row_format,
         file_format, location, cache_op, if_not_exists, tbl_props, serde_props);
     RESULT = new CreateTableAsSelectStmt(create_stmt, query);
   :}
@@ -850,7 +894,7 @@ create_unpartitioned_tbl_stmt ::=
   file_format_create_table_val:file_format location_val:location cache_op_val:cache_op
   tbl_properties:tbl_props
   {:
-    RESULT = new CreateTableStmt(table, col_defs, new ArrayList<ColumnDesc>(), external,
+    RESULT = new CreateTableStmt(table, col_defs, new ArrayList<ColumnDef>(), external,
         comment, row_format, file_format, location, cache_op, if_not_exists, tbl_props,
         serde_props);
   :}
@@ -859,8 +903,8 @@ create_unpartitioned_tbl_stmt ::=
     serde_properties:serde_props file_format_create_table_val:file_format
     location_val:location cache_op_val:cache_op tbl_properties:tbl_props
   {:
-    RESULT = new CreateTableStmt(table, new ArrayList<ColumnDesc>(),
-        new ArrayList<ColumnDesc>(), external, comment, row_format, file_format,
+    RESULT = new CreateTableStmt(table, new ArrayList<ColumnDef>(),
+        new ArrayList<ColumnDef>(), external, comment, row_format, file_format,
         location, cache_op, if_not_exists, tbl_props, serde_props);
   :}
   | KW_CREATE external_val:external KW_TABLE if_not_exists_val:if_not_exists
@@ -898,7 +942,7 @@ create_partitioned_tbl_stmt ::=
     file_format_create_table_val:file_format location_val:location cache_op_val:cache_op
     tbl_properties:tbl_props
   {:
-    RESULT = new CreateTableStmt(table, new ArrayList<ColumnDesc>(), partition_col_defs,
+    RESULT = new CreateTableStmt(table, new ArrayList<ColumnDef>(), partition_col_defs,
         external, comment, row_format, file_format, location, cache_op, if_not_exists,
         tbl_props, serde_props);
   :}
@@ -907,9 +951,9 @@ create_partitioned_tbl_stmt ::=
 create_udf_stmt ::=
   KW_CREATE KW_FUNCTION if_not_exists_val:if_not_exists
   function_name:fn_name function_def_args:fn_args
-  KW_RETURNS type:return_type
+  KW_RETURNS type_def:return_type
   KW_LOCATION STRING_LITERAL:binary_path
-  create_function_args_map:arg_map
+  function_def_args_map:arg_map
   {:
     RESULT = new CreateUdfStmt(fn_name, fn_args, return_type, new HdfsUri(binary_path),
         if_not_exists, arg_map);
@@ -919,10 +963,10 @@ create_udf_stmt ::=
 create_uda_stmt ::=
   KW_CREATE KW_AGGREGATE KW_FUNCTION if_not_exists_val:if_not_exists
   function_name:fn_name function_def_args:fn_args
-  KW_RETURNS type:return_type
-  opt_aggregate_fn_intermediate_type:intermediate_type
+  KW_RETURNS type_def:return_type
+  opt_aggregate_fn_intermediate_type_def:intermediate_type
   KW_LOCATION STRING_LITERAL:binary_path
-  create_function_args_map:arg_map
+  function_def_args_map:arg_map
   {:
     RESULT = new CreateUdaStmt(fn_name, fn_args, return_type, intermediate_type,
         new HdfsUri(binary_path), if_not_exists, arg_map);
@@ -930,10 +974,17 @@ create_uda_stmt ::=
   ;
 
 cache_op_val ::=
-  KW_CACHED KW_IN STRING_LITERAL:pool_name
-  {: RESULT = new HdfsCachingOp(pool_name); :}
+  KW_CACHED KW_IN STRING_LITERAL:pool_name opt_cache_op_replication:replication
+  {: RESULT = new HdfsCachingOp(pool_name, replication); :}
   | KW_UNCACHED
   {: RESULT = new HdfsCachingOp(); :}
+  | /* empty */
+  {: RESULT = null; :}
+  ;
+
+opt_cache_op_replication ::=
+  KW_WITH KW_REPLICATION EQUAL INTEGER_LITERAL:replication
+  {: RESULT = replication; :}
   | /* empty */
   {: RESULT = null; :}
   ;
@@ -961,6 +1012,13 @@ opt_init_string_val ::=
 
 external_val ::=
   KW_EXTERNAL
+  {: RESULT = true; :}
+  |
+  {: RESULT = false; :}
+  ;
+
+purge_val ::=
+  KW_PURGE
   {: RESULT = true; :}
   |
   {: RESULT = false; :}
@@ -1061,13 +1119,13 @@ partition_column_defs ::=
   KW_PARTITIONED KW_BY LPAREN column_def_list:col_defs RPAREN
   {: RESULT = col_defs; :}
   | /* Empty - not a partitioned table */
-  {: RESULT = new ArrayList<ColumnDesc>(); :}
+  {: RESULT = new ArrayList<ColumnDef>(); :}
   ;
 
 column_def_list ::=
   column_def:col_def
   {:
-    ArrayList<ColumnDesc> list = new ArrayList<ColumnDesc>();
+    ArrayList<ColumnDef> list = new ArrayList<ColumnDef>();
     list.add(col_def);
     RESULT = list;
   :}
@@ -1079,8 +1137,8 @@ column_def_list ::=
   ;
 
 column_def ::=
-  IDENT:col_name type:targetType comment_val:comment
-  {: RESULT = new ColumnDesc(col_name, targetType, comment); :}
+  IDENT:col_name type_def:type comment_val:comment
+  {: RESULT = new ColumnDef(col_name, type, comment); :}
   ;
 
 create_view_stmt ::=
@@ -1163,7 +1221,7 @@ view_column_defs ::=
 view_column_def_list ::=
   view_column_def:col_def
   {:
-    ArrayList<ColumnDesc> list = new ArrayList<ColumnDesc>();
+    ArrayList<ColumnDef> list = new ArrayList<ColumnDef>();
     list.add(col_def);
     RESULT = list;
   :}
@@ -1176,7 +1234,7 @@ view_column_def_list ::=
 
 view_column_def ::=
   IDENT:col_name comment_val:comment
-  {: RESULT = new ColumnDesc(col_name, null, comment); :}
+  {: RESULT = new ColumnDef(col_name, null, comment); :}
   ;
 
 alter_view_stmt ::=
@@ -1186,26 +1244,41 @@ alter_view_stmt ::=
   {: RESULT = new AlterTableOrViewRenameStmt(before_table, new_table, false); :}
   ;
 
+cascade_val ::=
+  KW_CASCADE
+  {: RESULT = true; :}
+  | KW_RESTRICT
+  {: RESULT = false; :}
+  |
+  {: RESULT = false; :}
+  ;
+
 compute_stats_stmt ::=
   KW_COMPUTE KW_STATS table_name:table
   {: RESULT = new ComputeStatsStmt(table); :}
+  | KW_COMPUTE KW_INCREMENTAL KW_STATS table_name:table
+  {: RESULT = new ComputeStatsStmt(table, true, null); :}
+  | KW_COMPUTE KW_INCREMENTAL KW_STATS table_name:table partition_spec:spec
+  {: RESULT = new ComputeStatsStmt(table, true, spec); :}
   ;
 
 drop_stats_stmt ::=
   KW_DROP KW_STATS table_name:table
   {: RESULT = new DropStatsStmt(table); :}
+  | KW_DROP KW_INCREMENTAL KW_STATS table_name:table partition_spec:spec
+  {: RESULT = new DropStatsStmt(table, spec); :}
   ;
 
 drop_db_stmt ::=
-  KW_DROP db_or_schema_kw if_exists_val:if_exists IDENT:db_name
-  {: RESULT = new DropDbStmt(db_name, if_exists); :}
+  KW_DROP db_or_schema_kw if_exists_val:if_exists IDENT:db_name cascade_val:cascade
+  {: RESULT = new DropDbStmt(db_name, if_exists, cascade); :}
   ;
 
 drop_tbl_or_view_stmt ::=
-  KW_DROP KW_TABLE if_exists_val:if_exists table_name:table
-  {: RESULT = new DropTableOrViewStmt(table, if_exists, true); :}
+  KW_DROP KW_TABLE if_exists_val:if_exists table_name:table purge_val:purge
+  {: RESULT = new DropTableOrViewStmt(table, if_exists, true, purge); :}
   | KW_DROP KW_VIEW if_exists_val:if_exists table_name:table
-  {: RESULT = new DropTableOrViewStmt(table, if_exists, false); :}
+  {: RESULT = new DropTableOrViewStmt(table, if_exists, false, false); :}
   ;
 
 drop_function_stmt ::=
@@ -1312,15 +1385,15 @@ function_def_args ::=
   ;
 
 function_def_arg_list ::=
-  type:type
+  type_def:type_def
   {:
     FunctionArgs args = new FunctionArgs();
-    args.argTypes.add(type);
+    args.getArgTypeDefs().add(type_def);
     RESULT = args;
   :}
-  | function_def_arg_list:args COMMA type:type
+  | function_def_arg_list:args COMMA type_def:type_def
   {:
-    args.argTypes.add(type);
+    args.getArgTypeDefs().add(type_def);
     RESULT = args;
   :}
   ;
@@ -1339,22 +1412,22 @@ opt_is_varargs ::=
   {: RESULT = false; :}
   ;
 
-opt_aggregate_fn_intermediate_type ::=
-  KW_INTERMEDIATE type:type
-  {: RESULT = type; :}
+opt_aggregate_fn_intermediate_type_def ::=
+  KW_INTERMEDIATE type_def:type_def
+  {: RESULT = type_def; :}
   |
   {: RESULT = null; :}
   ;
 
-create_function_args_map ::=
-  create_function_arg_key:key EQUAL STRING_LITERAL:value
+function_def_args_map ::=
+  function_def_arg_key:key EQUAL STRING_LITERAL:value
   {:
     HashMap<CreateFunctionStmtBase.OptArg, String> args =
         new HashMap<CreateFunctionStmtBase.OptArg, String>();
     args.put(key, value);
     RESULT = args;
   :}
-  | create_function_args_map:args create_function_arg_key:key EQUAL STRING_LITERAL:value
+  | function_def_args_map:args function_def_arg_key:key EQUAL STRING_LITERAL:value
   {:
     if (args.containsKey(key)) throw new Exception("Duplicate argument key: " + key);
     args.put(key, value);
@@ -1365,7 +1438,7 @@ create_function_args_map ::=
   ;
 
 // Any keys added here must also be added to the end of the precedence list.
-create_function_arg_key ::=
+function_def_arg_key ::=
   KW_COMMENT
   {: RESULT = CreateFunctionStmtBase.OptArg.COMMENT; :}
   | KW_SYMBOL
@@ -1432,9 +1505,14 @@ opt_with_clause ::=
 
 with_view_def ::=
   IDENT:alias KW_AS LPAREN query_stmt:query RPAREN
-  {: RESULT = new View(alias, query); :}
+  {: RESULT = new View(alias, query, null); :}
   | STRING_LITERAL:alias KW_AS LPAREN query_stmt:query RPAREN
-  {: RESULT = new View(alias, query); :}
+  {: RESULT = new View(alias, query, null); :}
+  | IDENT:alias LPAREN ident_list:col_names RPAREN KW_AS LPAREN query_stmt:query RPAREN
+  {: RESULT = new View(alias, query, col_names); :}
+  | STRING_LITERAL:alias LPAREN ident_list:col_names RPAREN
+    KW_AS LPAREN query_stmt:query RPAREN
+  {: RESULT = new View(alias, query, col_names); :}
   ;
 
 with_view_def_list ::=
@@ -1632,16 +1710,35 @@ show_create_tbl_stmt ::=
   {: RESULT = new ShowCreateTableStmt(table); :}
   ;
 
-describe_stmt ::=
-  KW_DESCRIBE describe_output_style:style table_name:table
-  {: RESULT = new DescribeStmt(table, style); :}
+show_create_function_stmt ::=
+  KW_SHOW KW_CREATE KW_FUNCTION function_name:fn_name
+  {: RESULT = new ShowCreateFunctionStmt(fn_name, TFunctionCategory.SCALAR); :}
+  | KW_SHOW KW_CREATE KW_AGGREGATE KW_FUNCTION function_name:fn_name
+  {: RESULT = new ShowCreateFunctionStmt(fn_name, TFunctionCategory.AGGREGATE); :}
+  ;
+
+show_files_stmt ::=
+  KW_SHOW KW_FILES KW_IN table_name:table opt_partition_spec:partition
+  {: RESULT = new ShowFilesStmt(table, partition); :}
+  ;
+
+describe_db_stmt ::=
+  KW_DESCRIBE db_or_schema_kw describe_output_style:style IDENT:db
+  {: RESULT = new DescribeDbStmt(db, style); :}
+  ;
+
+describe_table_stmt ::=
+  KW_DESCRIBE describe_output_style:style dotted_path:path
+  {: RESULT = new DescribeTableStmt(path, style); :}
   ;
 
 describe_output_style ::=
   KW_FORMATTED
-  {: RESULT = TDescribeTableOutputStyle.FORMATTED; :}
+  {: RESULT = TDescribeOutputStyle.FORMATTED; :}
+  | KW_EXTENDED
+  {: RESULT = TDescribeOutputStyle.EXTENDED; :}
   | /* empty */
-  {: RESULT = TDescribeTableOutputStyle.MINIMAL; :}
+  {: RESULT = TDescribeOutputStyle.MINIMAL; :}
   ;
 
 select_stmt ::=
@@ -1727,13 +1824,9 @@ alias_clause ::=
 
 star_expr ::=
   STAR
-  // table_name DOT STAR doesn't work because of a reduce-reduce conflict
-  // on IDENT [DOT]
   {: RESULT = SelectListItem.createStarItem(null); :}
-  | IDENT:tbl DOT STAR
-  {: RESULT = SelectListItem.createStarItem(new TableName(null, tbl)); :}
-  | IDENT:db DOT IDENT:tbl DOT STAR
-  {: RESULT = SelectListItem.createStarItem(new TableName(db, tbl)); :}
+  | dotted_path:path DOT STAR
+  {: RESULT = SelectListItem.createStarItem(path); :}
   ;
 
 table_name ::=
@@ -1744,10 +1837,9 @@ table_name ::=
   ;
 
 function_name ::=
-  IDENT:fn
-  {: RESULT = new FunctionName(null, fn); :}
-  | IDENT:db DOT IDENT:fn
-  {: RESULT = new FunctionName(db, fn); :}
+  // Use 'dotted_path' to avoid a reduce/reduce with slot_ref.
+  dotted_path:path
+  {: RESULT = new FunctionName(path); :}
   ;
 
 from_clause ::=
@@ -1804,10 +1896,10 @@ table_ref_list ::=
   ;
 
 table_ref ::=
-  table_name:name alias_clause:alias
-  {: RESULT = new TableRef(name, alias); :}
-  | table_name:name
-  {: RESULT = new TableRef(name, null); :}
+  dotted_path:path
+  {: RESULT = new TableRef(path, null); :}
+  | dotted_path:path alias_clause:alias
+  {: RESULT = new TableRef(path, alias); :}
   | LPAREN query_stmt:query RPAREN alias_clause:alias
   {: RESULT = new InlineViewRef(alias, query); :}
   ;
@@ -1986,8 +2078,8 @@ opt_offset_clause ::=
   ;
 
 cast_expr ::=
-  KW_CAST LPAREN expr:e KW_AS type:targetType RPAREN
-  {: RESULT = new CastExpr(targetType, e, false); :}
+  KW_CAST LPAREN expr:e KW_AS type_def:targetType RPAREN
+  {: RESULT = new CastExpr(targetType, e); :}
   ;
 
 case_expr ::=
@@ -2064,14 +2156,16 @@ non_pred_expr ::=
   {: RESULT = e; :}
   | analytic_expr:e
   {: RESULT = e; :}
-  /* Since "IF" is a keyword, need to special case this function */
+  /* Since "IF", "TRUNCATE" are keywords, need to special case these functions */
   | KW_IF LPAREN expr_list:exprs RPAREN
   {: RESULT = new FunctionCallExpr("if", exprs); :}
+  | KW_TRUNCATE LPAREN expr_list:exprs RPAREN
+  {: RESULT = new FunctionCallExpr("truncate", exprs); :}
   | cast_expr:c
   {: RESULT = c; :}
   | case_expr:c
   {: RESULT = c; :}
-  | column_ref:c
+  | slot_ref:c
   {: RESULT = c; :}
   | timestamp_arithmetic_expr:e
   {: RESULT = e; :}
@@ -2094,6 +2188,9 @@ function_call_expr ::=
   :}
   | function_name:fn_name LPAREN function_params:params RPAREN
   {: RESULT = FunctionCallExpr.createExpr(fn_name, params); :}
+  // Below is a special case for EXTRACT. Idents are used to avoid adding new keywords.
+  | function_name:fn_name LPAREN IDENT:u KW_FROM expr:t RPAREN
+  {:  RESULT = new ExtractFromExpr(fn_name, u, t); :}
   ;
 
 // TODO: allow an arbitrary expr here instead of agg/fn call, and check during analysis?
@@ -2178,6 +2275,9 @@ arithmetic_expr ::=
   {: RESULT = new ArithmeticExpr(ArithmeticExpr.Operator.BITXOR, e1, e2); :}
   | BITNOT expr:e
   {: RESULT = new ArithmeticExpr(ArithmeticExpr.Operator.BITNOT, e, null); :}
+  | expr:e NOT
+  {: RESULT = new ArithmeticExpr(ArithmeticExpr.Operator.FACTORIAL, e, null); :}
+  %prec FACTORIAL
   ;
 
 // We use IDENT for the temporal unit to avoid making DAY, YEAR, etc. keywords.
@@ -2200,10 +2300,10 @@ timestamp_arithmetic_expr ::=
   // Set precedence to KW_INTERVAL (which is higher than ADD) for chaining.
   %prec KW_INTERVAL
   // Timestamp arithmetic expr that looks like a function call.
-  // We use func_arg_list instead of expr to avoid a shift/reduce conflict with
-  // func_arg_list on COMMA, and report an error if the list contains more than one expr.
+  // We use expr_list instead of expr to avoid a shift/reduce conflict with
+  // expr_list on COMMA, and report an error if the list contains more than one expr.
   // Although we don't want to accept function names as the expr, we can't parse it
-  // it as just an IDENT due to the precedence conflict with function_name.
+  // as just an IDENT due to the precedence conflict with function_name.
   | function_name:functionName LPAREN expr_list:l COMMA
     KW_INTERVAL expr:v IDENT:u RPAREN
   {:
@@ -2211,11 +2311,12 @@ timestamp_arithmetic_expr ::=
       // Report parsing failure on keyword interval.
       parser.parseError("interval", SqlParserSymbols.KW_INTERVAL);
     }
-    if (functionName.getDb() != null) {
-      // This function should not fully qualified
+    ArrayList<String> fnNamePath = functionName.getFnNamePath();
+    if (fnNamePath.size() > 1) {
+      // This production should not accept fully qualified function names
       throw new Exception("interval should not be qualified by database name");
     }
-    RESULT = new TimestampArithmeticExpr(functionName.getFunction(), l.get(0), v, u);
+    RESULT = new TimestampArithmeticExpr(fnNamePath.get(0), l.get(0), v, u);
   :}
   ;
 
@@ -2291,7 +2392,9 @@ predicate ::=
 comparison_predicate ::=
   expr:e1 EQUAL expr:e2
   {: RESULT = new BinaryPredicate(BinaryPredicate.Operator.EQ, e1, e2); :}
-  | expr:e1 NOT EQUAL expr:e2
+  | expr:e1 NOTEQUAL expr:e2 // single != token
+  {: RESULT = new BinaryPredicate(BinaryPredicate.Operator.NE, e1, e2); :}
+  | expr:e1 NOT EQUAL expr:e2 // separate ! and = tokens
   {: RESULT = new BinaryPredicate(BinaryPredicate.Operator.NE, e1, e2); :}
   | expr:e1 LESSTHAN GREATERTHAN expr:e2
   {: RESULT = new BinaryPredicate(BinaryPredicate.Operator.NE, e1, e2); :}
@@ -2365,14 +2468,28 @@ compound_predicate ::=
   {: RESULT = new CompoundPredicate(CompoundPredicate.Operator.NOT, e, null); :}
   ;
 
-column_ref ::=
-  IDENT:col
-  {: RESULT = new SlotRef(null, col); :}
-  // table_name:tblName DOT IDENT:col causes reduce/reduce conflicts
-  | IDENT:tbl DOT IDENT:col
-  {: RESULT = new SlotRef(new TableName(null, tbl), col); :}
-  | IDENT:db DOT IDENT:tbl DOT IDENT:col
-  {: RESULT = new SlotRef(new TableName(db, tbl), col); :}
+slot_ref ::=
+  dotted_path:path
+  {: RESULT = new SlotRef(path); :}
+  ;
+
+dotted_path ::=
+  IDENT:ident
+  {:
+    ArrayList<String> list = new ArrayList<String>();
+    list.add(ident);
+    RESULT = list;
+  :}
+  | dotted_path:list DOT IDENT:ident
+  {:
+    list.add(ident);
+    RESULT = list;
+  :}
+  ;
+
+type_def ::=
+  type:t
+  {: RESULT = new TypeDef(t); :}
   ;
 
 type ::=

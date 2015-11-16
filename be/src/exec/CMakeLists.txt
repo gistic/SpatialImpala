@@ -28,7 +28,6 @@ add_library(Exec
   base-sequence-scanner.cc
   blocking-join-node.cc
   catalog-op-executor.cc
-  cross-join-node.cc
   data-sink.cc
   data-source-scan-node.cc
   delimited-text-parser.cc
@@ -60,6 +59,8 @@ add_library(Exec
   hdfs-parquet-table-writer.cc
   hbase-scan-node.cc
   hbase-table-scanner.cc
+  incr-stats-util.cc
+  nested-loop-join-node.cc
   partitioned-aggregation-node.cc
   partitioned-aggregation-node-ir.cc
   partitioned-hash-join-node.cc
@@ -68,12 +69,16 @@ add_library(Exec
   scan-node.cc
   scanner-context.cc
   select-node.cc
+  singular-row-src-node.cc
   sort-exec-exprs.cc
   sort-node.cc
+  subplan-node.cc
   text-converter.cc
   topn-node.cc
   union-node.cc
+  unnest-node.cc
 )
+add_dependencies(Exec thrift-deps)
 
 ADD_BE_TEST(zigzag-test)
 ADD_BE_TEST(old-hash-table-test)
@@ -83,3 +88,4 @@ ADD_BE_TEST(read-write-util-test)
 ADD_BE_TEST(parquet-plain-test)
 ADD_BE_TEST(parquet-version-test)
 ADD_BE_TEST(row-batch-list-test)
+ADD_BE_TEST(incr-stats-util-test)

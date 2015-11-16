@@ -47,9 +47,7 @@
 
 #include <iostream>
 
-using namespace std;
-using namespace tr1;
-using namespace boost;
+#include "common/names.h"
 
 using namespace impala;
 using namespace apache::thrift;
@@ -92,7 +90,7 @@ class ImpalaTestBackend : public ImpalaInternalServiceIf {
 class DataStreamTest : public testing::Test {
  protected:
   DataStreamTest()
-    : runtime_state_(TPlanFragmentInstanceCtx(), "", &exec_env_),
+    : runtime_state_(TExecPlanFragmentParams(), "", &exec_env_),
       next_val_(0) {
     // Initialize Mem trackers for use by the data stream receiver.
     exec_env_.InitForFeTests();
@@ -257,7 +255,7 @@ class DataStreamTest : public testing::Test {
     slot_desc.__set_parent(0);
     ColumnType type(TYPE_BIGINT);
     slot_desc.__set_slotType(type.ToThrift());
-    slot_desc.__set_columnPos(0);
+    slot_desc.__set_materializedPath(vector<int>(1, 0));
     slot_desc.__set_byteOffset(0);
     slot_desc.__set_nullIndicatorByte(0);
     slot_desc.__set_nullIndicatorBit(-1);
@@ -469,7 +467,7 @@ class DataStreamTest : public testing::Test {
 
   void Sender(int sender_num, int channel_buffer_size,
               TPartitionType::type partition_type) {
-    RuntimeState state(TPlanFragmentInstanceCtx(), "", &exec_env_);
+    RuntimeState state(TExecPlanFragmentParams(), "", &exec_env_);
     state.set_desc_tbl(desc_tbl_);
     state.InitMemTrackers(TUniqueId(), NULL, -1);
     VLOG_QUERY << "create sender " << sender_num;

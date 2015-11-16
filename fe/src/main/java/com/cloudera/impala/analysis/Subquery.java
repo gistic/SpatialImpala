@@ -61,7 +61,7 @@ public class Subquery extends Expr {
   public Subquery(Subquery other) {
     super(other);
     stmt_ = other.stmt_.clone();
-    isAnalyzed_ = false;
+    analyzer_ = other.analyzer_;
   }
 
   /**
@@ -79,6 +79,8 @@ public class Subquery extends Expr {
     analyzer_ = new Analyzer(analyzer);
     analyzer_.setIsSubquery();
     stmt_.analyze(analyzer_);
+    // Check whether the stmt_ contains an illegal mix of un/correlated table refs.
+    stmt_.getCorrelatedTupleIds(analyzer_);
 
     // Set the subquery type based on the types of the exprs in the
     // result list of the associated SelectStmt.
@@ -94,9 +96,11 @@ public class Subquery extends Expr {
     if (!((SelectStmt)stmt_).returnsSingleRow()) type_ = new ArrayType(type_);
 
     Preconditions.checkNotNull(type_);
-    type_.analyze();
     isAnalyzed_ = true;
   }
+
+  @Override
+  public boolean isConstant() { return false; }
 
   /**
    * Check if the subquery's SelectStmt returns a single column of scalar type.

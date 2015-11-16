@@ -19,6 +19,7 @@ import java.util.Set;
 import org.apache.hadoop.hive.metastore.api.BinaryColumnStatsData;
 import org.apache.hadoop.hive.metastore.api.BooleanColumnStatsData;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsData;
+import org.apache.hadoop.hive.metastore.api.DecimalColumnStatsData;
 import org.apache.hadoop.hive.metastore.api.DoubleColumnStatsData;
 import org.apache.hadoop.hive.metastore.api.LongColumnStatsData;
 import org.apache.hadoop.hive.metastore.api.StringColumnStatsData;
@@ -39,11 +40,12 @@ public class ColumnStats {
   private final static Logger LOG = LoggerFactory.getLogger(ColumnStats.class);
 
   // Set of the currently supported column stats column types.
-  private final static Set<ScalarType> SUPPORTED_COL_TYPES = Sets.newHashSet(
-      Type.BIGINT, Type.BINARY, Type.BOOLEAN,
-      Type.DOUBLE, Type.FLOAT, Type.INT,
-      Type.SMALLINT, Type.STRING, Type.TIMESTAMP,
-      Type.TINYINT);
+  private final static Set<PrimitiveType> SUPPORTED_COL_TYPES = Sets.newHashSet(
+      PrimitiveType.BIGINT, PrimitiveType.BINARY, PrimitiveType.BOOLEAN,
+      PrimitiveType.DOUBLE, PrimitiveType.FLOAT, PrimitiveType.INT,
+      PrimitiveType.SMALLINT, PrimitiveType.CHAR, PrimitiveType.VARCHAR,
+      PrimitiveType.STRING, PrimitiveType.TIMESTAMP, PrimitiveType.TINYINT,
+      PrimitiveType.DECIMAL);
 
   // in bytes: excludes serialization overhead
   private double avgSize_;
@@ -141,7 +143,7 @@ public class ColumnStats {
    * column type, otherwise returns true.
    */
   public boolean update(Type colType, ColumnStatisticsData statsData) {
-    Preconditions.checkState(SUPPORTED_COL_TYPES.contains(colType));
+    Preconditions.checkState(isSupportedColType(colType));
     initColStats(colType);
     boolean isCompatible = false;
     switch (colType.getPrimitiveType()) {
@@ -174,6 +176,8 @@ public class ColumnStats {
           numNulls_ = doubleStats.getNumNulls();
         }
         break;
+      case CHAR:
+      case VARCHAR:
       case STRING:
         isCompatible = statsData.isSetStringStats();
         if (isCompatible) {
@@ -195,6 +199,14 @@ public class ColumnStats {
           avgSerializedSize_ = avgSize_ + PrimitiveType.BINARY.getSlotSize();
         }
         break;
+      case DECIMAL:
+        isCompatible = statsData.isSetDecimalStats();
+        if (isCompatible) {
+          DecimalColumnStatsData decimalStats = statsData.getDecimalStats();
+          numNulls_ = decimalStats.getNumNulls();
+          numDistinctValues_ = decimalStats.getNumDVs();
+        }
+        break;
       default:
         Preconditions.checkState(false,
             "Unexpected column type: " + colType.toString());
@@ -207,7 +219,9 @@ public class ColumnStats {
    * Returns true if the given PrimitiveType supports column stats updates.
    */
   public static boolean isSupportedColType(Type colType) {
-    return SUPPORTED_COL_TYPES.contains(colType);
+    if (!colType.isScalarType()) return false;
+    ScalarType scalarType = (ScalarType) colType;
+    return SUPPORTED_COL_TYPES.contains(scalarType.getPrimitiveType());
   }
 
   public void update(Type colType, TColumnStats stats) {

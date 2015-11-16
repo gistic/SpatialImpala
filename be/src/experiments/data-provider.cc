@@ -3,8 +3,11 @@
 #include <math.h>
 #include <iostream>
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
+using boost::minstd_rand;
+using boost::uniform_real;
+using boost::variate_generator;
 using namespace impala;
 
 DataProvider::DataProvider(MemPool* pool, RuntimeProfile* profile) :
@@ -17,7 +20,7 @@ DataProvider::DataProvider(MemPool* pool, RuntimeProfile* profile) :
   row_size_(0) {
   SetSeed(0);
 
-  bytes_generated_ = ADD_COUNTER(profile, "BytesGenerated", TCounterType::BYTES);
+  bytes_generated_ = ADD_COUNTER(profile, "BytesGenerated", TUnit::BYTES);
 }
 
 void DataProvider::Reset(int num_rows, int batch_size, const vector<DataProvider::ColDesc>& cols) {
@@ -147,4 +150,3 @@ void DataProvider::Print(ostream* stream, char* data, int rows) const {
     *stream << endl;
   }
 }
-

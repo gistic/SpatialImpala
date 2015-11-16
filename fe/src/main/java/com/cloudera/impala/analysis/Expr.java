@@ -53,7 +53,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   // experimentally determined to be safe.
   public final static int EXPR_CHILDREN_LIMIT = 10000;
   // The expr depth limit is mostly due to our recursive implementation of clone().
-  public final static int EXPR_DEPTH_LIMIT = 1500;
+  public final static int EXPR_DEPTH_LIMIT = 1000;
 
   // Name of the function that needs to be implemented by every Expr that
   // supports negation.
@@ -184,7 +184,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   }
 
   public ExprId getId() { return id_; }
-  protected void setId(ExprId id) { this.id_ = id; }
+  protected void setId(ExprId id) { id_ = id; }
   public Type getType() { return type_; }
   public double getSelectivity() { return selectivity_; }
   public long getNumDistinctValues() { return numDistinctValues_; }
@@ -192,6 +192,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   public boolean isWhereClauseConjunct() { return isWhereClauseConjunct_; }
   public void setIsWhereClauseConjunct() { isWhereClauseConjunct_ = true; }
   public boolean isAuxExpr() { return isAuxExpr_; }
+  public boolean isRegisteredPredicate() { return id_ != null; }
   public void setIsAuxExpr() { isAuxExpr_ = true; }
   public Function getFn() { return fn_; }
 
@@ -271,6 +272,18 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   }
 
   /**
+   * Casts any child which is CHAR to a STRING.
+   */
+  public void castChildCharsToStrings(Analyzer analyzer) throws AnalysisException {
+    for (int i = 0; i < children_.size(); ++i) {
+      if (children_.get(i).getType().isScalarType(PrimitiveType.CHAR)) {
+        children_.set(i, children_.get(i).castTo(ScalarType.STRING));
+        children_.get(i).analyze(analyzer);
+      }
+    }
+  }
+
+  /**
    * Looks up in the catalog the builtin for 'name' and 'argTypes'.
    * Returns null if the function is not found.
    */
@@ -337,7 +350,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
       if (result == null) {
         result = decimalType.getMinResolutionDecimal();
       } else {
-        result = Type.getAssignmentCompatibleType(result, childType);
+        result = Type.getAssignmentCompatibleType(result, childType, false);
       }
     }
     if (result != null) {
@@ -375,7 +388,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
       castLiteral.explicitlyCastToFloat(targetType);
       smap.put(l, castLiteral);
     }
-    return child.substitute(smap, analyzer);
+    return child.substitute(smap, analyzer, false);
   }
 
   /**
@@ -401,6 +414,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
       throws AnalysisException {
     Preconditions.checkState(this instanceof ArithmeticExpr ||
         this instanceof BinaryPredicate);
+    if (children_.size() == 1) return; // Do not attempt to convert for unary ops
     Preconditions.checkState(children_.size() == 2);
     Type t0 = getChild(0).getType();
     Type t1 = getChild(1).getType();
@@ -615,9 +629,9 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
       List<Expr> i1, List<Expr> i2) {
     i1.clear();
     i2.clear();
-    List<Expr> s1List = Expr.substituteList(l1, smap, analyzer);
+    List<Expr> s1List = Expr.substituteList(l1, smap, analyzer, false);
     Preconditions.checkState(s1List.size() == l1.size());
-    List<Expr> s2List = Expr.substituteList(l2, smap, analyzer);
+    List<Expr> s2List = Expr.substituteList(l2, smap, analyzer, false);
     Preconditions.checkState(s2List.size() == l2.size());
     for (int i = 0; i < s1List.size(); ++i) {
       Expr s1 = s1List.get(i);
@@ -670,14 +684,18 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
    * this tree, such that the returned result has minimal implicit casts and types.
    * Throws if analyzing the post-substitution expr tree failed.
    * If smap is null, this function is equivalent to clone().
+   * If preserveRootType is true, the resulting expr tree will be cast if necessary to
+   * the type of 'this'.
    */
-  public Expr trySubstitute(ExprSubstitutionMap smap, Analyzer analyzer)
+  public Expr trySubstitute(ExprSubstitutionMap smap, Analyzer analyzer,
+      boolean preserveRootType)
       throws AnalysisException {
     Expr result = clone();
     // Return clone to avoid removing casts.
     if (smap == null) return result;
     result = result.substituteImpl(smap, analyzer);
     result.analyze(analyzer);
+    if (preserveRootType && !type_.equals(result.getType())) result = result.castTo(type_);
     return result;
   }
 
@@ -687,30 +705,33 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
    * this tree, such that the returned result has minimal implicit casts and types.
    * Expects the analysis of the post-substitution expr to succeed.
    * If smap is null, this function is equivalent to clone().
+   * If preserveRootType is true, the resulting expr tree will be cast if necessary to
+   * the type of 'this'.
    */
-  public Expr substitute(ExprSubstitutionMap smap, Analyzer analyzer) {
+  public Expr substitute(ExprSubstitutionMap smap, Analyzer analyzer,
+      boolean preserveRootType) {
     try {
-      return trySubstitute(smap, analyzer);
+      return trySubstitute(smap, analyzer, preserveRootType);
     } catch (Exception e) {
       throw new IllegalStateException("Failed analysis after expr substitution.", e);
     }
   }
 
   public static ArrayList<Expr> trySubstituteList(Iterable<? extends Expr> exprs,
-      ExprSubstitutionMap smap, Analyzer analyzer)
+      ExprSubstitutionMap smap, Analyzer analyzer, boolean preserveRootTypes)
           throws AnalysisException {
     if (exprs == null) return null;
     ArrayList<Expr> result = new ArrayList<Expr>();
     for (Expr e: exprs) {
-      result.add(e.trySubstitute(smap, analyzer));
+      result.add(e.trySubstitute(smap, analyzer, preserveRootTypes));
     }
     return result;
   }
 
   public static ArrayList<Expr> substituteList(Iterable<? extends Expr> exprs,
-      ExprSubstitutionMap smap, Analyzer analyzer) {
+      ExprSubstitutionMap smap, Analyzer analyzer, boolean preserveRootTypes) {
     try {
-      return trySubstituteList(exprs, smap, analyzer);
+      return trySubstituteList(exprs, smap, analyzer, preserveRootTypes);
     } catch (Exception e) {
       throw new IllegalStateException("Failed analysis after expr substitution.", e);
     }
@@ -775,9 +796,9 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
    * Create a deep copy of 'l'. The elements of the returned list are of the same
    * type as the input list.
    */
-  public static <C extends Expr> ArrayList<C> cloneList(Iterable<C> l) {
+  public static <C extends Expr> ArrayList<C> cloneList(List<C> l) {
     Preconditions.checkNotNull(l);
-    ArrayList<C> result = new ArrayList<C>();
+    ArrayList<C> result = new ArrayList<C>(l.size());
     for (Expr element: l) {
       result.add((C) element.clone());
     }
@@ -891,12 +912,15 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
 
   /**
    * @return true if this expr can be evaluated with Expr::GetValue(NULL),
-   * ie, if it doesn't contain any references to runtime variables (which
-   * at the moment are only slotrefs and subqueries).
+   * i.e. if it doesn't contain any references to runtime variables (e.g. slot refs).
+   * Expr subclasses should override this if necessary (e.g. SlotRef, Subquery, etc.
+   * always return false).
    */
   public boolean isConstant() {
-    return !contains(Predicates.instanceOf(SlotRef.class)) &&
-           !contains(Predicates.instanceOf(Subquery.class));
+    for (Expr expr : children_) {
+      if (!expr.isConstant()) return false;
+    }
+    return true;
   }
 
   /**
@@ -934,10 +958,8 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   }
 
   /**
-   * Checks validity of cast, and
-   * calls uncheckedCastTo() to
-   * create a cast expression that casts
-   * this to a specific type.
+   * Casts this expr to a specific target type. It checks the validity of the cast and
+   * calls uncheckedCastTo().
    * @param targetType
    *          type to be cast to
    * @return cast expression, or converted literal,
@@ -947,7 +969,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
    *           failure to convert a string literal to a date literal
    */
   public final Expr castTo(Type targetType) throws AnalysisException {
-    Type type = Type.getAssignmentCompatibleType(this.type_, targetType);
+    Type type = Type.getAssignmentCompatibleType(this.type_, targetType, false);
     Preconditions.checkState(type.isValid(), "cast %s to %s", this.type_, targetType);
     // If the targetType is NULL_TYPE then ignore the cast because NULL_TYPE
     // is compatible with all types and no cast is necessary.
@@ -975,7 +997,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
    *           failure to convert a string literal to a date literal
    */
   protected Expr uncheckedCastTo(Type targetType) throws AnalysisException {
-    return new CastExpr(targetType, this, true);
+    return new CastExpr(targetType, this);
   }
 
   /**
@@ -1099,5 +1121,30 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     collect(Subquery.class, subqueries);
     Preconditions.checkState(subqueries.size() == 1);
     return subqueries.get(0);
+  }
+
+  /**
+   * Evaluate in the BE the children of 'this' that are constant expressions and
+   * substitute them with the evaluation result as LiteralExprs. Modifies 'this'
+   * in place and does not re-analyze it. Hence, it is not safe to evaluate the
+   * modified expr in the BE as the resolved fn_ may be incorrect given the new
+   * arguments.
+   *
+   * Throws an AnalysisException if the evaluation fails in the BE.
+   *
+   * TODO: Used only during partition pruning. Convert it to a generic constant
+   * expression folding function to be used during the analysis.
+   */
+  public void foldConstantChildren(Analyzer analyzer) throws AnalysisException {
+    Preconditions.checkState(isAnalyzed_);
+    Preconditions.checkNotNull(analyzer);
+    for (int i = 0; i < children_.size(); ++i) {
+      Expr child = getChild(i);
+      if (child.isLiteral() || !child.isConstant()) continue;
+      LiteralExpr literalExpr = LiteralExpr.create(child, analyzer.getQueryCtx());
+      Preconditions.checkNotNull(literalExpr);
+      setChild(i, literalExpr);
+    }
+    isAnalyzed_ = false;
   }
 }

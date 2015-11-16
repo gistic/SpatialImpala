@@ -151,11 +151,14 @@ public class TimestampArithmeticExpr extends Expr {
           getChild(1).getType().toSql() + "'. Expected an integer type.");
     }
 
-    String funcOpName = String.format("%sS_%s", timeUnit_.toString(),
+    String funcOpName = String.format("%sS_%s",  timeUnit_,
         (op_ == ArithmeticExpr.Operator.ADD) ? "ADD" : "SUB");
+    // For the month interval, use the invisible special-case implementation.
+    // "ADD_MONTHS(t, m)" by definition is different from "t + INTERVAL m MONTHS".
+    if (timeUnit_ == TimeUnit.MONTH) funcOpName += "_INTERVAL";
 
     fn_ = getBuiltinFunction(analyzer, funcOpName.toLowerCase(),
-         collectChildReturnTypes(), CompareMode.IS_SUPERTYPE_OF);
+         collectChildReturnTypes(), CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
     castForFunctionCall(false);
 
     Preconditions.checkNotNull(fn_);

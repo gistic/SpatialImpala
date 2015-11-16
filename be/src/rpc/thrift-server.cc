@@ -36,25 +36,43 @@
 #include "rpc/thrift-thread.h"
 #include "util/debug-util.h"
 #include "util/network-util.h"
+#include "util/os-util.h"
 #include "util/uid-util.h"
 #include <sstream>
 
-using namespace std;
-using namespace boost;
-using namespace boost::filesystem;
-using namespace boost::uuids;
-using namespace apache::thrift;
+#include "common/names.h"
+
+namespace posix_time = boost::posix_time;
+using namespace boost::algorithm;
+using boost::filesystem::exists;
+using boost::get_system_time;
+using boost::system_time;
+using boost::uuids::uuid;
 using namespace apache::thrift::concurrency;
 using namespace apache::thrift::protocol;
-using namespace apache::thrift::transport;
 using namespace apache::thrift::server;
+using namespace apache::thrift::transport;
+using namespace apache::thrift;
 
 DEFINE_int32(rpc_cnxn_attempts, 10, "Deprecated");
 DEFINE_int32(rpc_cnxn_retry_interval_ms, 2000, "Deprecated");
 DECLARE_string(principal);
 DECLARE_string(keytab_file);
+DECLARE_string(ssl_client_ca_certificate);
+DECLARE_string(ssl_server_certificate);
 
 namespace impala {
+
+bool EnableInternalSslConnections() {
+  // Enable SSL between servers only if both the client validation certificate and the
+  // server certificate are specified. 'Client' here means clients that are used by Impala
+  // services to contact other Impala services (as distinct from user clients of Impala
+  // like the shell), and 'servers' are the processes that serve those clients. The server
+  // needs a certificate to demonstrate it is who the client thinks it is; the client
+  // needs a certificate to validate that assertion from the server.
+  return !FLAGS_ssl_client_ca_certificate.empty() &&
+      !FLAGS_ssl_server_certificate.empty();
+}
 
 // Helper class that starts a server in a separate thread, and handles
 // the inter-thread communication to monitor whether it started
@@ -146,7 +164,7 @@ Status ThriftServer::ThriftServerEventProcessor::StartAndWaitForServer() {
     LOG(ERROR) << ss.str();
     return Status(ss.str());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void ThriftServer::ThriftServerEventProcessor::Supervise() {
@@ -205,11 +223,14 @@ void* ThriftServer::ThriftServerEventProcessor::createContext(shared_ptr<TProtoc
   TTransport* transport = input->getTransport().get();
   shared_ptr<ConnectionContext> connection_ptr =
       shared_ptr<ConnectionContext>(new ConnectionContext);
+  TTransport* underlying_transport =
+      (static_cast<TBufferedTransport*>(transport))->getUnderlyingTransport().get();
   if (!thrift_server_->auth_provider_->is_sasl()) {
-    socket = static_cast<TSocket*>(
-        static_cast<TBufferedTransport*>(transport)->getUnderlyingTransport().get());
+    socket = static_cast<TSocket*>(underlying_transport);
   } else {
-    TSaslServerTransport* sasl_transport = static_cast<TSaslServerTransport*>(transport);
+    TSaslServerTransport* sasl_transport = static_cast<TSaslServerTransport*>(
+        underlying_transport);
+
     // Get the username from the transport.
     connection_ptr->username = sasl_transport->getUsername();
     socket = static_cast<TSocket*>(sasl_transport->getUnderlyingTransport().get());
@@ -251,7 +272,6 @@ void ThriftServer::ThriftServerEventProcessor::processContext(void* context,
 
 void ThriftServer::ThriftServerEventProcessor::deleteContext(void* serverContext,
     shared_ptr<TProtocol> input, shared_ptr<TProtocol> output) {
-
   __connection_context__ = (ConnectionContext*) serverContext;
 
   if (thrift_server_->connection_handler_ != NULL) {
@@ -269,7 +289,7 @@ void ThriftServer::ThriftServerEventProcessor::deleteContext(void* serverContext
 }
 
 ThriftServer::ThriftServer(const string& name, const shared_ptr<TProcessor>& processor,
-    int port, AuthProvider* auth_provider, Metrics* metrics, int num_worker_threads,
+    int port, AuthProvider* auth_provider, MetricGroup* metrics, int num_worker_threads,
     ServerType server_type)
     : started_(false),
       port_(port),
@@ -289,60 +309,83 @@ ThriftServer::ThriftServer(const string& name, const shared_ptr<TProcessor>& pro
     metrics_enabled_ = true;
     stringstream count_ss;
     count_ss << "impala.thrift-server." << name << ".connections-in-use";
-    num_current_connections_metric_ =
-        metrics->CreateAndRegisterPrimitiveMetric(count_ss.str(), 0L);
+    num_current_connections_metric_ = metrics->AddGauge(count_ss.str(), 0L);
     stringstream max_ss;
     max_ss << "impala.thrift-server." << name << ".total-connections";
-    total_connections_metric_ =
-        metrics->CreateAndRegisterPrimitiveMetric(max_ss.str(), 0L);
+    total_connections_metric_ = metrics->AddCounter(max_ss.str(), 0L);
   } else {
     metrics_enabled_ = false;
   }
 }
 
+/// Factory subclass to override getPassword() which provides a password string to Thrift
+/// to decrypt the private key file.
+class ImpalaSslSocketFactory : public TSSLSocketFactory {
+ public:
+  ImpalaSslSocketFactory(const string& password) : password_(password) { }
+
+ protected:
+  virtual void getPassword(string& output, int size) {
+    output = password_;
+    if (output.size() > size) output.resize(size);
+  }
+
+ private:
+  /// The password string.
+  const string password_;
+};
+
 Status ThriftServer::CreateSocket(shared_ptr<TServerTransport>* socket) {
   if (ssl_enabled()) {
     // This 'factory' is only called once, since CreateSocket() is only called from
     // Start()
-    shared_ptr<TSSLSocketFactory> socket_factory(new TSSLSocketFactory());
+    shared_ptr<TSSLSocketFactory> socket_factory(
+        new ImpalaSslSocketFactory(key_password_));
+    socket_factory->overrideDefaultPasswordCallback();
     try {
       socket_factory->loadCertificate(certificate_path_.c_str());
       socket_factory->loadPrivateKey(private_key_path_.c_str());
       socket->reset(new TSSLServerSocket(port_, socket_factory));
     } catch (const TException& e) {
-      stringstream err_msg;
-      err_msg << "Could not create SSL socket: " << e.what();
-      return Status(err_msg.str());
+      return Status(TErrorCode::SSL_SOCKET_CREATION_FAILED, e.what());
     }
-    return Status::OK;
+    return Status::OK();
   } else {
     socket->reset(new TServerSocket(port_));
-    return Status::OK;
+    return Status::OK();
   }
 }
 
-Status ThriftServer::EnableSsl(const string& certificate, const string& private_key) {
+Status ThriftServer::EnableSsl(const string& certificate, const string& private_key,
+    const string& pem_password_cmd) {
   DCHECK(!started_);
-  if (certificate.empty()) return Status("SSL certificate path may not be blank");
-  if (private_key.empty()) return Status("SSL private key path may not be blank");
+  if (certificate.empty()) return Status(TErrorCode::SSL_CERTIFICATE_PATH_BLANK);
+  if (private_key.empty()) return Status(TErrorCode::SSL_PRIVATE_KEY_PATH_BLANK);
 
   if (!exists(certificate)) {
-    stringstream err_msg;
-    err_msg << "Certificate file " << certificate << " does not exist";
-    return Status(err_msg.str());
+    return Status(TErrorCode::SSL_CERTIFICATE_NOT_FOUND, certificate);
   }
 
   // TODO: Consider warning if private key file is world-readable
   if (!exists(private_key)) {
-    stringstream err_msg;
-    err_msg << "Private key file " << private_key << " does not exist";
-    return Status(err_msg.str());
+    return Status(TErrorCode::SSL_PRIVATE_KEY_NOT_FOUND, private_key);
   }
 
   ssl_enabled_ = true;
   certificate_path_ = certificate;
   private_key_path_ = private_key;
-  return Status::OK;
+
+  if (!pem_password_cmd.empty()) {
+    if (!RunShellProcess(pem_password_cmd, &key_password_)) {
+      return Status(TErrorCode::SSL_PASSWORD_CMD_FAILED, pem_password_cmd, key_password_);
+    } else {
+      trim_right(key_password_);
+      LOG(INFO) << "Command '" << pem_password_cmd << "' executed successfully, "
+                << ".PEM password retrieved";
+    }
+  }
+
+  return Status::OK();
 }
 
 Status ThriftServer::Start() {
@@ -387,7 +430,7 @@ Status ThriftServer::Start() {
   LOG(INFO) << "ThriftServer '" << name_ << "' started on port: " << port_
             << (ssl_enabled() ? "s" : "");
   DCHECK(started_);
-  return Status::OK;
+  return Status::OK();
 }
 
 void ThriftServer::Join() {

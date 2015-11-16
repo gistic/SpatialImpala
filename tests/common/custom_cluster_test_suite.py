@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +16,8 @@
 # TODO: Configure cluster size and other parameters.
 
 import os
+import os.path
+import re
 from subprocess import call
 from tests.common.impala_test_suite import ImpalaTestSuite
 from tests.common.impala_cluster import ImpalaCluster
@@ -92,14 +93,31 @@ class CustomClusterTestSuite(ImpalaTestSuite):
     sleep(2)
 
   @classmethod
-  def _start_impala_cluster(cls, options):
-    logdir = os.getenv('LOG_DIR', "/tmp/")
+  def _start_impala_cluster(cls, options, log_dir=os.getenv('LOG_DIR', "/tmp/"),
+      cluster_size=CLUSTER_SIZE, log_level=1):
     cmd = [os.path.join(IMPALA_HOME, 'bin/start-impala-cluster.py'),
-           '--cluster_size=%d' % CLUSTER_SIZE,
-           '--log_dir=%s' % logdir]
+           '--cluster_size=%d' % cluster_size,
+           '--log_dir=%s' % log_dir,
+           '--log_level=%s' % log_level]
     call(cmd + options)
+    cls.impala_log_dir = log_dir
     cls.cluster = ImpalaCluster()
     statestored = cls.cluster.statestored
     statestored.service.wait_for_live_subscribers(NUM_SUBSCRIBERS, timeout=60)
     for impalad in cls.cluster.impalads:
       impalad.service.wait_for_num_known_live_backends(CLUSTER_SIZE, timeout=60)
+
+  def assert_impalad_log_contains(self, level, line_regex, expected_count=1):
+    """
+    Assert that impalad log with specified level (e.g. ERROR, WARNING, INFO)
+    contains expected_count lines with a substring matching the regex.
+    """
+    pattern = re.compile(line_regex)
+    found = 0
+    log_file_path = os.path.join(self.impala_log_dir, "impalad." + level)
+    with open(log_file_path) as log_file:
+      for line in log_file:
+        if pattern.search(line):
+          found += 1
+    assert found == expected_count, ("Expected %d lines in file %s matching regex '%s'"\
+        + ", but found %d lines") % (expected_count, log_file_path, line_regex, found)

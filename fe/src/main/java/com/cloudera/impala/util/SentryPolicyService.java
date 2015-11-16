@@ -14,13 +14,20 @@
 
 package com.cloudera.impala.util;
 
-import java.io.IOException;
 import java.util.List;
 
-import org.apache.hadoop.conf.Configuration;
+import org.apache.sentry.SentryUserException;
+import org.apache.sentry.provider.db.SentryAccessDeniedException;
+import org.apache.sentry.provider.db.SentryAlreadyExistsException;
+import org.apache.sentry.provider.db.service.thrift.SentryPolicyServiceClient;
+import org.apache.sentry.provider.db.service.thrift.TSentryGrantOption;
+import org.apache.sentry.provider.db.service.thrift.TSentryPrivilege;
+import org.apache.sentry.provider.db.service.thrift.TSentryRole;
+import org.apache.sentry.service.thrift.SentryServiceClientFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.cloudera.impala.analysis.PrivilegeSpec;
 import com.cloudera.impala.authorization.SentryConfig;
 import com.cloudera.impala.authorization.User;
 import com.cloudera.impala.catalog.AuthorizationException;
@@ -30,6 +37,8 @@ import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.thrift.TPrivilege;
 import com.cloudera.impala.thrift.TPrivilegeLevel;
 import com.cloudera.impala.thrift.TPrivilegeScope;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
 /**
@@ -76,8 +85,8 @@ public class SentryPolicyService {
     private SentryPolicyServiceClient createClient() throws InternalException {
       SentryPolicyServiceClient client;
       try {
-        client = new SentryPolicyServiceClient(config_.getConfig());
-      } catch (IOException e) {
+        client = SentryServiceClientFactory.create(config_.getConfig());
+      } catch (Exception e) {
         throw new InternalException("Error creating Sentry Service client: ", e);
       }
       return client;
@@ -171,7 +180,6 @@ public class SentryPolicyService {
     }
   }
 
-
   /**
    * Removes a role from a group.
    *
@@ -200,6 +208,14 @@ public class SentryPolicyService {
   }
 
   /**
+   * Grants a privilege to an existing role.
+   */
+  public void grantRolePrivilege(User requestingUser, String roleName,
+      TPrivilege privilege) throws ImpalaException {
+    grantRolePrivileges(requestingUser, roleName, Lists.newArrayList(privilege));
+  }
+
+  /**
    * Grants privileges to an existing role.
    *
    * @param requestingUser - The requesting user.
@@ -207,14 +223,25 @@ public class SentryPolicyService {
    * @param privilege - The privilege to grant.
    * @throws ImpalaException - On any error
    */
-  public void grantRolePrivilege(User requestingUser, String roleName,
-      TPrivilege privilege) throws ImpalaException {
-    LOG.trace(String.format("Granting role '%s' privilege '%s' on '%s' on behalf of: %s",
-        roleName, privilege.toString(), privilege.getScope().toString(),
+  public void grantRolePrivileges(User requestingUser, String roleName,
+      List<TPrivilege> privileges) throws ImpalaException {
+    Preconditions.checkState(!privileges.isEmpty());
+    TPrivilege privilege = privileges.get(0);
+    TPrivilegeScope scope = privilege.getScope();
+    LOG.trace(String.format("Granting role '%s' '%s' privilege on '%s' on behalf of: %s",
+        roleName, privilege.getPrivilege_level().toString(), scope.toString(),
         requestingUser.getName()));
+    // Verify that all privileges have the same scope.
+    for (int i = 1; i < privileges.size(); ++i) {
+      Preconditions.checkState(privileges.get(i).getScope() == scope, "All the " +
+          "privileges must have the same scope.");
+    }
+    Preconditions.checkState(scope == TPrivilegeScope.COLUMN || privileges.size() == 1,
+        "Cannot grant multiple " + scope + " privileges with a singe RPC to the " +
+        "Sentry Service.");
     SentryServiceClient client = new SentryServiceClient();
     try {
-      switch (privilege.getScope()) {
+      switch (scope) {
         case SERVER:
           client.get().grantServerPrivilege(requestingUser.getShortName(), roleName,
               privilege.getServer_name(), privilege.isHas_grant_opt());
@@ -226,12 +253,16 @@ public class SentryPolicyService {
               privilege.isHas_grant_opt());
           break;
         case TABLE:
-          String tblName = privilege.getTable_name();
-          String dbName = privilege.getDb_name();
           client.get().grantTablePrivilege(requestingUser.getShortName(), roleName,
-              privilege.getServer_name(), dbName, tblName,
-              privilege.getPrivilege_level().toString(),
+              privilege.getServer_name(), privilege.getDb_name(),
+              privilege.getTable_name(), privilege.getPrivilege_level().toString(),
               privilege.isHas_grant_opt());
+          break;
+        case COLUMN:
+          client.get().grantColumnsPrivileges(requestingUser.getShortName(), roleName,
+              privilege.getServer_name(), privilege.getDb_name(),
+              privilege.getTable_name(), getColumnNames(privileges),
+              privilege.getPrivilege_level().toString(), privilege.isHas_grant_opt());
           break;
         case URI:
           client.get().grantURIPrivilege(requestingUser.getShortName(),
@@ -251,24 +282,43 @@ public class SentryPolicyService {
   }
 
   /**
-   * Revokes privileges from an existing role.
-   *
-   * @param requestingUser - The requesting user.
-   * @param roleName - The role to grant privileges to (case insensitive).
-   * @param privilege - The privilege to grant to the object.
-   * @throws ImpalaException - On any error
+   * Revokes a privilege from an existing role.
    */
   public void revokeRolePrivilege(User requestingUser, String roleName,
       TPrivilege privilege) throws ImpalaException {
-    LOG.trace(String.format("Revoking role '%s' privilege '%s' on '%s' on behalf of: %s",
-        roleName, privilege.toString(), privilege.getScope().toString(),
-        requestingUser.getName()));
+    revokeRolePrivileges(requestingUser, roleName, Lists.newArrayList(privilege));
+  }
+
+  /**
+   * Revokes privileges from an existing role.
+   *
+   * @param requestingUser - The requesting user.
+   * @param roleName - The role to revoke privileges from (case insensitive).
+   * @param privilege - The privilege to revoke.
+   * @throws ImpalaException - On any error
+   */
+  public void revokeRolePrivileges(User requestingUser, String roleName,
+      List<TPrivilege> privileges) throws ImpalaException {
+    Preconditions.checkState(!privileges.isEmpty());
+    TPrivilege privilege = privileges.get(0);
+    TPrivilegeScope scope = privilege.getScope();
+    LOG.trace(String.format("Revoking from role '%s' '%s' privilege on '%s' on " +
+        "behalf of: %s", roleName, privilege.getPrivilege_level().toString(),
+        scope.toString(), requestingUser.getName()));
+    // Verify that all privileges have the same scope.
+    for (int i = 1; i < privileges.size(); ++i) {
+      Preconditions.checkState(privileges.get(i).getScope() == scope, "All the " +
+          "privileges must have the same scope.");
+    }
+    Preconditions.checkState(scope == TPrivilegeScope.COLUMN || privileges.size() == 1,
+        "Cannot revoke multiple " + scope + " privileges with a singe RPC to the " +
+        "Sentry Service.");
     SentryServiceClient client = new SentryServiceClient();
     try {
-      switch (privilege.getScope()) {
+      switch (scope) {
         case SERVER:
           client.get().revokeServerPrivilege(requestingUser.getShortName(), roleName,
-              privilege.getServer_name(), null);
+              privilege.getServer_name(), privilege.getPrivilege_level().toString());
           break;
         case DATABASE:
           client.get().revokeDatabasePrivilege(requestingUser.getShortName(), roleName,
@@ -276,12 +326,16 @@ public class SentryPolicyService {
               privilege.getPrivilege_level().toString(), null);
           break;
         case TABLE:
-          String tblName = privilege.getTable_name();
-          String dbName = privilege.getDb_name();
           client.get().revokeTablePrivilege(requestingUser.getShortName(), roleName,
-              privilege.getServer_name(), dbName, tblName,
-              privilege.getPrivilege_level().toString(),
+              privilege.getServer_name(), privilege.getDb_name(),
+              privilege.getTable_name(), privilege.getPrivilege_level().toString(),
               null);
+          break;
+        case COLUMN:
+          client.get().revokeColumnsPrivilege(requestingUser.getShortName(), roleName,
+              privilege.getServer_name(), privilege.getDb_name(),
+              privilege.getTable_name(), getColumnNames(privileges),
+              privilege.getPrivilege_level().toString(), null);
           break;
         case URI:
           client.get().revokeURIPrivilege(requestingUser.getShortName(),
@@ -298,6 +352,24 @@ public class SentryPolicyService {
     } finally {
       client.close();
     }
+  }
+
+  /**
+   * Returns the column names referenced in a list of column-level privileges.
+   * Verifies that all column-level privileges refer to the same table.
+   */
+  private List<String> getColumnNames(List<TPrivilege> privileges) {
+    List<String> columnNames = Lists.newArrayList();
+    String tablePath = PrivilegeSpec.getTablePath(privileges.get(0));
+    columnNames.add(privileges.get(0).getColumn_name());
+    // Collect all column names and verify that they belong to the same table.
+    for (int i = 1; i < privileges.size(); ++i) {
+      TPrivilege privilege = privileges.get(i);
+      Preconditions.checkState(tablePath.equals(PrivilegeSpec.getTablePath(privilege))
+          && privilege.getScope() == TPrivilegeScope.COLUMN);
+      columnNames.add(privileges.get(i).getColumn_name());
+    }
+    return columnNames;
   }
 
   /**
@@ -365,6 +437,9 @@ public class SentryPolicyService {
     privilege.setServer_name(sentryPriv.getServerName());
     if (sentryPriv.isSetDbName()) privilege.setDb_name(sentryPriv.getDbName());
     if (sentryPriv.isSetTableName()) privilege.setTable_name(sentryPriv.getTableName());
+    if (sentryPriv.isSetColumnName()) {
+      privilege.setColumn_name(sentryPriv.getColumnName());
+    }
     if (sentryPriv.isSetURI()) privilege.setUri(sentryPriv.getURI());
     privilege.setScope(Enum.valueOf(TPrivilegeScope.class,
         sentryPriv.getPrivilegeScope().toUpperCase()));
@@ -383,153 +458,5 @@ public class SentryPolicyService {
       privilege.setHas_grant_opt(false);
     }
     return privilege;
-  }
-
-  // Dummy Sentry class to allow compilation on CDH4.
-  public static class SentryUserException extends Exception {
-    private static final long serialVersionUID = 9012029067485961905L;
-  }
-
-  // Dummy Sentry class to allow compilation on CDH4.
-  public static class SentryAlreadyExistsException extends Exception {
-    private static final long serialVersionUID = 9012029067485961905L;
-  }
-
-  //Dummy Sentry class to allow compilation on CDH4.
-  public static class SentryAccessDeniedException extends Exception {
-    private static final long serialVersionUID = 9012029067485961905L;
-  }
-
-  // Dummy Sentry class to allow compilation on CDH4.
-  public abstract static class TSentryRole {
-    public abstract List<TSentryGroup> getGroups();
-    public abstract String getRoleName();
-  }
-
-  //Dummy Sentry class to allow compilation on CDH4.
-  public abstract static class TSentryGroup {
-    public abstract String getGroupName();
-  }
-
-  // Dummy Sentry enum to allow compilation on CDH4.
-  enum TSentryGrantOption {
-    TRUE,
-    FALSE,
-    UNSET
-  }
-
-  // Dummy Sentry class to allow compilation on CDH4.
-  public abstract static class TSentryPrivilege {
-    public abstract boolean isSetDbName();
-    public abstract boolean isSetTableName();
-    public abstract boolean isSetServerName();
-    public abstract boolean isSetURI();
-
-    public abstract String getAction();
-    public abstract String getPrivilegeScope();
-    public abstract String getTableName();
-    public abstract String getDbName();
-    public abstract String getServerName();
-    public abstract String getURI();
-    public abstract long getCreateTime();
-    public abstract boolean isSetGrantOption();
-    public abstract TSentryGrantOption getGrantOption();
-  }
-
-  // Dummy Sentry class to allow compilation on CDH4.
-  public static class SentryPolicyServiceClient {
-    public SentryPolicyServiceClient(Configuration config) throws IOException {
-    }
-
-    public void close() {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void createRole(String user, String roleName) throws SentryUserException,
-        SentryAlreadyExistsException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void dropRole(String user, String roleName) throws SentryUserException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void dropRoleIfExists(String user, String roleName)
-        throws SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public List<TSentryRole> listRoles(String user)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public List<TSentryRole> listUserRoles(String user)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public List<TSentryPrivilege> listAllPrivilegesByRoleName(String user, String role)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void grantTablePrivilege(String user, String roleName,
-        String serverName, String dbName, String tableName, String privilege,
-        Boolean grantOpt)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void revokeTablePrivilege(String user, String roleName,
-        String serverName, String dbName, String tableName, String privilege,
-        Boolean grantOpt) throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void grantDatabasePrivilege(String user, String roleName,
-        String serverName, String dbName, String privilege, Boolean grantOpt)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void revokeDatabasePrivilege(String user, String roleName,
-        String serverName, String dbName, String privilege, Boolean grantOpt)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void grantServerPrivilege(String user, String roleName,
-        String serverName, Boolean grantOpt) throws SentryUserException,
-        SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void revokeServerPrivilege(String user, String roleName,
-        String serverName, Boolean grantOpt) throws SentryUserException,
-        SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void grantURIPrivilege(String user, String roleName,
-        String serverName, String dbName, Boolean grantOpt) throws SentryUserException,
-        SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void revokeURIPrivilege(String user, String roleName,
-        String serverName, String dbName, Boolean grantOpt) throws SentryUserException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void grantRoleToGroup(String user, String roleName, String group)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
-
-    public void revokeRoleFromGroup(String user, String role, String group)
-        throws SentryUserException, SentryAccessDeniedException {
-      throw new UnsupportedOperationException("Sentry Service is not supported on CDH4");
-    }
   }
 }

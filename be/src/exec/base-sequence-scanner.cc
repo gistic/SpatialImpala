@@ -22,9 +22,9 @@
 #include "runtime/string-search.h"
 #include "util/codec.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 const int BaseSequenceScanner::HEADER_SIZE = 1024;
 const int BaseSequenceScanner::SYNC_MARKER = -1;
@@ -46,16 +46,20 @@ Status BaseSequenceScanner::IssueInitialRanges(HdfsScanNode* scan_node,
   for (int i = 0; i < files.size(); ++i) {
     ScanRangeMetadata* metadata =
         reinterpret_cast<ScanRangeMetadata*>(files[i]->splits[0]->meta_data());
+    int64_t header_size = min(static_cast<int64_t>(HEADER_SIZE), files[i]->file_length);
     // The header is almost always a remote read. Set the disk id to -1 and indicate
     // it is not cached.
     // TODO: add remote disk id and plumb that through to the io mgr.  It should have
     // 1 queue for each NIC as well?
     DiskIoMgr::ScanRange* header_range = scan_node->AllocateScanRange(
-        files[i]->filename.c_str(), HEADER_SIZE, 0, metadata->partition_id, -1, false);
+        files[i]->fs, files[i]->filename.c_str(), header_size, 0, metadata->partition_id,
+        -1, false, false, files[i]->mtime);
     header_ranges.push_back(header_range);
   }
-  RETURN_IF_ERROR(scan_node->AddDiskIoRanges(header_ranges));
-  return Status::OK;
+  // Issue the header ranges only.  ProcessSplit() will issue the files' scan ranges
+  // and those ranges will need scanner threads, so no files are marked completed yet.
+  RETURN_IF_ERROR(scan_node->AddDiskIoRanges(header_ranges, 0));
+  return Status::OK();
 }
 
 BaseSequenceScanner::BaseSequenceScanner(HdfsScanNode* node, RuntimeState* state)
@@ -73,8 +77,8 @@ Status BaseSequenceScanner::Prepare(ScannerContext* context) {
   RETURN_IF_ERROR(HdfsScanner::Prepare(context));
   stream_->set_read_past_size_cb(bind(&BaseSequenceScanner::ReadPastSize, this, _1));
   bytes_skipped_counter_ = ADD_COUNTER(
-      scan_node_->runtime_profile(), "BytesSkipped", TCounterType::BYTES);
-  return Status::OK;
+      scan_node_->runtime_profile(), "BytesSkipped", TUnit::BYTES);
+  return Status::OK();
 }
 
 void BaseSequenceScanner::Close() {
@@ -105,17 +109,17 @@ Status BaseSequenceScanner::ProcessSplit() {
     Status status = ReadFileHeader();
     if (!status.ok()) {
       if (state_->abort_on_error()) return status;
-      state_->LogError(status);
+      state_->LogError(status.msg());
       // We need to complete the ranges for this file.
       CloseFileRanges(stream_->filename());
-      return Status::OK;
+      return Status::OK();
     }
 
     // Header is parsed, set the metadata in the scan node and issue more ranges
     scan_node_->SetFileMetadata(stream_->filename(), header_);
     HdfsFileDesc* desc = scan_node_->GetFileDesc(stream_->filename());
     scan_node_->AddDiskIoRanges(desc);
-    return Status::OK;
+    return Status::OK();
   }
 
   // Initialize state for new scan range
@@ -124,7 +128,7 @@ Status BaseSequenceScanner::ProcessSplit() {
   if (header_->is_compressed) stream_->set_contains_tuple_data(false);
   RETURN_IF_ERROR(InitNewRange());
 
-  Status status = Status::OK;
+  Status status = Status::OK();
 
   // Skip to the first record
   if (stream_->file_offset() < header_->header_size) {
@@ -142,21 +146,18 @@ Status BaseSequenceScanner::ProcessSplit() {
     if (status.IsCancelled() || status.IsMemLimitExceeded()) return status;
 
     // Log error from file format parsing.
-    stringstream ss;
-    ss << "Problem parsing file " << stream_->filename() << " at ";
-    if (stream_->eof()) {
-      ss << "end of file";
-    } else {
-      ss << "offset " << stream_->file_offset();
-    }
-    ss << ": " << status.GetErrorMsg();
-    state_->LogError(ss.str());
+    state_->LogError(ErrorMsg(TErrorCode::SEQUENCE_SCANNER_PARSE_ERROR,
+        stream_->filename(), stream_->file_offset(),
+        (stream_->eof() ? "(EOF)" : "")));
+
+    // Make sure errors specified in the status are logged as well
+    state_->LogError(status.msg());
 
     // If abort on error then return, otherwise try to recover.
     if (state_->abort_on_error()) return status;
 
     // Recover by skipping to the next sync.
-    parse_status_ = Status::OK;
+    parse_status_ = Status::OK();
     int64_t error_offset = stream_->file_offset();
     status = SkipToSync(header_->sync, SYNC_HASH_SIZE);
     COUNTER_ADD(bytes_skipped_counter_, stream_->file_offset() - error_offset);
@@ -165,7 +166,7 @@ Status BaseSequenceScanner::ProcessSplit() {
   }
 
   // All done with this scan range.
-  return Status::OK;
+  return Status::OK();
 }
 
 Status BaseSequenceScanner::ReadSync() {
@@ -189,7 +190,7 @@ Status BaseSequenceScanner::ReadSync() {
   total_block_size_ += stream_->file_offset() - block_start_;
   block_start_ = stream_->file_offset();
   ++num_syncs_;
-  return Status::OK;
+  return Status::OK();
 }
 
 int BaseSequenceScanner::FindSyncBlock(const uint8_t* buffer, int buffer_len,
@@ -253,14 +254,14 @@ Status BaseSequenceScanner::SkipToSync(const uint8_t* sync, int sync_size) {
     // No more syncs in this scan range
     DCHECK(stream_->eosr());
     finished_ = true;
-    return Status::OK;
+    return Status::OK();
   }
   DCHECK_GE(offset, sync_size);
 
   // Make sure sync starts in our scan range
   if (offset - sync_size >= stream_->bytes_left()) {
     finished_ = true;
-    return Status::OK;
+    return Status::OK();
   }
 
   RETURN_IF_FALSE(stream_->SkipBytes(offset, &parse_status_));
@@ -269,7 +270,7 @@ Status BaseSequenceScanner::SkipToSync(const uint8_t* sync, int sync_size) {
   if (stream_->eof()) finished_ = true;
   block_start_ = stream_->file_offset();
   ++num_syncs_;
-  return Status::OK;
+  return Status::OK();
 }
 
 void BaseSequenceScanner::CloseFileRanges(const char* filename) {

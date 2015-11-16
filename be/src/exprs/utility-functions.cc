@@ -14,13 +14,17 @@
 
 #include "exprs/utility-functions.h"
 
+#include <gutil/strings/substitute.h>
+
 #include "exprs/anyval-util.h"
 #include "runtime/runtime-state.h"
 #include "udf/udf-internal.h"
 #include "util/debug-util.h"
 #include "util/time.h"
 
-using namespace std;
+#include "common/names.h"
+
+using namespace strings;
 
 namespace impala {
 
@@ -49,8 +53,8 @@ BigIntVal UtilityFunctions::FnvHash(FunctionContext* ctx, const T& input_val) {
 BigIntVal UtilityFunctions::FnvHashDecimal(FunctionContext* ctx,
                                            const DecimalVal& input_val) {
   if (input_val.is_null) return BigIntVal::null();
-  ColumnType input_type = AnyValUtil::TypeDescToColumnType(*ctx->GetArgType(0));
-  int byte_size = input_type.GetByteSize();
+  const FunctionContext::TypeDesc& input_type = *ctx->GetArgType(0);
+  int byte_size = ColumnType::GetDecimalByteSize(input_type.precision);
   return BigIntVal(HashUtil::FnvHash64(&input_val.val16, byte_size, HashUtil::FNV_SEED));
 }
 
@@ -73,6 +77,12 @@ StringVal UtilityFunctions::User(FunctionContext* ctx) {
   StringVal user(ctx->user());
   // An empty string indicates the user wasn't set in the session or in the query request.
   return (user.len > 0) ? user : StringVal::null();
+}
+
+StringVal UtilityFunctions::EffectiveUser(FunctionContext* ctx) {
+  StringVal effective_user(ctx->effective_user());
+  // An empty string indicates the user wasn't set in the session or in the query request.
+  return (effective_user.len > 0) ? effective_user : StringVal::null();
 }
 
 StringVal UtilityFunctions::Version(FunctionContext* ctx) {
@@ -101,5 +111,35 @@ StringVal UtilityFunctions::CurrentDatabase(FunctionContext* ctx) {
   return (database.len > 0) ? database : StringVal::null();
 }
 
+template<typename T>
+StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const T& /*input_val*/) {
+  FunctionContext::TypeDesc type_desc = *(ctx->GetArgType(0));
+  ColumnType column_type = AnyValUtil::TypeDescToColumnType(type_desc);
+  const string& type_string = TypeToString(column_type.type);
 
+  switch(column_type.type) {
+    // Show the precision and scale of DECIMAL type.
+    case TYPE_DECIMAL:
+      return AnyValUtil::FromString(ctx, Substitute("$0($1,$2)", type_string,
+          type_desc.precision, type_desc.scale));
+    // Show length of CHAR and VARCHAR.
+    case TYPE_CHAR:
+    case TYPE_VARCHAR:
+      return AnyValUtil::FromString(ctx, Substitute("$0($1)", type_string,
+          type_desc.len));
+    default:
+      return AnyValUtil::FromString(ctx, type_string);
+  }
+}
+
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const BooleanVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const TinyIntVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const SmallIntVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const IntVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const BigIntVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const FloatVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const DoubleVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const StringVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const TimestampVal& input_val);
+template StringVal UtilityFunctions::TypeOf(FunctionContext* ctx, const DecimalVal& input_val);
 }
