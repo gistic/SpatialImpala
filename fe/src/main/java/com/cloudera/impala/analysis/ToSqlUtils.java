@@ -27,11 +27,13 @@ import org.apache.hadoop.hive.ql.parse.HiveLexer;
 
 import com.cloudera.impala.catalog.CatalogException;
 import com.cloudera.impala.catalog.Column;
+import com.cloudera.impala.catalog.Function;
 import com.cloudera.impala.catalog.HBaseTable;
 import com.cloudera.impala.catalog.HdfsCompression;
 import com.cloudera.impala.catalog.HdfsFileFormat;
 import com.cloudera.impala.catalog.RowFormat;
 import com.cloudera.impala.catalog.Table;
+
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
@@ -77,8 +79,37 @@ public class ToSqlUtils {
       // Ignore exception and just quote the identifier to be safe.
     }
     boolean isImpalaKeyword = SqlScanner.isKeyword(ident.toUpperCase());
-    if (hiveNeedsQuotes || isImpalaKeyword) return "`" + ident + "`";
+    // Impala's scanner recognizes the ".123" portion of "db.123_tbl" as a decimal,
+    // so while the quoting is not necessary for the given identifier itself, the quotes
+    // are needed if this identifier will be preceded by a ".".
+    boolean startsWithNumber = false;
+    if (!hiveNeedsQuotes && !isImpalaKeyword) {
+      try {
+        Integer.parseInt(ident.substring(0, 1));
+        startsWithNumber = true;
+      } catch (NumberFormatException e) {
+        // Ignore exception, identifier does not start with number.
+      }
+    }
+    if (hiveNeedsQuotes || isImpalaKeyword || startsWithNumber) return "`" + ident + "`";
     return ident;
+  }
+
+  public static List<String> getIdentSqlList(List<String> identList) {
+    List<String> identSqlList = Lists.newArrayList();
+    for (String ident: identList) {
+      identSqlList.add(getIdentSql(ident));
+    }
+    return identSqlList;
+  }
+
+  public static String getPathSql(List<String> path) {
+    StringBuilder result = new StringBuilder();
+    for (String p: path) {
+      if (result.length() > 0) result.append(".");
+      result.append(getIdentSql(p));
+    }
+    return result.toString();
   }
 
   /**
@@ -87,11 +118,11 @@ public class ToSqlUtils {
    */
   public static String getCreateTableSql(CreateTableStmt stmt) {
     ArrayList<String> colsSql = Lists.newArrayList();
-    for (ColumnDesc col: stmt.getColumnDefs()) {
+    for (ColumnDef col: stmt.getColumnDefs()) {
       colsSql.add(col.toString());
     }
     ArrayList<String> partitionColsSql = Lists.newArrayList();
-    for (ColumnDesc col: stmt.getPartitionColumnDefs()) {
+    for (ColumnDef col: stmt.getPartitionColumnDefs()) {
       partitionColsSql.add(col.toString());
     }
     // TODO: Pass the correct compression, if applicable.
@@ -215,6 +246,15 @@ public class ToSqlUtils {
     }
     if (tblProperties != null && !tblProperties.isEmpty()) {
       sb.append("TBLPROPERTIES " + propertyMapToSql(tblProperties));
+    }
+    return sb.toString();
+  }
+
+  public static String getCreateFunctionSql(List<Function> functions) {
+    Preconditions.checkNotNull(functions);
+    StringBuilder sb = new StringBuilder();
+    for (Function fn: functions) {
+      sb.append(fn.toSql(false));
     }
     return sb.toString();
   }

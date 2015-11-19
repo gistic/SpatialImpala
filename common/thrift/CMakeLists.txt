@@ -134,6 +134,7 @@ set(JAVA_EXT_DS_ARGS ${THRIFT_INCLUDE_DIR_OPTION} --gen java:hashcode -o ${EXT_D
 set(PYTHON_ARGS ${THRIFT_INCLUDE_DIR_OPTION} -r --gen py -o ${PYTHON_OUTPUT_DIR})
 
 set (EXT_DATA_SRC_FILES
+  ErrorCodes.thrift
   ExternalDataSource.thrift
   Data.thrift
   Status.thrift
@@ -141,6 +142,7 @@ set (EXT_DATA_SRC_FILES
 )
 
 set (SRC_FILES
+  ErrorCodes.thrift
   beeswax.thrift
   CatalogInternalService.thrift
   CatalogObjects.thrift
@@ -156,9 +158,12 @@ set (SRC_FILES
   ImpalaInternalService.thrift
   ImpalaService.thrift
   JniCatalog.thrift
+  LineageGraph.thrift
   Llama.thrift
   Logging.thrift
   NetworkTest.thrift
+  MetricDefs.thrift
+  Metrics.thrift
   PlanNodes.thrift
   Planner.thrift
   Partitions.thrift
@@ -171,12 +176,32 @@ set (SRC_FILES
   ${EXT_DATA_SRC_FILES}
 )
 
+SET_SOURCE_FILES_PROPERTIES(Status.thrift PROPERTIES OBJECT_DEPENDS ErrorCodes.thrift)
+
+add_custom_command(OUTPUT ErrorCodes.thrift
+  COMMAND python generate_error_codes.py
+  DEPENDS generate_error_codes.py)
+
+add_custom_command(OUTPUT MetricDefs.thrift
+  COMMAND python generate_metrics.py
+  DEPENDS generate_metrics.py metrics.json)
 
 # Create a build command for each of the thrift src files and generate
 # a list of files they produce
 THRIFT_GEN(THRIFT_ALL_FILES ${SRC_FILES})
 THRIFT_GEN_DS(THRIFT_DATA_SRC_FILES ${EXT_DATA_SRC_FILES})
 
+
+add_custom_target(thrift-generated-files-error DEPENDS ErrorCodes.thrift)
+add_custom_target(thrift-generated-files-metrics DEPENDS MetricDefs.thrift)
+
 # Add a custom target that generates all the thrift files
 add_custom_target(thrift-cpp ALL DEPENDS ${THRIFT_ALL_FILES})
+add_dependencies(thrift-cpp thrift-generated-files-metrics thrift-generated-files-error)
+
 add_custom_target(thrift-ext-data-src ALL DEPENDS ${THRIFT_DATA_SRC_FILES})
+add_dependencies(thrift-ext-data-src thrift-cpp)
+
+# Combined target for all thrift dependencies
+add_custom_target(thrift-deps ALL)
+add_dependencies(thrift-deps thrift-ext-data-src)

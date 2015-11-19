@@ -118,6 +118,30 @@ public class ToSqlTest extends AnalyzerTest {
     }
   }
 
+  /**
+   * Generates and runs testToSql() on two variants of the given query by replacing all
+   * occurrences of "$TBL" in the query string with the unqualified and fully-qualified
+   * version of the given table name. The unqualified variant is analyzed using an
+   * analyzer that has tbl's db set as the default database.
+   * The SQL is expected to the same for both variants because toSql() should fully
+   * qualify unqualified table names.
+   * Example:
+   * query = "select id from $TBL, $TBL"
+   * tbl = "functional.alltypes"
+   * Variants generated and analyzed:
+   * select id from alltypes, alltypes (default db is "functional")
+   * select id from functional.alltypes, functional.alltypes (default db is "default")
+   */
+  private void TblsTestToSql(String query, TableName tbl, String expectedSql) {
+    Preconditions.checkState(tbl.isFullyQualified());
+    Preconditions.checkState(query.contains("$TBL"));
+    String uqQuery = query.replace("$TBL", tbl.getTbl());
+    testToSql(uqQuery, tbl.getDb(), expectedSql);
+    AnalyzesOk(uqQuery, createAnalyzer(tbl.getDb()));
+    String fqQuery = query.replace("$TBL", tbl.toString());
+    testToSql(fqQuery, expectedSql);
+  }
+
   @Test
   public void selectListTest() {
     testToSql("select 1234, 1234.0, 1234.0 + 1, 1234.0 + 1.0, 1 + 1, \"abc\" " +
@@ -139,46 +163,50 @@ public class ToSqlTest extends AnalyzerTest {
         "FROM functional.alltypes");
   }
 
-  @Test
-  public void TestTableAliases() throws AnalysisException {
-    String[] tables = new String[] { "alltypes", "alltypes_view" };
-    String[] columns = new String[] { "int_col", "*" };
+  private boolean isCollectionTableRef(String tableName) {
+    return tableName.split("\\.").length > 0;
+  }
 
+  /**
+   * Test all table/column combinations in the select list of a query
+   * using implicit and explicit table aliases.
+   */
+  private void testAllTableAliases(String[] tables, String[] columns)
+      throws AnalysisException {
     for (String tbl: tables) {
+      TableName tblName = new TableName("functional", tbl);
+      String uqAlias = tbl.substring(tbl.lastIndexOf(".") + 1);
+      String fqAlias = "functional." + tbl;
+      boolean isCollectionTblRef = isCollectionTableRef(tbl);
       for (String col: columns) {
-        // Test implicit table aliases with unqualified table/view name.
-        // Unqualified table/view name is fully qualified in toSql().
-        // Regression tests for IMPALA-962.
-        testToSql(String.format("select %s from %s", col, tbl), "functional",
-            String.format("SELECT %s FROM functional.%s", col, tbl));
-        testToSql(String.format("select %s.%s from %s", tbl, col, tbl), "functional",
-            String.format("SELECT %s.%s FROM functional.%s", tbl, col, tbl));
-        testToSql(String.format("select functional.%s.%s from %s", tbl, col, tbl),
-            "functional",
-            String.format("SELECT functional.%s.%s FROM functional.%s", tbl, col, tbl));
-
-        // Test implicit table aliases with fully-qualified table/view name.
-        testToSql(String.format("select %s from functional.%s", col, tbl),
-            String.format("SELECT %s FROM functional.%s", col, tbl));
-        testToSql(String.format("select %s.%s from functional.%s", tbl, col, tbl),
-            String.format("SELECT %s.%s FROM functional.%s", tbl, col, tbl));
-        testToSql(String.format("select functional.%s.%s from functional.%s",
-            tbl, col, tbl),
-            String.format("SELECT functional.%s.%s FROM functional.%s", tbl, col, tbl));
+        // Test implicit table aliases with unqualified and fully qualified
+        // table/view names. Unqualified table/view names should be fully
+        // qualified in the generated SQL (IMPALA-962).
+        TblsTestToSql(String.format("select %s from $TBL", col), tblName,
+            String.format("SELECT %s FROM %s", col, fqAlias));
+        TblsTestToSql(String.format("select %s.%s from $TBL", uqAlias, col), tblName,
+            String.format("SELECT %s.%s FROM %s", uqAlias, col, fqAlias));
+        // Only references to base tables/views have a fully-qualified implicit alias.
+        if (!isCollectionTblRef) {
+          TblsTestToSql(String.format("select %s.%s from $TBL", fqAlias, col), tblName,
+              String.format("SELECT %s.%s FROM %s", fqAlias, col, fqAlias));
+        }
 
         // Explicit table alias.
-        testToSql(String.format("select %s from functional.%s a", col, tbl),
-            String.format("SELECT %s FROM functional.%s a", col, tbl));
-        testToSql(String.format("select a.%s from functional.%s a", col, tbl),
-            String.format("SELECT a.%s FROM functional.%s a", col, tbl));
+        TblsTestToSql(String.format("select %s from $TBL a", col), tblName,
+            String.format("SELECT %s FROM %s a", col, fqAlias));
+        TblsTestToSql(String.format("select a.%s from $TBL a", col), tblName,
+            String.format("SELECT a.%s FROM %s a", col, fqAlias));
       }
     }
 
+    // Multiple implicit fully-qualified aliases work.
     for (String t1: tables) {
       for (String t2: tables) {
         if (t1 == t2) continue;
+        // Collection tables do not have a fully-qualified implicit alias.
+        if (isCollectionTableRef(t1) && isCollectionTableRef(t2)) continue;
         for (String col: columns) {
-          // Multiple implicit fully-qualified aliases work.
           testToSql(String.format(
               "select functional.%s.%s, functional.%s.%s " +
                   "from functional.%s, functional.%s", t1, col, t2, col, t1, t2),
@@ -187,11 +215,122 @@ public class ToSqlTest extends AnalyzerTest {
         }
       }
     }
+  }
+
+  /**
+   * Tests the toSql() of the given child table and column assumed to be in
+   * functional.allcomplextypes, including different combinations of
+   * implicit/explicit aliases of the parent and child table.
+   */
+  private void testChildTableRefs(String childTable, String childColumn) {
+    TableName tbl = new TableName("functional", "allcomplextypes");
+
+    // Child table uses unqualified implicit alias of parent table.
+    TblsTestToSql(
+        String.format("select %s from $TBL, allcomplextypes.%s",
+            childColumn, childTable), tbl,
+        String.format("SELECT %s FROM %s, functional.allcomplextypes.%s",
+            childColumn, tbl.toSql(), childTable));
+    // Child table uses fully qualified implicit alias of parent table.
+    TblsTestToSql(
+        String.format("select %s from $TBL, functional.allcomplextypes.%s",
+            childColumn, childTable), tbl,
+        String.format("SELECT %s FROM %s, functional.allcomplextypes.%s",
+            childColumn, tbl.toSql(), childTable));
+    // Child table uses explicit alias of parent table.
+    TblsTestToSql(
+        String.format("select %s from $TBL a, a.%s",
+            childColumn, childTable), tbl,
+        String.format("SELECT %s FROM %s a, a.%s",
+            childColumn, tbl.toSql(), childTable));
+
+    // Parent/child/child join.
+    TblsTestToSql(
+        String.format("select b.%s from $TBL a, a.%s b, a.int_map_col c",
+            childColumn, childTable), tbl,
+        String.format("SELECT b.%s FROM %s a, a.%s b, a.int_map_col c",
+            childColumn, tbl.toSql(), childTable));
+    TblsTestToSql(
+        String.format("select c.%s from $TBL a, a.int_array_col b, a.%s c",
+            childColumn, childTable), tbl,
+        String.format("SELECT c.%s FROM %s a, a.int_array_col b, a.%s c",
+            childColumn, tbl.toSql(), childTable));
+
+    // Test join types. Parent/child joins do not require an ON or USING clause.
+    for (String joinType: joinTypes_) {
+      TblsTestToSql(String.format("select 1 from $TBL %s allcomplextypes.%s",
+          joinType, childTable), tbl,
+          String.format("SELECT 1 FROM %s %s functional.allcomplextypes.%s",
+          tbl.toSql(), joinType, childTable));
+      TblsTestToSql(String.format("select 1 from $TBL a %s a.%s",
+          joinType, childTable), tbl,
+          String.format("SELECT 1 FROM %s a %s a.%s",
+          tbl.toSql(), joinType, childTable));
+    }
+
+    // Legal, but not a parent/child join.
+    TblsTestToSql(
+        String.format("select %s from $TBL a, functional.allcomplextypes.%s",
+            childColumn, childTable), tbl,
+        String.format("SELECT %s FROM %s a, functional.allcomplextypes.%s",
+            childColumn, tbl.toSql(), childTable));
+    TblsTestToSql(
+        String.format("select %s from $TBL.%s, functional.allcomplextypes",
+            childColumn, childTable), tbl,
+        String.format("SELECT %s FROM %s.%s, functional.allcomplextypes",
+            childColumn, tbl.toSql(), childTable));
+  }
+
+  @Test
+  public void TestTableAliases() throws AnalysisException {
+    String[] tables = new String[] { "alltypes", "alltypes_view" };
+    String[] columns = new String[] { "int_col", "*" };
+    testAllTableAliases(tables, columns);
 
     // Unqualified '*' is not ambiguous.
     testToSql("select * from functional.alltypes " +
         "cross join functional_parquet.alltypes",
         "SELECT * FROM functional.alltypes CROSS JOIN functional_parquet.alltypes");
+  }
+
+  @Test
+  public void TestStructFields() throws AnalysisException {
+    String[] tables = new String[] { "allcomplextypes", };
+    String[] columns = new String[] { "id", "int_struct_col.f1",
+        "nested_struct_col.f2.f12.f21" };
+    testAllTableAliases(tables, columns);
+  }
+
+  @Test
+  public void TestCollectionTableRefs() throws AnalysisException {
+    // Test ARRAY type referenced as a table.
+    testAllTableAliases(new String[] {
+        "allcomplextypes.int_array_col"},
+        new String[] {Path.ARRAY_ITEM_FIELD_NAME, "*"});
+    testAllTableAliases(new String[] {
+        "allcomplextypes.struct_array_col"},
+        new String[] {"f1", "f2", "*"});
+
+    // Test MAP type referenced as a table.
+    testAllTableAliases(new String[] {
+        "allcomplextypes.int_map_col"},
+        new String[] {
+            Path.MAP_KEY_FIELD_NAME,
+            Path.MAP_VALUE_FIELD_NAME,
+            "*"});
+    testAllTableAliases(new String[] {
+        "allcomplextypes.struct_map_col"},
+        new String[] {Path.MAP_KEY_FIELD_NAME, "f1", "f2", "*"});
+
+    // Test complex table ref path with structs and multiple collections.
+    testAllTableAliases(new String[] {
+        "allcomplextypes.complex_nested_struct_col.f2.f12"},
+        new String[] {Path.MAP_KEY_FIELD_NAME, "f21", "*"});
+
+    // Test toSql() of child table refs.
+    testChildTableRefs("int_array_col", Path.ARRAY_ITEM_FIELD_NAME);
+    testChildTableRefs("int_map_col", Path.MAP_KEY_FIELD_NAME);
+    testChildTableRefs("complex_nested_struct_col.f2.f12", "f21");
   }
 
   /**
@@ -532,6 +671,39 @@ public class ToSqlTest extends AnalyzerTest {
         "(SELECT id, string_col FROM functional.alltypes) t1, " +
         "(SELECT id, float_col FROM functional.alltypes) t2 " +
         "WHERE t1.id = t2.id AND t1.string_col = 'abc' AND t2.float_col < 10");
+
+    // Test inline views with correlated table refs. Implicit alias only.
+    testToSql(
+        "select cnt from functional.allcomplextypes t, " +
+        "(select count(*) cnt from t.int_array_col) v",
+        "SELECT cnt FROM functional.allcomplextypes t, " +
+        "(SELECT count(*) cnt FROM t.int_array_col) v");
+    // Multiple correlated table refs. Explicit aliases.
+    testToSql(
+        "select avg from functional.allcomplextypes t, " +
+        "(select avg(a1.item) avg from t.int_array_col a1, t.int_array_col a2) v",
+        "SELECT avg FROM functional.allcomplextypes t, " +
+        "(SELECT avg(a1.item) avg FROM t.int_array_col a1, t.int_array_col a2) v");
+    // Correlated table ref has child ref itself. Mix of explicit and implicit aliases.
+    testToSql(
+        "select key, item from functional.allcomplextypes t, " +
+        "(select a1.key, value.item from t.array_map_col a1, a1.value) v",
+        "SELECT key, item FROM functional.allcomplextypes t, " +
+        "(SELECT a1.key, value.item FROM t.array_map_col a1, a1.value) v");
+    // Correlated table refs in a union.
+    testToSql(
+        "select item from functional.allcomplextypes t, " +
+        "(select * from t.int_array_col union all select * from t.int_array_col) v",
+        "SELECT item FROM functional.allcomplextypes t, " +
+        "(SELECT * FROM t.int_array_col UNION ALL SELECT * FROM t.int_array_col) v");
+    // Correlated inline view in WITH-clause.
+    testToSql(
+        "with w as (select c from functional.allcomplextypes t, " +
+        "(select count(a1.key) c from t.array_map_col a1) v1) " +
+        "select * from w",
+        "WITH w AS (SELECT c FROM functional.allcomplextypes t, " +
+        "(SELECT count(a1.key) c FROM t.array_map_col a1) v1) " +
+        "SELECT * FROM w");
   }
 
   /**
@@ -602,6 +774,14 @@ public class ToSqlTest extends AnalyzerTest {
     // WITH clause in select stmt.
     testToSql("with t as (select * from functional.alltypes) select * from t",
         "WITH t AS (SELECT * FROM functional.alltypes) SELECT * FROM t");
+    testToSql("with t(c1) as (select * from functional.alltypes) select * from t",
+        "WITH t(c1) AS (SELECT * FROM functional.alltypes) SELECT * FROM t");
+    testToSql("with t(`table`, col, `create`) as (select * from functional.alltypes) " +
+        "select * from t",
+        "WITH t(`table`, col, `create`) AS (SELECT * FROM functional.alltypes) " +
+        "SELECT * FROM t");
+    testToSql("with t(c1, c2) as (select * from functional.alltypes) select * from t",
+        "WITH t(c1, c2) AS (SELECT * FROM functional.alltypes) SELECT * FROM t");
     testToSql("with t as (select sum(int_col) over(partition by tinyint_col, " +
         "bool_col order by float_col rows between unbounded preceding and " +
         "current row) as x from functional.alltypes) " +
@@ -615,6 +795,10 @@ public class ToSqlTest extends AnalyzerTest {
         "select * from t a inner join t b on (a.int_col = b.int_col)",
         "WITH t AS (SELECT * FROM functional.alltypes) " +
         "SELECT * FROM t a INNER JOIN t b ON (a.int_col = b.int_col)");
+    testToSql("with t(c1, c2) as (select * from functional.alltypes) " +
+        "select a.c1, a.c2 from t a inner join t b on (a.c1 = b.c2)",
+        "WITH t(c1, c2) AS (SELECT * FROM functional.alltypes) " +
+        "SELECT a.c1, a.c2 FROM t a INNER JOIN t b ON (a.c1 = b.c2)");
     // WITH clause in select stmt with a join and a USING clause.
     testToSql("with t as (select * from functional.alltypes) " +
         "select * from t a inner join t b using(int_col)",

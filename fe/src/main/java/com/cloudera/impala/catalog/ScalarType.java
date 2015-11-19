@@ -1,7 +1,22 @@
+// Copyright 2012 Cloudera Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package com.cloudera.impala.catalog;
 
+import org.apache.commons.lang3.StringUtils;
+
 import com.cloudera.impala.analysis.TypesUtil;
-import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.thrift.TColumnType;
 import com.cloudera.impala.thrift.TScalarType;
 import com.cloudera.impala.thrift.TTypeNode;
@@ -37,12 +52,13 @@ public class ScalarType extends Type {
   public static final int DEFAULT_PRECISION = 9;
   public static final int DEFAULT_SCALE = 0; // SQL standard
 
-  // Longest supported VARCHAR and CHAR. Chosen to match Oracle.
-  static final int MAX_VARCHAR_LENGTH = 32672;
+  // Longest supported VARCHAR and CHAR, chosen to match Hive.
+  public static final int MAX_VARCHAR_LENGTH = 65355;
+  public static final int MAX_CHAR_LENGTH = 255;
 
   // Longest CHAR that we in line in the tuple.
   // Keep consistent with backend ColumnType::CHAR_INLINE_LENGTH
-  static final int CHAR_INLINE_LENGTH = 128;
+  public static final int CHAR_INLINE_LENGTH = 128;
 
   // Hive, mysql, sql server standard.
   public static final int MAX_PRECISION = 38;
@@ -109,7 +125,6 @@ public class ScalarType extends Type {
     ScalarType type = new ScalarType(PrimitiveType.DECIMAL);
     type.precision_ = Math.min(precision, MAX_PRECISION);
     type.scale_ = Math.min(type.precision_, scale);
-    type.isAnalyzed_ = true;
     return type;
   }
 
@@ -122,51 +137,6 @@ public class ScalarType extends Type {
 
   public static ScalarType createVarcharType() {
     return DEFAULT_VARCHAR;
-  }
-
-  @Override
-  public void analyze() throws AnalysisException {
-    if (isAnalyzed_) return;
-    Preconditions.checkState(type_ != PrimitiveType.INVALID_TYPE);
-    switch (type_) {
-      case CHAR:
-      case VARCHAR: {
-        String name;
-        if (type_ == PrimitiveType.VARCHAR) {
-          name = "Varchar";
-        } else if (type_ == PrimitiveType.CHAR) {
-          name = "Char";
-        } else {
-          Preconditions.checkState(false);
-          return;
-        }
-
-        if (len_ <= 0) {
-          throw new AnalysisException(name +
-              " size must be > 0. Size was set to: " + len_ + ".");
-        }
-        if (len_ > MAX_VARCHAR_LENGTH) {
-          throw new AnalysisException(name +
-              " size must be <= 32672. Size was set to: " + len_ + ".");
-        }
-        break;
-      }
-      case DECIMAL: {
-        if (precision_ > MAX_PRECISION) {
-          throw new AnalysisException(
-              "Decimal precision must be <= " + MAX_PRECISION + ".");
-        }
-        if (precision_ == 0) {
-          throw new AnalysisException("Decimal precision must be greater than 0.");
-        }
-        if (scale_ > precision_) {
-          throw new AnalysisException("Decimal scale (" + scale_ + ") must be <= " +
-              "precision (" + precision_ + ").");
-        }
-      }
-      default: break;
-    }
-    isAnalyzed_ = true;
   }
 
   @Override
@@ -185,7 +155,8 @@ public class ScalarType extends Type {
   }
 
   @Override
-  public String toSql() {
+  public String toSql(int depth) {
+    if (depth >= MAX_NESTING_DEPTH) return "...";
     switch(type_) {
       case BINARY: return type_.toString();
       case VARCHAR:
@@ -195,6 +166,11 @@ public class ScalarType extends Type {
         return String.format("%s(%s,%s)", type_.toString(), precision_, scale_);
       default: return type_.toString();
     }
+  }
+
+  @Override
+  protected String prettyPrint(int lpad) {
+    return StringUtils.repeat(' ', lpad) + toSql();
   }
 
   @Override
@@ -251,6 +227,7 @@ public class ScalarType extends Type {
   @Override
   public PrimitiveType getPrimitiveType() { return type_; }
   public int ordinal() { return type_.ordinal(); }
+  public int getLength() { return len_; }
 
   @Override
   public boolean isWildcardDecimal() {
@@ -315,7 +292,7 @@ public class ScalarType extends Type {
   public int getSlotSize() {
     switch (type_) {
       case CHAR:
-        if (len_ > CHAR_INLINE_LENGTH) return STRING.getSlotSize();
+        if (len_ > CHAR_INLINE_LENGTH || len_ == 0) return STRING.getSlotSize();
         return len_;
       case DECIMAL: return TypesUtil.getDecimalSlotSize(this);
       default:
@@ -414,7 +391,7 @@ public class ScalarType extends Type {
 
   /**
    * Returns true if this decimal type is a supertype of the other decimal type.
-   * e.g. (10,3) is a super type of (3,3) but (5,4) is not a supertype of (3,0).
+   * e.g. (10,3) is a supertype of (3,3) but (5,4) is not a supertype of (3,0).
    * To be a super type of another decimal, the number of digits before and after
    * the decimal point must be greater or equal.
    */
@@ -422,57 +399,58 @@ public class ScalarType extends Type {
     Preconditions.checkState(isDecimal());
     Preconditions.checkState(o.isDecimal());
     if (isWildcardDecimal()) return true;
+    if (o.isWildcardDecimal()) return false;
     return scale_ >= o.scale_ && precision_ - scale_ >= o.precision_ - o.scale_;
   }
 
   /**
-   * Return type t such that values from both t1 and t2 can be assigned to t
-   * without loss of precision. Returns INVALID_TYPE if there is no such type
-   * or if any of t1 and t2 is INVALID_TYPE.
+   * Return type t such that values from both t1 and t2 can be assigned to t.
+   * If strict, only return types when there will be no loss of precision.
+   * Returns INVALID_TYPE if there is no such type or if any of t1 and t2
+   * is INVALID_TYPE.
    */
   public static ScalarType getAssignmentCompatibleType(ScalarType t1,
-      ScalarType t2) {
+      ScalarType t2, boolean strict) {
     if (!t1.isValid() || !t2.isValid()) return INVALID;
     if (t1.equals(t2)) return t1;
+    if (t1.isNull()) return t2;
+    if (t2.isNull()) return t1;
 
     if (t1.type_ == PrimitiveType.VARCHAR || t2.type_ == PrimitiveType.VARCHAR) {
-      if (t1.isNull()) return t2;
-      if (t2.isNull()) return t1;
       if (t1.type_ == PrimitiveType.STRING || t2.type_ == PrimitiveType.STRING) {
         return STRING;
       }
-      if (t1.type_ == PrimitiveType.VARCHAR && t2.type_ == PrimitiveType.VARCHAR) {
+      if (t1.isStringType() && t2.isStringType()) {
         return createVarcharType(Math.max(t1.len_, t2.len_));
       }
       return INVALID;
     }
 
     if (t1.type_ == PrimitiveType.CHAR || t2.type_ == PrimitiveType.CHAR) {
-      if (t1.type_ == PrimitiveType.CHAR && t2.type_ == PrimitiveType.CHAR) {
-        return createCharType(Math.max(t1.len_, t2.len_));
-      }
-      if (t1.isNull()) return t2;
-      if (t2.isNull()) return t1;
+      Preconditions.checkState(t1.type_ != PrimitiveType.VARCHAR);
+      Preconditions.checkState(t2.type_ != PrimitiveType.VARCHAR);
       if (t1.type_ == PrimitiveType.STRING || t2.type_ == PrimitiveType.STRING) {
         return STRING;
+      }
+      if (t1.type_ == PrimitiveType.CHAR && t2.type_ == PrimitiveType.CHAR) {
+        return createCharType(Math.max(t1.len_, t2.len_));
       }
       return INVALID;
     }
 
     if (t1.isDecimal() || t2.isDecimal()) {
-      if (t1.isNull()) return t2;
-      if (t2.isNull()) return t1;
-
-      // In the case of decimal and float/double, return the floating point type.
-      // Floating point types can contain values larger than the maximum decimal
-      // so it is a safer compatible type.
-      // TODO: revisit, the function comment is clear that this should return the type
-      // which results in no loss of precision. This would mean there is no compatible
-      // type between decimals and floating point types. However, we can't return
-      // INVALID since this path is also used when checking if an explicit cast is
-      // legal.
-      if (t1.isFloatingPointType()) return t1;
-      if (t2.isFloatingPointType()) return t2;
+      // The case of decimal and float/double must be handled carefully. There are two
+      // modes: strict and non-strict. In non-strict mode, we convert to the floating
+      // point type, since it can contain a larger range of values than any decimal (but
+      // has lower precision in some parts of its range), so it is generally better.
+      // In strict mode, we avoid conversion in either direction because there are also
+      // decimal values (e.g. 0.1) that cannot be exactly represented in binary
+      // floating point.
+      // TODO: it might make sense to promote to double in many cases, but this would
+      // require more work elsewhere to avoid breaking things, e.g. inserting decimal
+      // literals into float columns.
+      if (t1.isFloatingPointType()) return strict ? INVALID : t1;
+      if (t2.isFloatingPointType()) return strict ? INVALID : t2;
 
       // Allow casts between decimal and numeric types by converting
       // numeric types to the containing decimal type.
@@ -484,12 +462,9 @@ public class ScalarType extends Type {
 
       if (t1Decimal.equals(t2Decimal)) {
         Preconditions.checkState(!(t1.isDecimal() && t2.isDecimal()));
-        // In this case, the resulting decimals are identical
-        // (e.g. decimal(9,0) and INT)), meaning either type is
-        // valid. In this case, we will always return the non-decimal
-        // type to make sure we always return the same type.
-        if (t1.isDecimal()) return t2;
-        return t1;
+        // The containing decimal type for a non-decimal type is always an exclusive
+        // upper bound, therefore the decimal has higher precision.
+        return t1Decimal;
       }
       if (t1Decimal.isSupertypeOf(t2Decimal)) return t1;
       if (t2Decimal.isSupertypeOf(t1Decimal)) return t2;
@@ -500,18 +475,23 @@ public class ScalarType extends Type {
         (t1.type_.ordinal() < t2.type_.ordinal() ? t1.type_ : t2.type_);
     PrimitiveType largerType =
         (t1.type_.ordinal() > t2.type_.ordinal() ? t1.type_ : t2.type_);
-    PrimitiveType result =
-        compatibilityMatrix[smallerType.ordinal()][largerType.ordinal()];
+    PrimitiveType result = null;
+    if (strict) {
+      result = strictCompatibilityMatrix[smallerType.ordinal()][largerType.ordinal()];
+    }
+    if (result == null) {
+      result = compatibilityMatrix[smallerType.ordinal()][largerType.ordinal()];
+    }
     Preconditions.checkNotNull(result);
     return createType(result);
   }
 
   /**
-   * Returns if it is compatible to implicitly cast from t1 to t2 (casting from
-   * t1 to t2 results in no loss of precision).
+   * Returns true t1 can be implicitly cast to t2, false otherwise.
+   * If strict is true, only consider casts that result in no loss of precision.
    */
-  public static boolean isImplicitlyCastable(ScalarType t1, ScalarType t2) {
-    return getAssignmentCompatibleType(t1, t2).matchesType(t2) ||
-        getAssignmentCompatibleType(t2, t1).matchesType(t2);
+  public static boolean isImplicitlyCastable(ScalarType t1, ScalarType t2,
+      boolean strict) {
+    return getAssignmentCompatibleType(t1, t2, strict).matchesType(t2);
   }
 }

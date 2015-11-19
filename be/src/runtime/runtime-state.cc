@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <string>
+#include <iostream>
+#include <jni.h>
 #include <sstream>
+#include <string>
 
 #include "common/logging.h"
 #include <boost/algorithm/string/join.hpp>
+#include <gutil/strings/substitute.h>
 
 #include "codegen/llvm-codegen.h"
 #include "common/object-pool.h"
@@ -35,16 +38,13 @@
 #include "util/error-util.h"
 #include "util/jni-util.h"
 #include "util/mem-info.h"
+#include "util/pretty-printer.h"
 
-#include <jni.h>
-#include <iostream>
+#include "common/names.h"
+
+using namespace llvm;
 
 DECLARE_int32(max_errors);
-
-using namespace boost;
-using namespace llvm;
-using namespace std;
-using namespace boost::algorithm;
 
 // The fraction of the query mem limit that is used for the block mgr. Operators
 // that accumulate memory all use the block mgr so the majority of the memory should
@@ -61,26 +61,24 @@ static const int64_t BLOCK_MGR_MEM_MIN_REMAINING = 100 * 1024 * 1024;
 
 namespace impala {
 
-RuntimeState::RuntimeState(const TPlanFragmentInstanceCtx& fragment_instance_ctx,
+RuntimeState::RuntimeState(const TExecPlanFragmentParams& fragment_params,
     const string& cgroup, ExecEnv* exec_env)
   : obj_pool_(new ObjectPool()),
-    unreported_error_idx_(0),
-    fragment_instance_ctx_(fragment_instance_ctx),
-    now_(new TimestampValue(fragment_instance_ctx_.query_ctx.now_string.c_str(),
-        fragment_instance_ctx_.query_ctx.now_string.size())),
+    fragment_params_(fragment_params),
+    now_(new TimestampValue(fragment_ctx().query_ctx.now_string.c_str(),
+        fragment_ctx().query_ctx.now_string.size())),
     cgroup_(cgroup),
     profile_(obj_pool_.get(),
-        "Fragment " + PrintId(fragment_instance_ctx_.fragment_instance_id)),
+        "Fragment " + PrintId(fragment_ctx().fragment_instance_id)),
     is_cancelled_(false),
     query_resource_mgr_(NULL),
     root_node_id_(-1) {
   Status status = Init(exec_env);
-  DCHECK(status.ok()) << status.GetErrorMsg();
+  DCHECK(status.ok()) << status.GetDetail();
 }
 
 RuntimeState::RuntimeState(const TQueryCtx& query_ctx)
   : obj_pool_(new ObjectPool()),
-    unreported_error_idx_(0),
     now_(new TimestampValue(query_ctx.now_string.c_str(),
         query_ctx.now_string.size())),
     exec_env_(ExecEnv::GetInstance()),
@@ -88,9 +86,9 @@ RuntimeState::RuntimeState(const TQueryCtx& query_ctx)
     is_cancelled_(false),
     query_resource_mgr_(NULL),
     root_node_id_(-1) {
-  fragment_instance_ctx_.__set_query_ctx(query_ctx);
-  fragment_instance_ctx_.query_ctx.request.query_options.__set_batch_size(
-      DEFAULT_BATCH_SIZE);
+  fragment_params_.fragment_instance_ctx.__set_query_ctx(query_ctx);
+  fragment_params_.fragment_instance_ctx.query_ctx.request.query_options
+      .__set_batch_size(DEFAULT_BATCH_SIZE);
 }
 
 RuntimeState::~RuntimeState() {
@@ -123,7 +121,11 @@ Status RuntimeState::Init(ExecEnv* exec_env) {
   SCOPED_TIMER(profile_.total_time_counter());
   exec_env_ = exec_env;
   TQueryOptions& query_options =
-      fragment_instance_ctx_.query_ctx.request.query_options;
+      fragment_params_.fragment_instance_ctx.query_ctx.request.query_options;
+
+  // max_errors does not indicate how many errors in total have been recorded, but rather
+  // how many are distinct. It is defined as the sum of the number of generic errors and
+  // the number of distinct other errors.
   if (query_options.max_errors <= 0) {
     // TODO: fix linker error and uncomment this
     //query_options_.max_errors = FLAGS_max_errors;
@@ -144,7 +146,7 @@ Status RuntimeState::Init(ExecEnv* exec_env) {
   total_network_send_timer_ = ADD_TIMER(runtime_profile(), "TotalNetworkSendTime");
   total_network_receive_timer_ = ADD_TIMER(runtime_profile(), "TotalNetworkReceiveTime");
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void RuntimeState::InitMemTrackers(const TUniqueId& query_id, const string* pool_name,
@@ -159,16 +161,13 @@ void RuntimeState::InitMemTrackers(const TUniqueId& query_id, const string* pool
           query_rm_reservation_limit_bytes, query_parent_tracker, query_resource_mgr());
   instance_mem_tracker_.reset(new MemTracker(runtime_profile(), -1, -1,
       runtime_profile()->name(), query_mem_tracker_.get()));
-
-  udf_mem_tracker_.reset(
-      new MemTracker(-1, -1, "UDFs", instance_mem_tracker_.get()));
 }
 
 Status RuntimeState::CreateBlockMgr() {
   DCHECK(block_mgr_.get() == NULL);
 
   // Compute the max memory the block mgr will use.
-  int64_t block_mgr_limit = query_mem_tracker_->SpareCapacity();
+  int64_t block_mgr_limit = query_mem_tracker_->lowest_limit();
   if (block_mgr_limit < 0) block_mgr_limit = numeric_limits<int64_t>::max();
   block_mgr_limit = min(static_cast<int64_t>(block_mgr_limit * BLOCK_MGR_MEM_FRACTION),
       block_mgr_limit - BLOCK_MGR_MEM_MIN_REMAINING);
@@ -176,88 +175,84 @@ Status RuntimeState::CreateBlockMgr() {
   if (query_options().__isset.max_block_mgr_memory &&
       query_options().max_block_mgr_memory > 0) {
     block_mgr_limit = query_options().max_block_mgr_memory;
-    LOG(ERROR) << "Block mgr mem limit: "
-               << PrettyPrinter::Print(block_mgr_limit, TCounterType::BYTES);
+    LOG(WARNING) << "Block mgr mem limit: "
+                 << PrettyPrinter::Print(block_mgr_limit, TUnit::BYTES);
   }
 
   RETURN_IF_ERROR(BufferedBlockMgr::Create(this, query_mem_tracker(),
-        runtime_profile(), block_mgr_limit, io_mgr()->max_read_buffer_size(),
-        &block_mgr_));
-  return Status::OK;
-}
-
-void RuntimeState::set_now(const TimestampValue* now) {
-  now_.reset(new TimestampValue(*now));
+      runtime_profile(), exec_env()->tmp_file_mgr(), block_mgr_limit,
+      io_mgr()->max_read_buffer_size(), &block_mgr_));
+  return Status::OK();
 }
 
 Status RuntimeState::CreateCodegen() {
-  if (codegen_.get() != NULL) return Status::OK;
-  RETURN_IF_ERROR(LlvmCodeGen::LoadImpalaIR(obj_pool_.get(), &codegen_));
+  if (codegen_.get() != NULL) return Status::OK();
+  // TODO: add the fragment ID to the codegen ID as well
+  RETURN_IF_ERROR(LlvmCodeGen::LoadImpalaIR(
+      obj_pool_.get(), PrintId(fragment_instance_id()), &codegen_));
   codegen_->EnableOptimizations(true);
   profile_.AddChild(codegen_->runtime_profile());
-  return Status::OK;
+  return Status::OK();
 }
 
 bool RuntimeState::ErrorLogIsEmpty() {
-  lock_guard<mutex> l(error_log_lock_);
+  lock_guard<SpinLock> l(error_log_lock_);
   return (error_log_.size() == 0);
 }
 
 string RuntimeState::ErrorLog() {
-  lock_guard<mutex> l(error_log_lock_);
-  return join(error_log_, "\n");
+  lock_guard<SpinLock> l(error_log_lock_);
+  return PrintErrorMapToString(error_log_);
 }
 
-string RuntimeState::FileErrors() const {
-  lock_guard<mutex> l(file_errors_lock_);
+string RuntimeState::FileErrors() {
   stringstream out;
-  for (int i = 0; i < file_errors_.size(); ++i) {
-    out << file_errors_[i].second << " errors in " << file_errors_[i].first << endl;
+  {
+    lock_guard<SpinLock> l(file_errors_lock_);
+    for (int i = 0; i < file_errors_.size(); ++i) {
+      out << file_errors_[i].second << " errors in " << file_errors_[i].first << endl;
+    }
   }
   return out.str();
 }
 
 void RuntimeState::ReportFileErrors(const std::string& file_name, int num_errors) {
-  lock_guard<mutex> l(file_errors_lock_);
+  lock_guard<SpinLock> l(file_errors_lock_);
   file_errors_.push_back(make_pair(file_name, num_errors));
 }
 
-bool RuntimeState::LogError(const string& error) {
-  lock_guard<mutex> l(error_log_lock_);
-  if (error_log_.size() < query_options().max_errors) {
-    VLOG_QUERY << "Error from query " << query_id() << ": " << error;
-    error_log_.push_back(error);
+bool RuntimeState::LogError(const ErrorMsg& message, int vlog_level) {
+  lock_guard<SpinLock> l(error_log_lock_);
+  // All errors go to the log, unreported_error_count_ is counted independently of the
+  // size of the error_log to account for errors that were already reported to the
+  // coordninator
+  VLOG(vlog_level) << "Error from query " << query_id() << ": " << message.msg();
+  if (ErrorCount(error_log_) < query_options().max_errors) {
+    AppendError(&error_log_, message);
     return true;
   }
   return false;
 }
 
-void RuntimeState::LogError(const Status& status) {
-  if (status.ok()) return;
-  // Don't log cancelled or mem limit exceeded to the log.
-  // For cancelled, he error message is not useful ("Cancelled") and can happen due to
-  // a limit clause.
-  // For mem limit exceeded, the query will report it via SetMemLimitExceeded which
-  // makes the status error message redundant.
-  if (status.IsCancelled() || status.IsMemLimitExceeded()) return;
-  LogError(status.GetErrorMsg());
-}
-
-void RuntimeState::GetUnreportedErrors(vector<string>* new_errors) {
-  lock_guard<mutex> l(error_log_lock_);
-  if (unreported_error_idx_ < error_log_.size()) {
-    new_errors->assign(error_log_.begin() + unreported_error_idx_, error_log_.end());
-    unreported_error_idx_ = error_log_.size();
+void RuntimeState::GetUnreportedErrors(ErrorLogMap* new_errors) {
+  lock_guard<SpinLock> l(error_log_lock_);
+  *new_errors = error_log_;
+  // Reset the map, but keep all already reported keys so that we do not
+  // report the same errors multiple times.
+  BOOST_FOREACH(ErrorLogMap::value_type v, error_log_) {
+    v.second.messages.clear();
+    v.second.count = 0;
   }
 }
 
 Status RuntimeState::SetMemLimitExceeded(MemTracker* tracker,
-    int64_t failed_allocation_size) {
+    int64_t failed_allocation_size, const ErrorMsg* msg) {
   DCHECK_GE(failed_allocation_size, 0);
   {
-    lock_guard<mutex> l(query_status_lock_);
+    lock_guard<SpinLock> l(query_status_lock_);
     if (query_status_.ok()) {
-      query_status_ = Status::MEM_LIMIT_EXCEEDED;
+      query_status_ = Status::MemLimitExceeded();
+      if (msg != NULL) query_status_.MergeStatus(*msg);
     } else {
       return query_status_;
     }
@@ -269,9 +264,8 @@ Status RuntimeState::SetMemLimitExceeded(MemTracker* tracker,
   if (failed_allocation_size != 0) {
     DCHECK(tracker != NULL);
     ss << "  " << tracker->label() << " could not allocate "
-       << PrettyPrinter::Print(failed_allocation_size, TCounterType::BYTES)
-       << " without exceeding limit."
-       << endl;
+       << PrettyPrinter::Print(failed_allocation_size, TUnit::BYTES)
+       << " without exceeding limit." << endl;
   }
 
   if (exec_env_->process_mem_tracker()->LimitExceeded()) {
@@ -279,22 +273,23 @@ Status RuntimeState::SetMemLimitExceeded(MemTracker* tracker,
   } else {
     ss << query_mem_tracker_->LogUsage();
   }
-  LogError(ss.str());
-  // Add warning about missing stats.
-  if (query_ctx().__isset.tables_missing_stats
-      && !query_ctx().tables_missing_stats.empty()) {
-    LogError(GetTablesMissingStatsWarning(query_ctx().tables_missing_stats));
+  LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()));
+  // Add warning about missing stats except for compute stats child queries.
+  if (!query_ctx().__isset.parent_query_id &&
+      query_ctx().__isset.tables_missing_stats &&
+      !query_ctx().tables_missing_stats.empty()) {
+    LogError(ErrorMsg(TErrorCode::GENERAL,
+        GetTablesMissingStatsWarning(query_ctx().tables_missing_stats)));
   }
   DCHECK(query_status_.IsMemLimitExceeded());
   return query_status_;
 }
 
-Status RuntimeState::QueryMaintenance() {
+Status RuntimeState::CheckQueryState() {
   // TODO: it would be nice if this also checked for cancellation, but doing so breaks
   // cases where we use Status::CANCELLED to indicate that the limit was reached.
-  FreeLocalExprAllocations();
   if (instance_mem_tracker_->AnyLimitExceeded()) return SetMemLimitExceeded();
-  lock_guard<mutex> l(query_status_lock_);
+  lock_guard<SpinLock> l(query_status_lock_);
   return query_status_;
 }
 
@@ -302,10 +297,10 @@ void RuntimeState::AddBitmapFilter(SlotId slot, Bitmap* bitmap,
     bool* acquired_ownership) {
   *acquired_ownership = false;
   if (bitmap != NULL) {
-    ScopedSpinLock l(&bitmap_lock_);
+    lock_guard<SpinLock> l(bitmap_lock_);
     if (slot_bitmap_filters_.find(slot) != slot_bitmap_filters_.end()) {
       Bitmap* existing_bitmap = slot_bitmap_filters_[slot];
-      DCHECK_NOTNULL(existing_bitmap);
+      DCHECK(existing_bitmap != NULL);
       existing_bitmap->And(bitmap);
     } else {
       // This is the first time we set the slot_bitmap_filters_[slot]. We avoid
@@ -319,14 +314,7 @@ void RuntimeState::AddBitmapFilter(SlotId slot, Bitmap* bitmap,
 Status RuntimeState::GetCodegen(LlvmCodeGen** codegen, bool initialize) {
   if (codegen_.get() == NULL && initialize) RETURN_IF_ERROR(CreateCodegen());
   *codegen = codegen_.get();
-  return Status::OK;
-}
-
-void RuntimeState::FreeLocalExprAllocations() {
-  for (int i = 0; i < expr_ctxs_to_free_.size(); ++i) {
-    if (expr_ctxs_to_free_[i]->closed()) continue;
-    expr_ctxs_to_free_[i]->FreeLocalAllocations();
-  }
+  return Status::OK();
 }
 
 }

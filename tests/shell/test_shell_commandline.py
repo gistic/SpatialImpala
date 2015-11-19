@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # encoding=utf-8
 # Copyright 2012 Cloudera Inc.
 #
@@ -16,10 +15,11 @@
 
 import os
 import pytest
+import re
 import shlex
 import signal
 
-from impala_shell_results import get_shell_cmd_result, cancellation_helper
+from impala_shell_results import get_shell_cmd_result
 from subprocess import Popen, PIPE, call
 from tests.common.impala_cluster import ImpalaCluster
 from time import sleep
@@ -74,6 +74,12 @@ class TestImpalaShell(object):
     run_impala_shell_cmd(args)
 
   @pytest.mark.execute_serially
+  def test_multiple_queries_with_escaped_backslash(self):
+    # Regression test for string containing an escaped backslash. This relies on the
+    # patch at thirdparty/patches/sqlparse/0001-....patch.
+    run_impala_shell_cmd(r'''-q "select '\\\\'; select '\\'';" -B''')
+
+  @pytest.mark.execute_serially
   def test_default_db(self):
     args = '-d %s -q "describe %s" --quiet' % (TEST_DB, TEST_TBL)
     run_impala_shell_cmd(args)
@@ -116,6 +122,13 @@ class TestImpalaShell(object):
   @pytest.mark.execute_serially
   def test_kerberos_option(self):
     args = "-k"
+
+    # If you have a valid kerberos ticket in your cache, this test fails - so
+    # here we set a bogus KRB5CCNAME in the environment so that klist (and other
+    # kerberos commands) won't find the normal ticket cache.
+    # KERBEROS TODO: add kerberized cluster test case
+    os.environ["KRB5CCNAME"] = "/tmp/this/file/hopefully/does/not/exist"
+
     # The command will fail because we're trying to connect to a kerberized impalad.
     results = run_impala_shell_cmd(args, expect_success=False)
     # Check that impala is using the right service name.
@@ -241,8 +254,11 @@ class TestImpalaShell(object):
     # -p option and the one printed by the profile command
     args = "-p -q 'select 1; profile;'"
     result_set = run_impala_shell_cmd(args)
-    summary = 'Operator   #Hosts  Avg Time'
-    assert result_set.stdout.count(summary) == 2
+    # This regex helps us uniquely identify a profile.
+    regex = re.compile("Operator\s+#Hosts\s+Avg\s+Time")
+    # We expect two query profiles.
+    assert len(re.findall(regex, result_set.stdout)) == 2, \
+        "Could not detect two profiles, stdout: %s" % result_set.stdout
 
   @pytest.mark.execute_serially
   def test_summary(self):
@@ -287,12 +303,9 @@ class TestImpalaShell(object):
     args = '-q "select sleep(10000)"'
     cmd = "%s %s" % (SHELL_CMD, args)
 
-    p = Popen(shlex.split(cmd), shell=False, stderr=PIPE, stdout=PIPE)
-    sleep(1)
-    # iterate through all processes with psutil
-    shell_pid = cancellation_helper(args)
-    sleep(2)
-    os.kill(shell_pid, signal.SIGINT)
+    p = Popen(shlex.split(cmd), stderr=PIPE, stdout=PIPE)
+    sleep(3)
+    os.kill(p.pid, signal.SIGINT)
     result = get_shell_cmd_result(p)
 
     assert "Cancelling Query" in result.stderr, result.stderr
@@ -300,6 +313,7 @@ class TestImpalaShell(object):
   @pytest.mark.execute_serially
   def test_get_log_once(self):
     """Test that get_log() is always called exactly once."""
+    pytest.xfail(reason="The shell doesn't fetch all the warning logs.")
     # Query with fetch
     args = '-q "select * from functional.alltypeserror"'
     result = run_impala_shell_cmd(args)
@@ -325,6 +339,7 @@ class TestImpalaShell(object):
     args = """-B -q "select '%s'" """ % RUSSIAN_CHARS
     result = run_impala_shell_cmd(args.encode('utf-8'))
     assert 'UnicodeDecodeError' not in result.stderr
+    #print result.stdout.encode('utf-8')
     assert RUSSIAN_CHARS.encode('utf-8') in result.stdout
 
   @pytest.mark.execute_serially
@@ -348,15 +363,44 @@ class TestImpalaShell(object):
       args = '--config_file=%s/bad_impalarc' % QUERY_FILE_PATH
       run_impala_shell_cmd(args, expect_success=False)
 
-def run_impala_shell_cmd(shell_args, expect_success=True):
+  @pytest.mark.execute_serially
+  def test_execute_queries_from_stdin(self):
+    """ Test that queries get executed correctly when STDIN is given as the sql file """
+    args = '-f - --quiet -B'
+    query_file = "%s/test_file_comments.sql" % QUERY_FILE_PATH
+    query_file_handle = None
+    try:
+      query_file_handle = open(query_file, 'r')
+      query = query_file_handle.read()
+      query_file_handle.close()
+    except Exception, e:
+      assert query_file_handle != None, "Exception %s: Could not find query file" % e
+    result = run_impala_shell_cmd(args, expect_success=True, stdin_input=query)
+    output = result.stdout
+
+    args = '-f %s/test_file_no_comments.sql --quiet -B' % QUERY_FILE_PATH
+    result = run_impala_shell_cmd(args)
+    assert output == result.stdout, "Queries from STDIN not parsed correctly."
+
+  @pytest.mark.execute_serially
+  def test_allow_creds_in_clear(self):
+    args = '-l'
+    result = run_impala_shell_cmd(args, expect_success=False)
+    assert "LDAP credentials may not be sent over insecure connections. " +\
+    "Enable SSL or set --auth_creds_ok_in_clear" in result.stderr
+
+    # TODO: Without an Impala daemon running LDAP authentication, we can't test if
+    # --auth_creds_ok_in_clear works when correctly set.
+
+def run_impala_shell_cmd(shell_args, expect_success=True, stdin_input=None):
   """Runs the Impala shell on the commandline.
 
   'shell_args' is a string which represents the commandline options.
   Returns a ImpalaShellResult.
   """
   cmd = "%s %s" % (SHELL_CMD, shell_args)
-  p = Popen(shlex.split(cmd), shell=False, stdout=PIPE, stderr=PIPE)
-  result = get_shell_cmd_result(p)
+  p = Popen(shlex.split(cmd), shell=False, stdout=PIPE, stderr=PIPE, stdin=PIPE)
+  result = get_shell_cmd_result(p, stdin_input)
   if expect_success:
     assert result.rc == 0, "Cmd %s was expected to succeed: %s" % (cmd, result.stderr)
   else:

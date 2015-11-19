@@ -39,12 +39,12 @@ import com.cloudera.impala.common.ByteUnits;
 import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.common.JniUtil;
+import com.cloudera.impala.thrift.TErrorCode;
 import com.cloudera.impala.thrift.TPoolConfigParams;
 import com.cloudera.impala.thrift.TPoolConfigResult;
 import com.cloudera.impala.thrift.TResolveRequestPoolParams;
 import com.cloudera.impala.thrift.TResolveRequestPoolResult;
 import com.cloudera.impala.thrift.TStatus;
-import com.cloudera.impala.thrift.TStatusCode;
 import com.cloudera.impala.util.FileWatchService.FileChangeListener;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -86,9 +86,9 @@ public class RequestPoolService {
   final static String LLAMA_MAX_PLACED_RESERVATIONS_KEY =
       "llama.am.throttling.maximum.placed.reservations";
 
-  // If the default maximum.placed.reservations property isn't set in the config, Llama
-  // uses this default value.
-  final static int LLAMA_MAX_PLACED_RESERVATIONS_DEFAULT = 20;
+  // Default value for the maximum.placed.reservations property. Note that this value
+  // differs from the current Llama default of 10000 which is too high.
+  final static int LLAMA_MAX_PLACED_RESERVATIONS_DEFAULT = 200;
 
   // Key for the default maximum number of queued requests ("queued reservations")
   // property. The per-pool key name is this key with the pool name appended, e.g.
@@ -96,9 +96,9 @@ public class RequestPoolService {
   final static String LLAMA_MAX_QUEUED_RESERVATIONS_KEY =
       "llama.am.throttling.maximum.queued.reservations";
 
-  // If the default maximum.queued.reservations property isn't set in the config, Llama
-  // uses this default value.
-  final static int LLAMA_MAX_QUEUED_RESERVATIONS_DEFAULT = 50;
+  // Default value for the maximum.queued.reservations property. Note that this value
+  // differs from the current Llama default of 0 which disables queuing.
+  final static int LLAMA_MAX_QUEUED_RESERVATIONS_DEFAULT = 200;
 
   // String format for a per-pool configuration key. First parameter is the key for the
   // default, e.g. LLAMA_MAX_PLACED_RESERVATIONS_KEY, and the second parameter is the
@@ -296,16 +296,16 @@ public class RequestPoolService {
       if (errorMessage == null) {
         // This occurs when assignToPool returns null (not an error), i.e. if the pool
         // cannot be resolved according to the policy.
-        result.setStatus(new TStatus(TStatusCode.OK, Lists.<String>newArrayList()));
+        result.setStatus(new TStatus(TErrorCode.OK, Lists.<String>newArrayList()));
       } else {
         // If Yarn throws an exception, return an error status.
         result.setStatus(
-            new TStatus(TStatusCode.INTERNAL_ERROR, Lists.newArrayList(errorMessage)));
+            new TStatus(TErrorCode.INTERNAL_ERROR, Lists.newArrayList(errorMessage)));
       }
     } else {
       result.setResolved_pool(pool);
       result.setHas_access(hasAccess(pool, user));
-      result.setStatus(new TStatus(TStatusCode.OK, Lists.<String>newArrayList()));
+      result.setStatus(new TStatus(TErrorCode.OK, Lists.<String>newArrayList()));
     }
     return result;
   }

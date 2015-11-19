@@ -14,9 +14,9 @@
 
 package com.cloudera.impala.catalog;
 
+import java.util.ArrayList;
 import java.util.List;
 
-import com.cloudera.impala.analysis.FunctionArgs;
 import com.cloudera.impala.analysis.FunctionName;
 import com.cloudera.impala.analysis.HdfsUri;
 import com.cloudera.impala.thrift.TAggregateFunction;
@@ -66,8 +66,9 @@ public class AggregateFunction extends Function {
   // empty input in BE).
   private boolean returnsNonNullOnEmpty_;
 
-  public AggregateFunction(FunctionName fnName, FunctionArgs args, Type retType) {
-    super(fnName, args.argTypes, retType, args.hasVarArgs);
+  public AggregateFunction(FunctionName fnName, ArrayList<Type> argTypes, Type retType,
+      boolean hasVarArgs) {
+    super(fnName, argTypes, retType, hasVarArgs);
   }
 
   public AggregateFunction(FunctionName fnName, List<Type> argTypes,
@@ -120,31 +121,33 @@ public class AggregateFunction extends Function {
   }
 
   public static AggregateFunction createAnalyticBuiltin(Db db, String name,
-      List<Type> argTypes, Type retType, Type intermediateType,
-      String initFnSymbol, String updateFnSymbol, String removeFnSymbol,
-      String getValueFnSymbol, String finalizeFnSymbol) {
-    AggregateFunction fn = new AggregateFunction(new FunctionName(db.getName(), name),
-        argTypes, retType, intermediateType, null, updateFnSymbol, initFnSymbol,
-        null, null, getValueFnSymbol, null, finalizeFnSymbol);
-    fn.setBinaryType(TFunctionBinaryType.BUILTIN);
-    fn.ignoresDistinct_ = false;
-    fn.isAnalyticFn_ = true;
-    fn.isAggregateFn_ = false;
-    fn.returnsNonNullOnEmpty_ = false;
-    return fn;
+      List<Type> argTypes, Type retType, Type intermediateType) {
+    return createAnalyticBuiltin(db, name, argTypes, retType, intermediateType, null,
+        null, null, null, null, true);
   }
 
   public static AggregateFunction createAnalyticBuiltin(Db db, String name,
-      List<Type> argTypes, Type retType, Type intermediateType) {
+      List<Type> argTypes, Type retType, Type intermediateType,
+      String initFnSymbol, String updateFnSymbol, String removeFnSymbol,
+      String getValueFnSymbol, String finalizeFnSymbol) {
+    return createAnalyticBuiltin(db, name, argTypes, retType, intermediateType,
+        initFnSymbol, updateFnSymbol, removeFnSymbol, getValueFnSymbol, finalizeFnSymbol,
+        true);
+  }
+
+  public static AggregateFunction createAnalyticBuiltin(Db db, String name,
+      List<Type> argTypes, Type retType, Type intermediateType,
+      String initFnSymbol, String updateFnSymbol, String removeFnSymbol,
+      String getValueFnSymbol, String finalizeFnSymbol, boolean isUserVisible) {
     AggregateFunction fn = new AggregateFunction(new FunctionName(db.getName(), name),
-        argTypes, retType, intermediateType, null, null, null, null, null, null, null,
-        null);
+        argTypes, retType, intermediateType, null, updateFnSymbol, initFnSymbol,
+        null, null, getValueFnSymbol, removeFnSymbol, finalizeFnSymbol);
     fn.setBinaryType(TFunctionBinaryType.BUILTIN);
     fn.ignoresDistinct_ = false;
     fn.isAnalyticFn_ = true;
     fn.isAggregateFn_ = false;
     fn.returnsNonNullOnEmpty_ = false;
-    fn.setUserVisible(true);
+    fn.setUserVisible(isUserVisible);
     return fn;
   }
 
@@ -173,6 +176,28 @@ public class AggregateFunction extends Function {
   public void setRemoveFnSymbol(String fn) { removeFnSymbol_ = fn; }
   public void setFinalizeFnSymbol(String fn) { finalizeFnSymbol_ = fn; }
   public void setIntermediateType(Type t) { intermediateType_ = t; }
+
+  @Override
+  public String toSql(boolean ifNotExists) {
+    StringBuilder sb = new StringBuilder("CREATE AGGREGATE FUNCTION ");
+    if (ifNotExists) sb.append("IF NOT EXISTS ");
+    sb.append(dbName() + "." + signatureString() + "\n")
+      .append(" RETURNS " + getReturnType() + "\n");
+    if (getIntermediateType() != null) {
+      sb.append(" INTERMEDIATE " + getIntermediateType() + "\n");
+    }
+    sb.append(" LOCATION '" + getLocation() + "'\n")
+      .append(" UPDATE_FN='" + getUpdateFnSymbol() + "'\n")
+      .append(" INIT_FN='" + getInitFnSymbol() + "'\n")
+      .append(" MERGE_FN='" + getMergeFnSymbol() + "'\n");
+    if (getSerializeFnSymbol() != null) {
+      sb.append(" SERIALIZE_FN='" + getSerializeFnSymbol() + "'\n");
+    }
+    if (getFinalizeFnSymbol() != null) {
+      sb.append(" FINALIZE_FN='" + getFinalizeFnSymbol() + "'\n");
+    }
+    return sb.toString();
+  }
 
   @Override
   public TFunction toThrift() {

@@ -86,34 +86,36 @@ cd ${IMPALA_HOME}
 if [ "x${TARGET_BUILD_TYPE}" != "x" ] || [ "x${BUILD_SHARED_LIBS}" != "x" ]
 then
     rm -f ./CMakeCache.txt
-    CMAKE_ARGS=""
-    if [ "x${TARGET_BUILD_TYPE}" != "x" ]
-    then
-        CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_BUILD_TYPE=${TARGET_BUILD_TYPE}"
+    CMAKE_ARGS=()
+    if [ "x${TARGET_BUILD_TYPE}" != "x" ]; then
+      CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=${TARGET_BUILD_TYPE})
     fi
-    if [ "x${BUILD_SHARED_LIBS}" != "x" ]
-    then
-        CMAKE_ARGS="${CMAKE_ARGS} -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS}"
+
+    if [ "x${BUILD_SHARED_LIBS}" != "x" ]; then
+      CMAKE_ARGS+=(-DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS})
     fi
-    cmake . ${CMAKE_ARGS}
+
+    if [[ ! -z $IMPALA_TOOLCHAIN ]]; then
+
+      if [[ "$TARGET_BUILD_TYPE" == "Address_Sanitizer" ]]; then
+        CMAKE_ARGS+=(-DCMAKE_TOOLCHAIN_FILE=$IMPALA_HOME/cmake_modules/asan_toolchain.cmake)
+      else
+        CMAKE_ARGS+=(-DCMAKE_TOOLCHAIN_FILE=$IMPALA_HOME/cmake_modules/toolchain.cmake)
+      fi
+    fi
+
+    cmake . ${CMAKE_ARGS[@]}
 fi
 
 if [ $CLEAN -eq 1 ]
 then
   make clean
-  rm -f $IMPALA_HOME/llvm-ir/impala-nosse.ll
-  rm -f $IMPALA_HOME/llvm-ir/impala-sse.ll
 fi
 
 $IMPALA_HOME/bin/gen_build_version.py --noclean
 
 cd $IMPALA_HOME/common/function-registry
 make
-cd $IMPALA_HOME/common/thrift
-make
-cd $IMPALA_BE_DIR
-# TODO: we need to figure out how to use CMake dependencies properly
-python src/codegen/gen_ir_descriptions.py --noclean
 
 cd $IMPALA_HOME
 if [ $BUILD_TESTS -eq 1 ]
@@ -121,7 +123,6 @@ then
   make -j${IMPALA_BUILD_THREADS:-4}
 else
   # TODO: is there a way to get CMake to do this?
-  make compile_to_ir_no_sse compile_to_ir_sse
   make -j${IMPALA_BUILD_THREADS:-4} impalad
   make -j${IMPALA_BUILD_THREADS:-4} statestored catalogd fesupport loggingsupport ImpalaUdf
 fi

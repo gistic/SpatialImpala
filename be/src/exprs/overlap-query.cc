@@ -22,7 +22,7 @@ OverlapQuery::~OverlapQuery() {
 Status OverlapQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
-    return Status::OK;
+    return Status::OK();
   }
 
   DCHECK_EQ(GetNumChildren(), 2);

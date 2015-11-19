@@ -33,6 +33,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import org.apache.hadoop.fs.permission.FsAction;
 
 /**
  * Represents a CREATE TABLE statement for external data sources. Such tables
@@ -42,9 +43,9 @@ import com.google.common.collect.Maps;
  */
 public class CreateTableDataSrcStmt extends CreateTableStmt {
 
-  public CreateTableDataSrcStmt(TableName tableName, List<ColumnDesc> columnDefs,
+  public CreateTableDataSrcStmt(TableName tableName, List<ColumnDef> columnDefs,
       String dataSourceName, String initString, String comment, boolean ifNotExists) {
-    super(tableName, columnDefs, Lists.<ColumnDesc>newArrayList(), false, comment,
+    super(tableName, columnDefs, Lists.<ColumnDef>newArrayList(), false, comment,
         RowFormat.DEFAULT_ROW_FORMAT, THdfsFileFormat.TEXT, null, null, ifNotExists,
         createInitialTableProperties(dataSourceName, initString),
         Maps.<String, String>newHashMap());
@@ -72,7 +73,7 @@ public class CreateTableDataSrcStmt extends CreateTableStmt {
       throw new AnalysisException("Data source does not exist: " + dataSourceName);
     }
 
-    for (ColumnDesc col: getColumnDefs()) {
+    for (ColumnDef col: getColumnDefs()) {
       if (!DataSourceTable.isSupportedColumnType(col.getType())) {
         throw new AnalysisException("Tables produced by an external data source do " +
             "not support the column type: " + col.getType());
@@ -81,11 +82,11 @@ public class CreateTableDataSrcStmt extends CreateTableStmt {
     // Add table properties from the DataSource catalog object now that we have access
     // to the catalog. These are stored in the table metadata because DataSource catalog
     // objects are not currently persisted.
-    String location = dataSource.getLocation().toUri().getPath();
+    String location = dataSource.getLocation();
     getTblProperties().put(TBL_PROP_LOCATION, location);
     getTblProperties().put(TBL_PROP_CLASS, dataSource.getClassName());
     getTblProperties().put(TBL_PROP_API_VER, dataSource.getApiVersion());
-    new HdfsUri(location).analyze(analyzer, Privilege.ALL);
+    new HdfsUri(location).analyze(analyzer, Privilege.ALL, FsAction.READ);
     // TODO: check class exists and implements API version
   }
 }

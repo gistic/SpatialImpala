@@ -18,6 +18,9 @@ import java.util.List;
 
 import com.cloudera.impala.analysis.SlotDescriptor;
 import com.cloudera.impala.analysis.TupleDescriptor;
+import com.cloudera.impala.catalog.HdfsFileFormat;
+import com.cloudera.impala.catalog.Type;
+import com.cloudera.impala.common.NotImplementedException;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TNetworkAddress;
 import com.cloudera.impala.thrift.TScanRangeLocations;
@@ -32,6 +35,12 @@ import com.google.common.collect.Lists;
 abstract public class ScanNode extends PlanNode {
   protected final TupleDescriptor desc_;
 
+  // Total number of rows this node is expected to process
+  protected long inputCardinality_ = -1;
+
+  // Counter indicating if partitions have missing statistics
+  protected int numPartitionsMissingStats_ = 0;
+
   // List of scan-range locations. Populated in init().
   protected List<TScanRangeLocations> scanRanges_;
 
@@ -41,6 +50,31 @@ abstract public class ScanNode extends PlanNode {
   }
 
   public TupleDescriptor getTupleDesc() { return desc_; }
+
+  /**
+   * Checks if this scan is supported based on the types of scanned columns and the
+   * underlying file formats, in particular, whether complex types are supported.
+   *
+   * The default implementation throws if this scan would need to materialize a nested
+   * field or collection. The scan is ok if the table schema contains complex types, as
+   * long as the query does not reference them.
+   *
+   * Subclasses should override this function as appropriate.
+   */
+  protected void checkForSupportedFileFormats() throws NotImplementedException {
+    Preconditions.checkNotNull(desc_);
+    Preconditions.checkNotNull(desc_.getTable());
+    for (SlotDescriptor slotDesc: desc_.getSlots()) {
+      if (slotDesc.getType().isComplexType() || slotDesc.getColumn() == null) {
+        Preconditions.checkNotNull(slotDesc.getPath());
+        throw new NotImplementedException(String.format(
+            "Scan of table '%s' is not supported because '%s' references a nested " +
+            "field/collection.\nComplex types are supported for these file formats: %s.",
+            slotDesc.getPath().toString(), desc_.getAlias(),
+            Joiner.on(", ").join(HdfsFileFormat.complexTypesFormats())));
+      }
+    }
+  }
 
   /**
    * Returns all scan ranges plus their locations.
@@ -74,13 +108,16 @@ abstract public class ScanNode extends PlanNode {
     } else {
       output.append(prefix + "table stats: " + desc_.getTable().getNumRows() +
           " rows total");
+      if (numPartitionsMissingStats_ > 0) {
+        output.append(" (" + numPartitionsMissingStats_ + " partition(s) missing stats)");
+      }
     }
     output.append("\n");
 
     // Column stats.
     List<String> columnsMissingStats = Lists.newArrayList();
     for (SlotDescriptor slot: desc_.getSlots()) {
-      if (!slot.getStats().hasStats()) {
+      if (!slot.getStats().hasStats() && slot.getColumn() != null) {
         columnsMissingStats.add(slot.getColumn().getName());
       }
     }
@@ -100,7 +137,25 @@ abstract public class ScanNode extends PlanNode {
    * or column stats relevant to this scan node.
    */
   public boolean isTableMissingStats() {
+    return isTableMissingColumnStats() || isTableMissingTableStats();
+  }
+
+  public boolean isTableMissingTableStats() {
     if (desc_.getTable().getNumRows() == -1) return true;
+    return numPartitionsMissingStats_ > 0;
+  }
+
+  /**
+   * Returns true if the tuple descriptor references a path with a collection type.
+   */
+  public boolean isAccessingCollectionType() {
+    for (Type t: desc_.getPath().getMatchedTypes()) {
+      if (t.isCollectionType()) return true;
+    }
+    return false;
+  }
+
+  public boolean isTableMissingColumnStats() {
     for (SlotDescriptor slot: desc_.getSlots()) {
       if (!slot.getStats().hasStats()) return true;
     }
@@ -108,8 +163,14 @@ abstract public class ScanNode extends PlanNode {
   }
 
   /**
+   * Returns true, if the scanned table is suspected to have corrupt table stats,
+   * in particular, if the scan is non-empty and 'numRows' is 0 or negative (but not -1).
+   */
+  public boolean hasCorruptTableStats() { return false; }
+
+  /**
    * Helper function to parse a "host:port" address string into TNetworkAddress
-   * This is called with ipaddress:port when doing scan range assigment.
+   * This is called with ipaddress:port when doing scan range assignment.
    */
   protected static TNetworkAddress addressToTNetworkAddress(String address) {
     TNetworkAddress result = new TNetworkAddress();
@@ -119,4 +180,9 @@ abstract public class ScanNode extends PlanNode {
     return result;
   }
 
+  @Override
+  public long getInputCardinality() {
+    if (getConjuncts().isEmpty() && hasLimit()) return getLimit();
+    return inputCardinality_;
+  }
 }

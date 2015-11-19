@@ -42,15 +42,19 @@
 #include "util/mem-info.h"
 #include "util/periodic-counter-updater.h"
 #include "util/llama-util.h"
+#include "util/pretty-printer.h"
 
 DEFINE_bool(serialize_batch, false, "serialize and deserialize each returned row batch");
 DEFINE_int32(status_report_interval, 5, "interval between profile reports; in seconds");
 DECLARE_bool(enable_rm);
 
-using namespace std;
-using namespace boost;
-using namespace strings;
+#include "common/names.h"
+
+namespace posix_time = boost::posix_time;
+using boost::get_system_time;
+using boost::system_time;
 using namespace apache::thrift;
+using namespace strings;
 
 namespace impala {
 
@@ -93,7 +97,7 @@ Status PlanFragmentExecutor::Prepare(const TExecPlanFragmentParams& request) {
   }
 
   runtime_state_.reset(
-      new RuntimeState(request.fragment_instance_ctx, cgroup, exec_env_));
+      new RuntimeState(request, cgroup, exec_env_));
 
   // total_time_counter() is in the runtime_state_ so start it up now.
   SCOPED_TIMER(profile()->total_time_counter());
@@ -136,7 +140,7 @@ Status PlanFragmentExecutor::Prepare(const TExecPlanFragmentParams& request) {
       runtime_state_->query_options().mem_limit > 0) {
     bytes_limit = runtime_state_->query_options().mem_limit;
     VLOG_QUERY << "Using query memory limit from query options: "
-               << PrettyPrinter::Print(bytes_limit, TCounterType::BYTES);
+               << PrettyPrinter::Print(bytes_limit, TUnit::BYTES);
   }
 
   int64_t rm_reservation_size_bytes = -1;
@@ -147,15 +151,13 @@ Status PlanFragmentExecutor::Prepare(const TExecPlanFragmentParams& request) {
     // have a reservation larger than the hard limit. Clamp reservation bytes limit to the
     // hard limit (if it exists).
     if (rm_reservation_size_bytes > bytes_limit && bytes_limit != -1) {
-      runtime_state_->LogError(Substitute("Reserved resource size ($0) is larger than "
-          "query mem limit ($1), and will be restricted to $1. Configure the reservation "
-          "size by setting RM_INITIAL_MEM.",
+      runtime_state_->LogError(ErrorMsg(TErrorCode::FRAGMENT_EXECUTOR,
           PrettyPrinter::PrintBytes(rm_reservation_size_bytes),
           PrettyPrinter::PrintBytes(bytes_limit)));
       rm_reservation_size_bytes = bytes_limit;
     }
     VLOG_QUERY << "Using RM reservation memory limit from resource reservation: "
-               << PrettyPrinter::Print(rm_reservation_size_bytes, TCounterType::BYTES);
+               << PrettyPrinter::Print(rm_reservation_size_bytes, TUnit::BYTES);
   }
 
   DCHECK(!params.request_pool.empty());
@@ -174,11 +176,11 @@ Status PlanFragmentExecutor::Prepare(const TExecPlanFragmentParams& request) {
       bind<int64_t>(mem_fn(&ThreadResourceMgr::ResourcePool::num_threads),
           runtime_state_->resource_pool()));
   mem_usage_sampled_counter_ = profile()->AddTimeSeriesCounter("MemoryUsage",
-      TCounterType::BYTES,
+      TUnit::BYTES,
       bind<int64_t>(mem_fn(&MemTracker::consumption),
           runtime_state_->instance_mem_tracker()));
   thread_usage_sampled_counter_ = profile()->AddTimeSeriesCounter("ThreadUsage",
-      TCounterType::UNIT,
+      TUnit::UNIT,
       bind<int64_t>(mem_fn(&ThreadResourceMgr::ResourcePool::num_threads),
           runtime_state_->resource_pool()));
 
@@ -254,15 +256,15 @@ Status PlanFragmentExecutor::Prepare(const TExecPlanFragmentParams& request) {
   // set up profile counters
   profile()->AddChild(plan_->runtime_profile());
   rows_produced_counter_ =
-      ADD_COUNTER(profile(), "RowsProduced", TCounterType::UNIT);
+      ADD_COUNTER(profile(), "RowsProduced", TUnit::UNIT);
   per_host_mem_usage_ =
-      ADD_COUNTER(profile(), PER_HOST_PEAK_MEM_COUNTER, TCounterType::BYTES);
+      ADD_COUNTER(profile(), PER_HOST_PEAK_MEM_COUNTER, TUnit::BYTES);
 
   row_batch_.reset(new RowBatch(plan_->row_desc(), runtime_state_->batch_size(),
         runtime_state_->instance_mem_tracker()));
   VLOG(2) << "plan_root=\n" << plan_->DebugString();
   prepared_ = true;
-  return Status::OK;
+  return Status::OK();
 }
 
 void PlanFragmentExecutor::OptimizeLlvmModule() {
@@ -270,12 +272,12 @@ void PlanFragmentExecutor::OptimizeLlvmModule() {
   LlvmCodeGen* codegen;
   Status status = runtime_state_->GetCodegen(&codegen, /* initalize */ false);
   DCHECK(status.ok());
-  DCHECK_NOTNULL(codegen);
+  DCHECK(codegen != NULL);
   status = codegen->FinalizeModule();
   if (!status.ok()) {
     stringstream ss;
-    ss << "Error with codegen for this query: " << status.GetErrorMsg();
-    runtime_state_->LogError(ss.str());
+    ss << "Error with codegen for this query: " << status.GetDetail();
+    runtime_state_->LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()));
   }
 }
 
@@ -320,7 +322,7 @@ Status PlanFragmentExecutor::Open() {
     // Log error message in addition to returning in Status. Queries that do not
     // fetch results (e.g. insert) may not receive the message directly and can
     // only retrieve the log.
-    runtime_state_->LogError(status.GetErrorMsg());
+    runtime_state_->LogError(status.msg());
   }
   UpdateStatus(status);
   return status;
@@ -332,7 +334,7 @@ Status PlanFragmentExecutor::OpenInternal() {
     RETURN_IF_ERROR(plan_->Open(runtime_state_.get()));
   }
 
-  if (sink_.get() == NULL) return Status::OK;
+  if (sink_.get() == NULL) return Status::OK();
 
   RETURN_IF_ERROR(sink_->Open(runtime_state_.get()));
 
@@ -366,7 +368,7 @@ Status PlanFragmentExecutor::OpenInternal() {
   done_ = true;
 
   FragmentComplete();
-  return Status::OK;
+  return Status::OK();
 }
 
 void PlanFragmentExecutor::ReportProfile() {
@@ -469,7 +471,7 @@ Status PlanFragmentExecutor::GetNext(RowBatch** batch) {
 Status PlanFragmentExecutor::GetNextInternal(RowBatch** batch) {
   if (done_) {
     *batch = NULL;
-    return Status::OK;
+    return Status::OK();
   }
 
   while (!done_) {
@@ -484,7 +486,7 @@ Status PlanFragmentExecutor::GetNextInternal(RowBatch** batch) {
     }
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void PlanFragmentExecutor::FragmentComplete() {

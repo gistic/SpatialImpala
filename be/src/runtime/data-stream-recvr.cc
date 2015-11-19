@@ -22,8 +22,9 @@
 #include "util/runtime-profile.h"
 #include "util/periodic-counter-updater.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
+using boost::condition_variable;
 
 namespace impala {
 
@@ -112,8 +113,10 @@ Status DataStreamRecvr::SenderQueue::GetBatch(RowBatch** next_batch) {
     VLOG_ROW << "wait arrival fragment_instance_id=" << recvr_->fragment_instance_id()
              << " node=" << recvr_->dest_node_id();
     // Don't count time spent waiting on the sender as active time.
-    SCOPED_TIMER(recvr_->data_arrival_timer_);
-    SCOPED_TIMER(received_first_batch_ ? NULL : recvr_->first_batch_wait_total_timer_);
+    CANCEL_SAFE_SCOPED_TIMER(recvr_->data_arrival_timer_, &is_cancelled_);
+    CANCEL_SAFE_SCOPED_TIMER(
+        received_first_batch_ ? NULL : recvr_->first_batch_wait_total_timer_,
+        &is_cancelled_);
     data_arrival_cv_.wait(l);
   }
 
@@ -125,7 +128,7 @@ Status DataStreamRecvr::SenderQueue::GetBatch(RowBatch** next_batch) {
 
   if (batch_queue_.empty()) {
     DCHECK_EQ(num_remaining_senders_, 0);
-    return Status::OK;
+    return Status::OK();
   }
 
   received_first_batch_ = true;
@@ -138,7 +141,7 @@ Status DataStreamRecvr::SenderQueue::GetBatch(RowBatch** next_batch) {
   data_removal__cv_.notify_one();
   current_batch_.reset(result);
   *next_batch = current_batch_.get();
-  return Status::OK;
+  return Status::OK();
 }
 
 void DataStreamRecvr::SenderQueue::AddBatch(const TRowBatch& thrift_batch) {
@@ -157,7 +160,7 @@ void DataStreamRecvr::SenderQueue::AddBatch(const TRowBatch& thrift_batch) {
   // if the merger is waiting for data from an empty queue that cannot be filled because
   // the limit has been reached.
   while (!batch_queue_.empty() && recvr_->ExceedsLimit(batch_size) && !is_cancelled_) {
-    SCOPED_TIMER(recvr_->buffer_full_total_timer_);
+    CANCEL_SAFE_SCOPED_TIMER(recvr_->buffer_full_total_timer_, &is_cancelled_);
     VLOG_ROW << " wait removal: empty=" << (batch_queue_.empty() ? 1 : 0)
              << " #buffered=" << recvr_->num_buffered_bytes_
              << " batch_size=" << batch_size << "\n";
@@ -169,7 +172,7 @@ void DataStreamRecvr::SenderQueue::AddBatch(const TRowBatch& thrift_batch) {
     {
       try_mutex::scoped_try_lock timer_lock(recvr_->buffer_wall_timer_lock_);
       if (timer_lock) {
-        SCOPED_TIMER(recvr_->buffer_full_wall_timer_);
+        CANCEL_SAFE_SCOPED_TIMER(recvr_->buffer_full_wall_timer_, &is_cancelled_);
         data_removal__cv_.wait(l);
         got_timer_lock = true;
       } else {
@@ -263,7 +266,7 @@ Status DataStreamRecvr::CreateMerger(const TupleRowComparator& less_than) {
         bind(mem_fn(&SenderQueue::GetBatch), sender_queues_[i], _1));
   }
   RETURN_IF_ERROR(merger_->Prepare(input_batch_suppliers));
-  return Status::OK;
+  return Status::OK();
 }
 
 void DataStreamRecvr::TransferAllResources(RowBatch* transfer_batch) {
@@ -299,7 +302,7 @@ DataStreamRecvr::DataStreamRecvr(DataStreamMgr* stream_mgr, MemTracker* parent_t
 
   // Initialize the counters
   bytes_received_counter_ =
-      ADD_COUNTER(profile_, "BytesReceived", TCounterType::BYTES);
+      ADD_COUNTER(profile_, "BytesReceived", TUnit::BYTES);
   bytes_received_time_series_counter_ =
       ADD_TIME_SERIES_COUNTER(profile_, "BytesReceived", bytes_received_counter_);
   deserialize_row_batch_timer_ =
@@ -311,7 +314,7 @@ DataStreamRecvr::DataStreamRecvr(DataStreamMgr* stream_mgr, MemTracker* parent_t
 }
 
 Status DataStreamRecvr::GetNext(RowBatch* output_batch, bool* eos) {
-  DCHECK_NOTNULL(merger_.get());
+  DCHECK(merger_.get() != NULL);
   return merger_->GetNext(output_batch, eos);
 }
 

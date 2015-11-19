@@ -18,6 +18,7 @@
 
 #include <boost/algorithm/string.hpp>
 #include <gflags/gflags.h>
+#include <gutil/strings/substitute.h>
 
 #include "common/logging.h"
 #include "resourcebroker/resource-broker.h"
@@ -29,6 +30,7 @@
 #include "runtime/lib-cache.h"
 #include "runtime/mem-tracker.h"
 #include "runtime/thread-resource-mgr.h"
+#include "runtime/tmp-file-mgr.h"
 #include "scheduling/request-pool-service.h"
 #include "service/frontend.h"
 #include "statestore/simple-scheduler.h"
@@ -44,11 +46,18 @@
 #include "util/mem-info.h"
 #include "util/debug-util.h"
 #include "util/cgroups-mgr.h"
+#include "util/memory-metrics.h"
+#include "util/pretty-printer.h"
 #include "gen-cpp/ImpalaInternalService.h"
 #include "gen-cpp/CatalogService.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
+using boost::algorithm::is_any_of;
+using boost::algorithm::split;
+using boost::algorithm::to_lower;
+using boost::algorithm::token_compress_on;
+using namespace strings;
 
 DEFINE_bool(use_statestore, true,
     "Use an external statestore process to manage cluster membership");
@@ -74,11 +83,11 @@ DEFINE_int32(llama_callback_port, 28000,
              "Port where Llama notification callback should be started");
 // TODO: Deprecate llama_host and llama_port in favor of the new llama_hostports.
 // This needs to be coordinated with CM.
-DEFINE_string(llama_host, "127.0.0.1",
+DEFINE_string(llama_host, "",
               "Host of Llama service that the resource broker should connect to");
 DEFINE_int32(llama_port, 15000,
              "Port of Llama service that the resource broker should connect to");
-DEFINE_string(llama_addresses, "127.0.0.1:15000",
+DEFINE_string(llama_addresses, "",
              "Llama availability group given as a comma-separated list of hostports.");
 DEFINE_int64(llama_registration_timeout_secs, 30,
              "Maximum number of seconds that Impala will attempt to (re-)register "
@@ -112,6 +121,8 @@ DEFINE_int32(resource_broker_recv_timeout, 0, "Time to wait, in ms, "
     "for the underlying socket of an RPC to Llama to successfully receive data. "
     "A setting of 0 means the socket will wait indefinitely.");
 
+DECLARE_string(ssl_client_ca_certificate);
+
 // The key for a variable set in Impala's test environment only, to allow the
 // resource-broker to correctly map node addresses into a form that Llama understand.
 const static string PSEUDO_DISTRIBUTED_CONFIG_KEY =
@@ -123,18 +134,23 @@ ExecEnv* ExecEnv::exec_env_ = NULL;
 
 ExecEnv::ExecEnv()
   : stream_mgr_(new DataStreamMgr()),
-    impalad_client_cache_(new ImpalaInternalServiceClientCache()),
-    catalogd_client_cache_(new CatalogServiceClientCache()),
+    impalad_client_cache_(
+        new ImpalaInternalServiceClientCache(
+            "", !FLAGS_ssl_client_ca_certificate.empty())),
+    catalogd_client_cache_(
+        new CatalogServiceClientCache(
+            "", !FLAGS_ssl_client_ca_certificate.empty())),
     htable_factory_(new HBaseTableFactory()),
     disk_io_mgr_(new DiskIoMgr()),
     webserver_(new Webserver()),
-    metrics_(new Metrics()),
+    metrics_(new MetricGroup("impala-metrics")),
     mem_tracker_(NULL),
     thread_mgr_(new ThreadResourceMgr),
     cgroups_mgr_(NULL),
     hdfs_op_thread_pool_(
         CreateHdfsOpThreadPool("hdfs-worker-pool", FLAGS_num_hdfs_worker_threads, 1024)),
-    request_pool_service_(new RequestPoolService()),
+    tmp_file_mgr_(new TmpFileMgr),
+    request_pool_service_(new RequestPoolService(metrics_.get())),
     frontend_(new Frontend()),
     enable_webserver_(FLAGS_enable_webserver),
     tz_database_(TimezoneDatabase()),
@@ -151,8 +167,8 @@ ExecEnv::ExecEnv()
         MakeNetworkAddress(FLAGS_state_store_host, FLAGS_state_store_port);
 
     statestore_subscriber_.reset(new StatestoreSubscriber(
-        TNetworkAddressToString(backend_address_), subscriber_address, statestore_address,
-        metrics_.get()));
+        Substitute("impalad@$0", TNetworkAddressToString(backend_address_)),
+        subscriber_address, statestore_address, metrics_.get()));
 
     scheduler_.reset(new SimpleScheduler(statestore_subscriber_.get(),
         statestore_subscriber_->id(), backend_address_, metrics_.get(),
@@ -170,23 +186,28 @@ ExecEnv::ExecEnv()
 ExecEnv::ExecEnv(const string& hostname, int backend_port, int subscriber_port,
                  int webserver_port, const string& statestore_host, int statestore_port)
   : stream_mgr_(new DataStreamMgr()),
-    impalad_client_cache_(new ImpalaInternalServiceClientCache()),
-    catalogd_client_cache_(new CatalogServiceClientCache()),
+    impalad_client_cache_(
+        new ImpalaInternalServiceClientCache(
+            "", !FLAGS_ssl_client_ca_certificate.empty())),
+    catalogd_client_cache_(
+        new CatalogServiceClientCache(
+            "", !FLAGS_ssl_client_ca_certificate.empty())),
     htable_factory_(new HBaseTableFactory()),
     disk_io_mgr_(new DiskIoMgr()),
     webserver_(new Webserver(webserver_port)),
-    metrics_(new Metrics()),
+    metrics_(new MetricGroup("impala-metrics")),
     mem_tracker_(NULL),
     thread_mgr_(new ThreadResourceMgr),
     hdfs_op_thread_pool_(
         CreateHdfsOpThreadPool("hdfs-worker-pool", FLAGS_num_hdfs_worker_threads, 1024)),
-    request_pool_service_(new RequestPoolService()),
+    tmp_file_mgr_(new TmpFileMgr),
     frontend_(new Frontend()),
     enable_webserver_(FLAGS_enable_webserver && webserver_port > 0),
     tz_database_(TimezoneDatabase()),
     is_fe_tests_(false),
     backend_address_(MakeNetworkAddress(FLAGS_hostname, FLAGS_be_port)),
     is_pseudo_distributed_llama_(false) {
+  request_pool_service_.reset(new RequestPoolService(metrics_.get()));
   if (FLAGS_enable_rm) InitRm();
 
   if (FLAGS_use_statestore && statestore_port > 0) {
@@ -196,8 +217,8 @@ ExecEnv::ExecEnv(const string& hostname, int backend_port, int subscriber_port,
         MakeNetworkAddress(statestore_host, statestore_port);
 
     statestore_subscriber_.reset(new StatestoreSubscriber(
-        TNetworkAddressToString(backend_address_), subscriber_address, statestore_address,
-        metrics_.get()));
+        Substitute("impalad@$0", TNetworkAddressToString(backend_address_)),
+        subscriber_address, statestore_address, metrics_.get()));
 
     scheduler_.reset(new SimpleScheduler(statestore_subscriber_.get(),
         statestore_subscriber_->id(), backend_address_, metrics_.get(),
@@ -215,22 +236,27 @@ ExecEnv::ExecEnv(const string& hostname, int backend_port, int subscriber_port,
 void ExecEnv::InitRm() {
   // Unique addresses from FLAGS_llama_addresses and FLAGS_llama_host/FLAGS_llama_port.
   vector<TNetworkAddress> llama_addresses;
-  vector<string> components;
-  split(components, FLAGS_llama_addresses, is_any_of(","), token_compress_on);
-  for (int i = 0; i < components.size(); ++i) {
-    to_lower(components[i]);
-    TNetworkAddress llama_address = MakeNetworkAddress(components[i]);
+  if (!FLAGS_llama_addresses.empty()) {
+    vector<string> components;
+    split(components, FLAGS_llama_addresses, is_any_of(","), token_compress_on);
+    for (int i = 0; i < components.size(); ++i) {
+      to_lower(components[i]);
+      TNetworkAddress llama_address = MakeNetworkAddress(components[i]);
+      if (find(llama_addresses.begin(), llama_addresses.end(), llama_address)
+          == llama_addresses.end()) {
+        llama_addresses.push_back(llama_address);
+      }
+    }
+  }
+  // Add Llama hostport from deprecated flags (if it does not already exist).
+  if (!FLAGS_llama_host.empty()) {
+    to_lower(FLAGS_llama_host);
+    TNetworkAddress llama_address =
+        MakeNetworkAddress(FLAGS_llama_host, FLAGS_llama_port);
     if (find(llama_addresses.begin(), llama_addresses.end(), llama_address)
         == llama_addresses.end()) {
       llama_addresses.push_back(llama_address);
     }
-  }
-  // Add Llama hostport from deprecated flags (if it does not already exist).
-  to_lower(FLAGS_llama_host);
-  TNetworkAddress llama_address = MakeNetworkAddress(FLAGS_llama_host, FLAGS_llama_port);
-  if (find(llama_addresses.begin(), llama_addresses.end(), llama_address)
-      == llama_addresses.end()) {
-    llama_addresses.push_back(llama_address);
   }
   for (int i = 0; i < llama_addresses.size(); ++i) {
     LOG(INFO) << "Llama address " << i << ": " << llama_addresses[i];
@@ -263,7 +289,7 @@ ExecEnv::~ExecEnv() {
 Status ExecEnv::InitForFeTests() {
   mem_tracker_.reset(new MemTracker(-1, -1, "Process"));
   is_fe_tests_ = true;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ExecEnv::StartServices() {
@@ -279,10 +305,36 @@ Status ExecEnv::StartServices() {
   }
 
   // Initialize global memory limit.
+  // Depending on the system configuration, we will have to calculate the process
+  // memory limit either based on the available physical memory, or if overcommitting
+  // is turned off, we use the memory commit limit from /proc/meminfo (see
+  // IMPALA-1690).
+  // --mem_limit="" means no memory limit
   int64_t bytes_limit = 0;
   bool is_percent;
-  // --mem_limit="" means no memory limit
-  bytes_limit = ParseUtil::ParseMemSpec(FLAGS_mem_limit, &is_percent);
+
+  if (MemInfo::vm_overcommit() == 2 &&
+      MemInfo::commit_limit() < MemInfo::physical_mem()) {
+    bytes_limit = ParseUtil::ParseMemSpec(FLAGS_mem_limit, &is_percent,
+        MemInfo::commit_limit());
+    // There might be the case of misconfiguration, when on a system swap is disabled
+    // and overcommitting is turned off the actual usable memory is less than the
+    // available physical memory.
+    LOG(WARNING) << "This system shows a discrepancy between the available "
+                 << "memory and the memory commit limit allowed by the "
+                 << "operating system. ( Mem: " << MemInfo::physical_mem()
+                 << "<=> CommitLimit: "
+                 << MemInfo::commit_limit() << "). "
+                 << "Impala will adhere to the smaller value by setting the "
+                 << "process memory limit to " << bytes_limit << " "
+                 << "Please verify the system configuration. Specifically, "
+                 << "/proc/sys/vm/overcommit_memory and "
+                 << "/proc/sys/vm/overcommit_ratio.";
+  } else {
+    bytes_limit = ParseUtil::ParseMemSpec(FLAGS_mem_limit, &is_percent,
+        MemInfo::physical_mem());
+  }
+
   if (bytes_limit < 0) {
     return Status("Failed to parse mem limit from '" + FLAGS_mem_limit + "'.");
   }
@@ -294,9 +346,9 @@ Status ExecEnv::StartServices() {
       FLAGS_num_threads_per_core * FLAGS_num_cores;
   if (bytes_limit < min_requirement) {
     LOG(WARNING) << "Memory limit "
-                 << PrettyPrinter::Print(bytes_limit, TCounterType::BYTES)
+                 << PrettyPrinter::Print(bytes_limit, TUnit::BYTES)
                  << " does not meet minimal memory requirement of "
-                 << PrettyPrinter::Print(min_requirement, TCounterType::BYTES);
+                 << PrettyPrinter::Print(min_requirement, TUnit::BYTES);
   }
 
   metrics_->Init(enable_webserver_ ? webserver_.get() : NULL);
@@ -324,12 +376,12 @@ Status ExecEnv::StartServices() {
 
   if (bytes_limit > MemInfo::physical_mem()) {
     LOG(WARNING) << "Memory limit "
-                 << PrettyPrinter::Print(bytes_limit, TCounterType::BYTES)
+                 << PrettyPrinter::Print(bytes_limit, TUnit::BYTES)
                  << " exceeds physical memory of "
-                 << PrettyPrinter::Print(MemInfo::physical_mem(), TCounterType::BYTES);
+                 << PrettyPrinter::Print(MemInfo::physical_mem(), TUnit::BYTES);
   }
   LOG(INFO) << "Using global memory limit: "
-            << PrettyPrinter::Print(bytes_limit, TCounterType::BYTES);
+            << PrettyPrinter::Print(bytes_limit, TUnit::BYTES);
 
   RETURN_IF_ERROR(disk_io_mgr_->Init(mem_tracker_.get()));
 
@@ -347,12 +399,12 @@ Status ExecEnv::StartServices() {
   if (statestore_subscriber_.get() != NULL) {
     Status status = statestore_subscriber_->Start();
     if (!status.ok()) {
-      status.AddErrorMsg("State Store Subscriber did not start up.");
+      status.AddDetail("State Store Subscriber did not start up.");
       return status;
     }
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 }

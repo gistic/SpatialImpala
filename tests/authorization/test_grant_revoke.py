@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2014 Cloudera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,19 +17,17 @@
 import pytest
 import logging
 import grp
-import os
 from getpass import getuser
 from os import getenv
 
 from tests.common.custom_cluster_test_suite import CustomClusterTestSuite
 from tests.common.impala_test_suite import ImpalaTestSuite
 from tests.common.test_dimensions import create_uncompressed_text_dimension
+from tests.util.filesystem_utils import IS_S3
 from tests.util.test_file_parser import QueryTestSectionReader
 
 SENTRY_CONFIG_FILE = getenv('IMPALA_HOME') + '/fe/src/test/resources/sentry-site.xml'
 
-@pytest.mark.skipif(int(os.environ['CDH_MAJOR_VERSION']) < 5,
-    reason='Sentry Service is not supported on CDH4')
 class TestGrantRevoke(CustomClusterTestSuite, ImpalaTestSuite):
   @classmethod
   def add_test_dimensions(cls):
@@ -50,14 +47,21 @@ class TestGrantRevoke(CustomClusterTestSuite, ImpalaTestSuite):
     super(TestGrantRevoke, self).teardown_method(method)
 
   def __test_cleanup(self):
-    # Clean up any old roles for this test
+    # Clean up any old roles created by this test
     for role_name in self.client.execute("show roles").data:
       if 'grant_revoke_test' in role_name:
         self.client.execute("drop role %s" % role_name)
 
+    # Cleanup any other roles that were granted to this user.
+    # TODO: Update Sentry Service config and authorization tests to use LocalGroupMapping
+    # for resolving users -> groups. This way we can specify custom test users that don't
+    # actually exist in the system.
+    group_name = grp.getgrnam(getuser()).gr_name
+    for role_name in self.client.execute("show role grant group `%s`" % group_name).data:
+      self.client.execute("drop role %s" % role_name)
+
     # Create a temporary admin user so we can actually view/clean up the test
     # db.
-    group_name = grp.getgrnam(getuser()).gr_name
     self.client.execute("create role grant_revoke_test_admin")
     try:
       self.client.execute("grant all on server to grant_revoke_test_admin")
@@ -71,4 +75,7 @@ class TestGrantRevoke(CustomClusterTestSuite, ImpalaTestSuite):
       impalad_args="--server_name=server1",
       catalogd_args="--sentry_config=" + SENTRY_CONFIG_FILE)
   def test_grant_revoke(self, vector):
-    self.run_test_case('QueryTest/grant_revoke', vector, use_db="default")
+    if IS_S3:
+      self.run_test_case('QueryTest/grant_revoke_no_insert', vector, use_db="default")
+    else:
+      self.run_test_case('QueryTest/grant_revoke', vector, use_db="default")

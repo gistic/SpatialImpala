@@ -27,6 +27,7 @@
 #include "util/mem-info.h"
 #include "util/network-util.h"
 #include "util/os-info.h"
+#include "util/redactor.h"
 #include "util/test-info.h"
 #include "runtime/decimal-value.h"
 #include "runtime/exec-env.h"
@@ -38,19 +39,31 @@
 #include "rpc/thrift-util.h"
 #include "util/thread.h"
 
+#include "common/names.h"
+
 DECLARE_string(hostname);
+DECLARE_string(redaction_rules_file);
 // TODO: renamed this to be more generic when we have a good CM release to do so.
 DECLARE_int32(logbufsecs);
-DECLARE_bool(abort_on_config_error);
 DECLARE_string(heap_profile_dir);
 DECLARE_bool(enable_process_lifetime_heap_profiling);
+
+DEFINE_int32(max_log_files, 10, "Maximum number of log files to retain per severity "
+    "level. The most recent log files are retained. If set to 0, all log files are "
+    "retained.");
+
+// Defined by glog. This allows users to specify the log level using a glob. For
+// example -vmodule=*scanner*=3 would enable full logging for scanners. If redaction
+// is enabled, this option won't be allowed because some logging dumps table data
+// in ways the authors of redaction rules can't anticipate.
+DECLARE_string(vmodule);
 
 // tcmalloc will hold on to freed memory. We will periodically release the memory back
 // to the OS if the extra memory is too high. If the memory used by the application
 // is less than this fraction of the total reserved memory, free it back to the OS.
 static const float TCMALLOC_RELEASE_FREE_MEMORY_FRACTION = 0.5f;
 
-using namespace boost;
+using std::string;
 
 // Maintenance thread that runs periodically. It does a few things:
 // 1) flushes glog every logbufsecs sec. glog flushes the log file only if
@@ -100,6 +113,9 @@ static void MaintenanceThread() {
 #endif
     // TODO: we should also update the process mem tracker with the reported JVM
     // mem usage.
+
+    // Check for log rotation in every interval of the maintenance thread
+    impala::CheckAndRotateLogFiles(FLAGS_max_log_files);
   }
 }
 
@@ -110,19 +126,26 @@ void impala::InitCommonRuntime(int argc, char** argv, bool init_jvm,
   MemInfo::Init();
   OsInfo::Init();
   DecimalUtil::InitMaxUnscaledDecimal();
-
   TestInfo::Init(test_mode);
 
-  if (!CpuInfo::IsSupported(CpuInfo::SSSE3)) {
-    LOG(ERROR) << "CPU does not support the Supplemental SSE3 instruction set, which is "
-               << "required. This could lead to instability.";
-  }
+  // Verify CPU meets the minimum requirements before calling InitGoogleLoggingSafe()
+  // which might use SSSE3 instructions (see IMPALA-160).
+  CpuInfo::VerifyCpuRequirements();
 
   // Set the default hostname. The user can override this with the hostname flag.
   GetHostname(&FLAGS_hostname);
 
   google::SetVersionString(impala::GetBuildVersion());
   google::ParseCommandLineFlags(&argc, &argv, true);
+  if (!FLAGS_redaction_rules_file.empty()) {
+    if (VLOG_ROW_IS_ON || !FLAGS_vmodule.empty()) {
+      EXIT_WITH_ERROR("Redaction cannot be used in combination with log level 3 or "
+          "higher or the -vmodule option because these log levels may log data in "
+          "ways redaction rules may not anticipate.");
+    }
+    const string& error_message = SetRedactionRulesFromFile(FLAGS_redaction_rules_file);
+    if (!error_message.empty()) EXIT_WITH_ERROR(error_message);
+  }
   impala::InitGoogleLoggingSafe(argv[0]);
   impala::InitThreading();
   impala::TimestampParser::Init();

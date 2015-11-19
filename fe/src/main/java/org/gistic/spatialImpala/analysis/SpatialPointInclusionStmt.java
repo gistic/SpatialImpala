@@ -8,6 +8,7 @@ import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.authorization.Privilege;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.analysis.Analyzer;
+import com.cloudera.impala.analysis.Path;
 import com.cloudera.impala.analysis.StatementBase;
 import com.cloudera.impala.analysis.QueryStmt;
 import com.cloudera.impala.analysis.SelectListItem;
@@ -28,6 +29,7 @@ import com.cloudera.impala.analysis.TupleId;
 import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.ExprSubstitutionMap;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,7 +66,7 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 	
 	public SpatialPointInclusionStmt (TableName tableName, Rectangle rect) {
         super(null, null);
-		TableRef tableRef = new TableRef (tableName, null);
+		TableRef tableRef = new TableRef(tableName.toPath(), null);
 		tableRefs_ = new ArrayList(1);
 		tableRefs_.add(tableRef);
 		this.tableName_ = tableName;
@@ -73,8 +75,8 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 		colLabels_ = new ArrayList();
 		
 		List<SelectListItem> items = new ArrayList<SelectListItem>();
-		items.add(new SelectListItem(new SlotRef(tableName_, X), null));
-		items.add(new SelectListItem(new SlotRef(tableName_, Y), null));
+		items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName_.toString(), X)), null));
+		items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName_.toString(), Y)), null));
 		
 		selectList_ = new SelectList(items);
 		GIsIntersect = new ArrayList<GlobalIndexRecord>();
@@ -147,7 +149,7 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 	          ExprSubstitutionMap.combine(baseTblSmap_, inlineViewRef.getBaseTblSmap());
 	    }
 	  }
-	  baseTblResultExprs_ = Expr.trySubstituteList(resultExprs_, baseTblSmap_, analyzer);
+	  baseTblResultExprs_ = Expr.trySubstituteList(resultExprs_, baseTblSmap_, analyzer, false);
 	  LOG.trace("baseTblSmap_: " + baseTblSmap_.debugString());
 	  LOG.trace("resultExprs: " + Expr.debugString(resultExprs_));
 	  LOG.trace("baseTblResultExprs: " + Expr.debugString(baseTblResultExprs_));
@@ -196,7 +198,7 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 	      
 	      resultExprs_.add(item.getExpr());
 	      String label = item.toColumnLabel(i, analyzer.useHiveColLabels());
-	      SlotRef aliasRef = new SlotRef(null, label);
+	      SlotRef aliasRef = new SlotRef(Lists.newArrayList(label));
 	      Expr existingAliasExpr = aliasSmap_.get(aliasRef);
 	      if (existingAliasExpr != null && !existingAliasExpr.equals(item.getExpr())) {
 	        // If we have already seen this alias, it refers to more than one column and
@@ -269,11 +271,6 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 	}
 	
 	public SelectList getSelectList() { return selectList_; }
-	
-	@Override
-	protected void substituteOrdinals(List<Expr> exprs, String errorPrefix,
-	    Analyzer analyzer) throws AnalysisException {
-	}
 	  
 	@Override
 	public QueryStmt clone() {
@@ -290,6 +287,15 @@ public class SpatialPointInclusionStmt extends QueryStmt {
 	  for (TableRef tblRef: tableRefs_) {
 	    tupleIdList.addAll(tblRef.getMaterializedTupleIds());
 	  }
+	}
+
+	/**
+	* Returns all physical (non-inline-view) TableRefs of this statement and the nested
+	* statements of inline views. The returned TableRefs are in depth-first order.
+	*/
+	@Override
+	public void collectTableRefs(List<TableRef> tblRefs) {
+	   tblRefs.addAll(tableRefs_);
 	}
 	
 	@Override

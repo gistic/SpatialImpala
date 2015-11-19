@@ -21,7 +21,7 @@ Status SpatialSelectNode::Open(RuntimeState* state) {
   SpatialHdfsScanNode* scan_node = dynamic_cast<SpatialHdfsScanNode*>(child(0));
   if (scan_node != NULL)
     scan_node->SetRangeQuery(range_);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SpatialSelectNode::Prepare(RuntimeState* state) {
@@ -29,7 +29,7 @@ Status SpatialSelectNode::Prepare(RuntimeState* state) {
 
   this->x_->Prepare(state, child(0)->row_desc(), NULL);
   this->y_->Prepare(state, child(0)->row_desc(), NULL);
-  return Status::OK;
+  return Status::OK();
 }
 
 bool SpatialSelectNode::InsideRange(TupleRow* row) {

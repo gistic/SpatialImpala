@@ -19,6 +19,10 @@
 #include <assert.h>
 #include <gutil/port.h> // for aligned_malloc
 
+#ifndef IMPALA_UDF_SDK_BUILD
+#include "util/error-util.h"
+#endif
+
 // Be careful what this includes since this needs to be linked into the UDF's
 // binary. For example, it would be unfortunate if they had a random dependency
 // on libhdfs.
@@ -45,9 +49,10 @@ class MemTracker {
 
 class FreePool {
  public:
-  FreePool(MemPool*) { }
+  FreePool(MemPool*) : net_allocations_(0) { }
 
   uint8_t* Allocate(int byte_size) {
+    ++net_allocations_;
     return reinterpret_cast<uint8_t*>(malloc(byte_size));
   }
 
@@ -56,13 +61,16 @@ class FreePool {
   }
 
   void Free(uint8_t* ptr) {
+    --net_allocations_;
     free(ptr);
   }
 
   MemTracker* mem_tracker() { return &mem_tracker_; }
+  int64_t net_allocations() const { return net_allocations_; }
 
  private:
   MemTracker mem_tracker_;
+  int64_t net_allocations_;
 };
 
 class RuntimeState {
@@ -82,6 +90,7 @@ class RuntimeState {
   }
 
   const std::string connected_user() const { return ""; }
+  const std::string effective_user() const { return ""; }
 };
 
 }
@@ -92,9 +101,11 @@ class RuntimeState {
 #include "runtime/runtime-state.h"
 #endif
 
+#include "common/names.h"
+#include "common/compiler-util.h"
+
 using namespace impala;
 using namespace impala_udf;
-using namespace std;
 
 const char* FunctionContextImpl::LLVM_FUNCTIONCONTEXT_NAME =
     "class.impala_udf::FunctionContext";
@@ -172,8 +183,20 @@ FunctionContextImpl::FunctionContextImpl(FunctionContext* parent)
 
 void FunctionContextImpl::Close() {
   if (closed_) return;
+
+  // Free local allocations first so we can detect leaks through any remaining allocations
+  // (local allocations cannot be leaked, at least not by the UDF)
+  FreeLocalAllocations();
+
   stringstream error_ss;
-  if (!allocations_.empty()) {
+  if (!debug_) {
+    if (pool_->net_allocations() > 0) {
+      error_ss << "Memory leaked via FunctionContext::Allocate()";
+    } else if (pool_->net_allocations() < 0) {
+      error_ss << "FunctionContext::Free() called on buffer that was already freed or "
+                  "was not allocated.";
+    }
+  } else if (!allocations_.empty()) {
     int bytes = 0;
     for (map<uint8_t*, int>::iterator i = allocations_.begin();
          i != allocations_.end(); ++i) {
@@ -204,8 +227,6 @@ void FunctionContextImpl::Close() {
     }
   }
 
-  // Local allocations cannot be leaked (at least not by the UDF)
-  FreeLocalAllocations();
   free(varargs_buffer_);
   varargs_buffer_ = NULL;
   closed_ = true;
@@ -218,6 +239,11 @@ FunctionContext::ImpalaVersion FunctionContext::version() const {
 const char* FunctionContext::user() const {
   if (impl_->state_ == NULL) return NULL;
   return impl_->state_->connected_user().c_str();
+}
+
+const char* FunctionContext::effective_user() const {
+  if (impl_->state_ == NULL) return NULL;
+  return impl_->state_->effective_user().c_str();
 }
 
 FunctionContext::UniqueId FunctionContext::query_id() const {
@@ -244,8 +270,10 @@ uint8_t* FunctionContext::Allocate(int byte_size) {
   assert(!impl_->closed_);
   if (byte_size == 0) return NULL;
   uint8_t* buffer = impl_->pool_->Allocate(byte_size);
-  impl_->allocations_[buffer] = byte_size;
-  if (impl_->debug_) memset(buffer, 0xff, byte_size);
+  if (impl_->debug_) {
+    impl_->allocations_[buffer] = byte_size;
+    memset(buffer, 0xff, byte_size);
+  }
   VLOG_ROW << "Allocate: FunctionContext=" << this
            << " size=" << byte_size
            << " result=" << reinterpret_cast<void*>(buffer);
@@ -257,12 +285,14 @@ uint8_t* FunctionContext::Reallocate(uint8_t* ptr, int byte_size) {
   VLOG_ROW << "Reallocate: FunctionContext=" << this
            << " size=" << byte_size
            << " ptr=" << reinterpret_cast<void*>(ptr);
-  impl_->allocations_.erase(ptr);
-  ptr = impl_->pool_->Reallocate(ptr, byte_size);
-  impl_->allocations_[ptr] = byte_size;
+  uint8_t* new_ptr = impl_->pool_->Reallocate(ptr, byte_size);
+  if (impl_->debug_) {
+    impl_->allocations_.erase(ptr);
+    impl_->allocations_[new_ptr] = byte_size;
+  }
   VLOG_ROW << "FunctionContext=" << this
-           << " reallocated: " << reinterpret_cast<void*>(ptr);
-  return ptr;
+           << " reallocated: " << reinterpret_cast<void*>(new_ptr);
+  return new_ptr;
 }
 
 void FunctionContext::Free(uint8_t* buffer) {
@@ -278,11 +308,10 @@ void FunctionContext::Free(uint8_t* buffer) {
       impl_->allocations_.erase(it);
       impl_->pool_->Free(buffer);
     } else {
-      SetError(
-          "FunctionContext::Free() on buffer that is not freed or was not allocated.");
+      SetError("FunctionContext::Free() called on buffer that is already freed or was "
+               "not allocated.");
     }
   } else {
-    impl_->allocations_.erase(buffer);
     impl_->pool_->Free(buffer);
   }
 }
@@ -333,26 +362,15 @@ bool FunctionContext::AddWarning(const char* warning_msg) {
     // TODO: somehow print the full error log in the shell? This is a problem for any
     // function using LogError() during close.
     LOG(WARNING) << ss.str();
-#endif
+    return impl_->state_->LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()));
+#else
+    // In case of the SDK build, we simply, forward this call to a dummy method
     return impl_->state_->LogError(ss.str());
+#endif
+
   } else {
     cerr << ss.str() << endl;
     return true;
-  }
-}
-
-void* FunctionContext::GetFunctionState(FunctionStateScope scope) const {
-  assert(!impl_->closed_);
-  switch (scope) {
-    case THREAD_LOCAL:
-      return impl_->thread_local_fn_state_;
-      break;
-    case FRAGMENT_LOCAL:
-      return impl_->fragment_local_fn_state_;
-      break;
-    default:
-      // TODO: signal error somehow
-      return NULL;
   }
 }
 
@@ -407,8 +425,63 @@ void FunctionContextImpl::SetConstantArgs(const vector<AnyVal*>& constant_args) 
 // Note: this function crashes LLVM's JIT in expr-test if it's xcompiled. Do not move to
 // expr-ir.cc. This could probably use further investigation.
 StringVal::StringVal(FunctionContext* context, int len)
-  : len(len), ptr(context->impl()->AllocateLocal(len)) {
+  : len(len), ptr(NULL) {
+  if (UNLIKELY(len > StringVal::MAX_LENGTH)) {
+    std::cout << "MAX_LENGTH, Trying to allocate " << len;
+    context->SetError("String length larger than allowed limit of "
+        "1 GB character data.");
+    len = 0;
+    is_null = true;
+  } else {
+    ptr = context->impl()->AllocateLocal(len);
+    if (ptr == NULL && len > 0) {
+      len = 0;
+      is_null = true;
+      context->SetError("Large Memory allocation failed.");
+    }
+  }
 }
+
+StringVal StringVal::CopyFrom(FunctionContext* ctx, const uint8_t* buf, size_t len) {
+  StringVal result(ctx, len);
+  if (!result.is_null) {
+      memcpy(result.ptr, buf, len);
+  }
+  return result;
+}
+
+void StringVal::Append(FunctionContext* ctx, const uint8_t* buf, size_t buf_len) {
+  if (UNLIKELY(len + buf_len > StringVal::MAX_LENGTH)) {
+    ctx->SetError("Concatenated string length larger than allowed limit of "
+        "1 GB character data.");
+    ctx->Free(ptr);
+    ptr = NULL;
+    len = 0;
+    is_null = true;
+  } else {
+    ptr = ctx->Reallocate(ptr, len + buf_len);
+    memcpy(ptr + len, buf, buf_len);
+    len += buf_len;
+  }
+}
+void StringVal::Append(FunctionContext* ctx, const uint8_t* buf, size_t buf_len,
+    const uint8_t* buf2, size_t buf2_len) {
+  if (UNLIKELY(len + buf_len + buf2_len > StringVal::MAX_LENGTH)) {
+    ctx->SetError("Concatenated string length larger than allowed limit of "
+        "1 GB character data.");
+    ctx->Free(ptr);
+    ptr = NULL;
+    len = 0;
+    is_null = true;
+  } else {
+    ptr = ctx->Reallocate(ptr, len + buf_len + buf2_len);
+    memcpy(ptr + len, buf, buf_len);
+    memcpy(ptr + len + buf_len, buf2, buf2_len);
+    len += buf_len + buf2_len;
+  }
+}
+
+
 
 // TODO: why doesn't libudasample.so build if this in udf-ir.cc?
 const FunctionContext::TypeDesc* FunctionContext::GetArgType(int arg_idx) const {

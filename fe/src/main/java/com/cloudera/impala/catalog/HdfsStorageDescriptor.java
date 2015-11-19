@@ -31,9 +31,9 @@ import com.google.common.collect.Maps;
  * Represents the file format metadata for files stored in a table or partition.
  */
 public class HdfsStorageDescriptor {
-  private static final char DEFAULT_LINE_DELIM = '\n';
+  public static final char DEFAULT_LINE_DELIM = '\n';
   // hive by default uses ctrl-a as field delim
-  private static final char DEFAULT_FIELD_DELIM = '\u0001';
+  public static final char DEFAULT_FIELD_DELIM = '\u0001';
   // hive by default has no escape char
   public static final char DEFAULT_ESCAPE_CHAR = '\u0000';
 
@@ -56,11 +56,13 @@ public class HdfsStorageDescriptor {
       "org.apache.hadoop.hive.serde2.avro.AvroSerDe", // (avro)
       "org.apache.hadoop.hive.serde2.columnar.ColumnarSerDe", // (rc)
       "parquet.hive.serde.ParquetHiveSerDe", // (parquet - legacy)
+      // TODO: Verify the following Parquet SerDe works with Impala and add
+      // support for the new input/output format classes. See CDH-17085.
       "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"); // (parquet)
 
   private final static Logger LOG = LoggerFactory.getLogger(HdfsStorageDescriptor.class);
 
-  private final HdfsFileFormat fileFormat_;
+  private HdfsFileFormat fileFormat_;
   private final byte lineDelim_;
   private final byte fieldDelim_;
   private final byte collectionDelim_;
@@ -68,6 +70,10 @@ public class HdfsStorageDescriptor {
   private final byte escapeChar_;
   private final byte quoteChar_;
   private final int blockSize_;
+
+  public void setFileFormat(HdfsFileFormat fileFormat) {
+    fileFormat_ = fileFormat;
+  }
 
   /**
    * Returns a map from delimiter key to a single delimiter character,

@@ -27,8 +27,8 @@ namespace impala {
 class Tuple;
 class TupleRow;
 
-// Node that evaluates conjuncts and enforces a limit but otherwise passes along
-// the rows pulled from its child unchanged.
+/// Node that evaluates conjuncts and enforces a limit but otherwise passes along
+/// the rows pulled from its child unchanged.
 class SelectNode : public ExecNode {
  public:
   SelectNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs);
@@ -36,21 +36,28 @@ class SelectNode : public ExecNode {
   virtual Status Prepare(RuntimeState* state);
   virtual Status Open(RuntimeState* state);
   virtual Status GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos);
+  virtual Status Reset(RuntimeState* state);
   virtual void Close(RuntimeState* state);
 
  protected:
-  // current row batch of child
+  /////////////////////////////////////////
+  /// BEGIN: Members that must be Reset()
+
+  /// current row batch of child
   boost::scoped_ptr<RowBatch> child_row_batch_;
 
-  // index of current row in child_row_batch_
+  /// index of current row in child_row_batch_
   int child_row_idx_;
 
-  // true if last GetNext() call on child signalled eos
+  /// true if last GetNext() call on child signalled eos
   bool child_eos_;
 
-  // Copy rows from child_row_batch_ for which conjuncts_ evaluate to true to
-  // output_batch, up to limit_.
-  // Return true if limit was hit or output_batch should be returned, otherwise false.
+  /// END: Members that must be Reset()
+  /////////////////////////////////////////
+
+  /// Copy rows from child_row_batch_ for which conjuncts_ evaluate to true to
+  /// output_batch, up to limit_.
+  /// Return true if limit was hit or output_batch should be returned, otherwise false.
   virtual bool CopyRows(RowBatch* output_batch);
 };
 

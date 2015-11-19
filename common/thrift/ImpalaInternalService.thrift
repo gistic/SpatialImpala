@@ -19,6 +19,7 @@ namespace cpp impala
 namespace java com.cloudera.impala.thrift
 
 include "Status.thrift"
+include "ErrorCodes.thrift"
 include "Types.thrift"
 include "Exprs.thrift"
 include "CatalogObjects.thrift"
@@ -101,6 +102,15 @@ struct TQueryOptions {
   // disastrous query plans. Impala will excercise this option if a query
   // has no plan hints, and at least one table is missing relevant stats.
   29: optional bool disable_unsafe_spills = 0
+
+  // Mode for compression; RECORD, or BLOCK
+  // This field only applies for certain file types and is ignored
+  // by all other file types.
+  30: optional CatalogObjects.THdfsSeqCompressionMode seq_compression_mode
+
+  // If the number of rows that are processed for a single query is below the
+  // threshold, it will be executed on the coordinator only with codegen disabled
+  31: optional i32 exec_single_node_rows_threshold = 100
 }
 
 // Impala currently has two types of sessions: Beeswax and HiveServer2
@@ -137,6 +147,9 @@ struct TClientRequest {
 
   // query options
   2: required TQueryOptions query_options
+
+  // Redacted SQL stmt
+  3: optional string redacted_stmt
 }
 
 // Context of this query, including the client request, session state and
@@ -170,6 +183,12 @@ struct TQueryCtx {
   // disastrous query plans. The rationale is that cancelling queries, e.g.,
   // with a huge join build is preferable over spilling "forever".
   8: optional bool disable_spilling
+
+  // Set if this is a child query (e.g. a child of a COMPUTE STATS request)
+  9: optional Types.TUniqueId parent_query_id
+
+  // List of tables suspected to have corrupt stats
+  10: optional list<CatalogObjects.TTableName> tables_with_corrupt_stats
 }
 
 // Context of a fragment instance, including its unique id, the total number
@@ -196,6 +215,7 @@ struct TScanRangeParams {
   1: required PlanNodes.TScanRange scan_range
   2: optional i32 volume_id = -1
   3: optional bool is_cached = false
+  4: optional bool is_remote
 }
 
 // Specification of one output destination of a plan fragment
@@ -315,6 +335,16 @@ struct TInsertExecStatus {
   2: optional map<string, TInsertPartitionStatus> per_partition_status
 }
 
+// Error message exchange format
+struct TErrorLogEntry {
+
+  // Number of error messages reported using the above identifier
+  1: i32 count
+
+  // Sample messages from the above error code
+  2: list<string> messages
+}
+
 struct TReportExecStatusParams {
   1: required ImpalaInternalServiceVersion protocol_version
 
@@ -345,8 +375,7 @@ struct TReportExecStatusParams {
   8: optional TInsertExecStatus insert_exec_status;
 
   // New errors that have not been reported to the coordinator
-  // optional in V1
-  9: optional list<string> error_log
+  9: optional map<ErrorCodes.TErrorCode, TErrorLogEntry> error_log;
 }
 
 struct TReportExecStatusResult {

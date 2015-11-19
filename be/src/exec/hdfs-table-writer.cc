@@ -14,7 +14,7 @@
 
 #include "exec/hdfs-table-writer.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -39,13 +39,13 @@ Status HdfsTableWriter::Write(const uint8_t* data, int32_t len) {
   if (ret == -1) {
     string error_msg = GetHdfsErrorMsg("");
     stringstream msg;
-    msg << "Failed to write row (length: " << len
+    msg << "Failed to write data (length: " << len
         << ") to Hdfs file: " << output_->current_file_name
         << " " << error_msg;
     return Status(msg.str());
   }
   COUNTER_ADD(parent_->bytes_written_counter(), len);
   stats_.bytes_written += len;
-  return Status::OK;
+  return Status::OK();
 }
 }

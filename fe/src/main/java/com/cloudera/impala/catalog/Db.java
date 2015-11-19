@@ -14,13 +14,16 @@
 
 package com.cloudera.impala.catalog;
 
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import com.cloudera.impala.catalog.Function.CompareMode;
+import com.cloudera.impala.catalog.Function;
 import com.cloudera.impala.thrift.TCatalogObjectType;
 import com.cloudera.impala.thrift.TDatabase;
 import com.cloudera.impala.thrift.TFunctionCategory;
@@ -42,7 +45,7 @@ import com.google.common.collect.Lists;
  *  * if the table loading failed on the previous attempt
  */
 public class Db implements CatalogObject {
-  private static final Logger LOG = Logger.getLogger(Db.class);
+  private static final Logger LOG = LoggerFactory.getLogger(Db.class);
   private final Catalog parentCatalog_;
   private final TDatabase thriftDb_;
   private long catalogVersion_ = Catalog.INITIAL_CATALOG_VERSION;
@@ -53,16 +56,19 @@ public class Db implements CatalogObject {
   // All of the registered user functions. The key is the user facing name (e.g. "myUdf"),
   // and the values are all the overloaded variants (e.g. myUdf(double), myUdf(string))
   // This includes both UDFs and UDAs. Updates are made thread safe by synchronizing
-  // on this map.
+  // on this map. Functions are sorted in a canonical order defined by
+  // FunctionResolutionOrder.
   private final HashMap<String, List<Function>> functions_;
 
   // If true, this database is an Impala system database.
   // (e.g. can't drop it, can't add tables to it, etc).
   private boolean isSystemDb_ = false;
 
-  public Db(String name, Catalog catalog) {
+  public Db(String name, Catalog catalog,
+      org.apache.hadoop.hive.metastore.api.Database msDb) {
     thriftDb_ = new TDatabase(name.toLowerCase());
     parentCatalog_ = catalog;
+    thriftDb_.setMetastore_db(msDb);
     tableCache_ = new CatalogObjectCache<Table>();
     functions_ = new HashMap<String, List<Function>>();
   }
@@ -73,12 +79,14 @@ public class Db implements CatalogObject {
    * Creates a Db object with no tables based on the given TDatabase thrift struct.
    */
   public static Db fromTDatabase(TDatabase db, Catalog parentCatalog) {
-    return new Db(db.getDb_name(), parentCatalog);
+    return new Db(db.getDb_name(), parentCatalog, db.getMetastore_db());
   }
 
   public boolean isSystemDb() { return isSystemDb_; }
   public TDatabase toThrift() { return thriftDb_; }
+  @Override
   public String getName() { return thriftDb_.getDb_name(); }
+  @Override
   public TCatalogObjectType getCatalogObjectType() {
     return TCatalogObjectType.DATABASE;
   }
@@ -114,6 +122,53 @@ public class Db implements CatalogObject {
    */
   public Table removeTable(String tableName) {
     return tableCache_.remove(tableName.toLowerCase());
+  }
+
+  /**
+   * Comparator that sorts function overloads. We want overloads to be always considered
+   * in a canonical order so that overload resolution in the case of multiple valid
+   * overloads does not depend on the order in which functions are added to the Db. The
+   * order is based on the PrimitiveType enum because this was the order used implicitly
+   * for builtin operators and functions in earlier versions of Impala.
+   */
+  private static class FunctionResolutionOrder implements Comparator<Function> {
+    @Override
+    public int compare(Function f1, Function f2) {
+      int numSharedArgs = Math.min(f1.getNumArgs(), f2.getNumArgs());
+      for (int i = 0; i < numSharedArgs; ++i) {
+        int cmp = typeCompare(f1.getArgs()[i], f2.getArgs()[i]);
+        if (cmp < 0) {
+          return -1;
+        } else if (cmp > 0) {
+          return 1;
+        }
+      }
+      // Put alternative with fewer args first.
+      if (f1.getNumArgs() < f2.getNumArgs()) {
+        return -1;
+      } else if (f1.getNumArgs() > f2.getNumArgs()) {
+        return 1;
+      }
+      return 0;
+    }
+
+    private int typeCompare(Type t1, Type t2) {
+      Preconditions.checkState(!t1.isComplexType());
+      Preconditions.checkState(!t2.isComplexType());
+      return Integer.compare(t1.getPrimitiveType().ordinal(),
+          t2.getPrimitiveType().ordinal());
+    }
+  }
+
+  private static final FunctionResolutionOrder FUNCTION_RESOLUTION_ORDER =
+      new FunctionResolutionOrder();
+
+  /**
+   * Returns the metastore.api.Database object this Database was created from.
+   * Returns null if it is not related to a hive database such as builtins_db.
+   */
+  public org.apache.hadoop.hive.metastore.api.Database getMetaStoreDb() {
+    return thriftDb_.getMetastore_db();
   }
 
   /**
@@ -154,9 +209,15 @@ public class Db implements CatalogObject {
       }
       if (mode == Function.CompareMode.IS_INDISTINGUISHABLE) return null;
 
-      // Finally check for is_subtype
+      // Next check for strict supertypes
       for (Function f: fns) {
         if (f.compare(desc, Function.CompareMode.IS_SUPERTYPE_OF)) return f;
+      }
+      if (mode == Function.CompareMode.IS_SUPERTYPE_OF) return null;
+
+      // Finally check for non-strict supertypes
+      for (Function f: fns) {
+        if (f.compare(desc, Function.CompareMode.IS_NONSTRICT_SUPERTYPE_OF)) return f;
       }
     }
     return null;
@@ -188,7 +249,11 @@ public class Db implements CatalogObject {
         fns = Lists.newArrayList();
         functions_.put(fn.functionName(), fns);
       }
-      return fns.add(fn);
+      if (fns.add(fn)) {
+        Collections.sort(fns, FUNCTION_RESOLUTION_ORDER);
+        return true;
+      }
+      return false;
     }
   }
 
@@ -225,20 +290,21 @@ public class Db implements CatalogObject {
    * Add a builtin with the specified name and signatures to this db.
    * This defaults to not using a Prepare/Close function.
    */
-  public void addScalarBuiltin(String fnName, String symbol, boolean varArgs,
-      Type retType, Type ... args) {
-    addScalarBuiltin(fnName, symbol, null, null, varArgs, retType, args);
+  public void addScalarBuiltin(String fnName, String symbol, boolean userVisible,
+      boolean varArgs, Type retType, Type ... args) {
+    addScalarBuiltin(fnName, symbol, userVisible, null, null, varArgs, retType, args);
   }
 
   /**
    * Add a builtin with the specified name and signatures to this db.
    */
-  public void addScalarBuiltin(String fnName, String symbol, String prepareFnSymbol,
-      String closeFnSymbol, boolean varArgs, Type retType, Type ... args) {
+  public void addScalarBuiltin(String fnName, String symbol, boolean userVisible,
+      String prepareFnSymbol, String closeFnSymbol, boolean varArgs, Type retType,
+      Type ... args) {
     Preconditions.checkState(isSystemDb());
     addBuiltin(ScalarFunction.createBuiltin(
         fnName, Lists.newArrayList(args), varArgs, retType,
-        symbol, prepareFnSymbol, closeFnSymbol, false));
+        symbol, prepareFnSymbol, closeFnSymbol, userVisible));
   }
 
   /**
@@ -247,7 +313,7 @@ public class Db implements CatalogObject {
   public void addBuiltin(Function fn) {
     Preconditions.checkState(isSystemDb());
     Preconditions.checkState(fn != null);
-    Preconditions.checkState(getFunction(fn, CompareMode.IS_IDENTICAL) == null);
+    Preconditions.checkState(getFunction(fn, Function.CompareMode.IS_IDENTICAL) == null);
     addFunction(fn);
   }
 
@@ -265,27 +331,37 @@ public class Db implements CatalogObject {
    */
   public List<Function> getFunctions(TFunctionCategory category,
       PatternMatcher fnPattern) {
-    List<Function> functions = Lists.newArrayList();
+    List<Function> functionsList = Lists.newArrayList();
     synchronized (functions_) {
       for (Map.Entry<String, List<Function>> fns: functions_.entrySet()) {
-        if (fnPattern.matches(fns.getKey())) {
-          for (Function fn: fns.getValue()) {
-            if (!fn.userVisible()) continue;
-            if (category == null
-                || (category == TFunctionCategory.SCALAR && fn instanceof ScalarFunction)
-                || (category == TFunctionCategory.AGGREGATE
-                    && fn instanceof AggregateFunction
-                    && ((AggregateFunction)fn).isAggregateFn())
-                || (category == TFunctionCategory.ANALYTIC
-                    && fn instanceof AggregateFunction
-                    && ((AggregateFunction)fn).isAnalyticFn())) {
-              functions.add(fn);
-            }
+        if (!fnPattern.matches(fns.getKey())) continue;
+        for (Function fn: fns.getValue()) {
+          if (fn.userVisible() &&
+              (category == null || Function.categoryMatch(fn, category))) {
+            functionsList.add(fn);
           }
         }
       }
     }
-    return functions;
+    return functionsList;
+  }
+
+  /**
+   * Returns all functions with the given name and category.
+   */
+  public List<Function> getFunctions(TFunctionCategory category, String name) {
+    List<Function> functionsList = Lists.newArrayList();
+    Preconditions.checkNotNull(category);
+    Preconditions.checkNotNull(name);
+    synchronized(functions_) {
+      if (!functions_.containsKey(name)) return functionsList;
+      for (Function fn: functions_.get(name)) {
+        if (fn.userVisible() && Function.categoryMatch(fn, category)) {
+          functionsList.add(fn);
+        }
+      }
+    }
+    return functionsList;
   }
 
   @Override

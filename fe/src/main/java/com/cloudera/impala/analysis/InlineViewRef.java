@@ -15,23 +15,20 @@
 package com.cloudera.impala.analysis;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.cloudera.impala.catalog.Column;
 import com.cloudera.impala.catalog.ColumnStats;
-import com.cloudera.impala.catalog.InlineView;
+import com.cloudera.impala.catalog.StructField;
+import com.cloudera.impala.catalog.StructType;
 import com.cloudera.impala.catalog.View;
 import com.cloudera.impala.common.AnalysisException;
-import com.cloudera.impala.common.InternalException;
-import com.cloudera.impala.common.TreeNode;
-import com.cloudera.impala.service.FeSupport;
 import com.google.common.base.Preconditions;
-import com.google.common.base.Predicates;
 import com.google.common.collect.Lists;
-
+import com.google.common.collect.Sets;
 
 /**
  * An inline view is a query statement with an alias. Inline views can be parsed directly
@@ -44,6 +41,15 @@ public class InlineViewRef extends TableRef {
   // Null for inline views parsed directly from a query string.
   private final View view_;
 
+  // If not null, these will serve as the column labels for the inline view. This provides
+  // a layer of separation between column labels visible from outside the inline view
+  // and column labels used in the query definition. Either all or none of the column
+  // labels must be overridden.
+  private List<String> explicitColLabels_;
+
+  /////////////////////////////////////////
+  // BEGIN: Members that need to be reset()
+
   // The select or union statement of the inline view
   protected QueryStmt queryStmt_;
 
@@ -54,14 +60,13 @@ public class InlineViewRef extends TableRef {
   protected final ArrayList<TupleId> materializedTupleIds_ = Lists.newArrayList();
 
   // Map inline view's output slots to the corresponding resultExpr of queryStmt.
-  // Some rhs exprs are wrapped into IF(TupleIsNull(), NULL, expr) by calling
-  // makeOutputNullable() if this inline view is a nullable side of an outer join.
-  protected final ExprSubstitutionMap smap_ = new ExprSubstitutionMap();
+  protected final ExprSubstitutionMap smap_;
 
   // Map inline view's output slots to the corresponding baseTblResultExpr of queryStmt.
-  // Some rhs exprs are wrapped into IF(TupleIsNull(), NULL, expr) by calling
-  // makeOutputNullable() if this inline view is a nullable side of an outer join.
-  protected final ExprSubstitutionMap baseTblSmap_ = new ExprSubstitutionMap();
+  protected final ExprSubstitutionMap baseTblSmap_;
+
+  // END: Members that need to be reset()
+  /////////////////////////////////////////
 
   /**
    * C'tor for creating inline views parsed directly from the a query string.
@@ -71,16 +76,33 @@ public class InlineViewRef extends TableRef {
     Preconditions.checkNotNull(queryStmt);
     queryStmt_ = queryStmt;
     view_ = null;
+    smap_ = new ExprSubstitutionMap();
+    baseTblSmap_ = new ExprSubstitutionMap();
+  }
+
+  public InlineViewRef(String alias, QueryStmt queryStmt, List<String> colLabels) {
+    this(alias, queryStmt);
+    explicitColLabels_ = Lists.newArrayList(colLabels);
   }
 
   /**
    * C'tor for creating inline views that replace a local or catalog view ref.
    */
   public InlineViewRef(View view, TableRef origTblRef) {
-    super(view.getTableName(), origTblRef.getExplicitAlias());
+    super(view.getTableName().toPath(), origTblRef.getExplicitAlias());
     queryStmt_ = view.getQueryStmt().clone();
+    queryStmt_.reset();
+    if (view.isLocalView()) queryStmt_.reset();
     view_ = view;
+    smap_ = new ExprSubstitutionMap();
+    baseTblSmap_ = new ExprSubstitutionMap();
     setJoinAttrs(origTblRef);
+    explicitColLabels_ = view.getColLabels();
+    // Set implicit aliases if no explicit one was given.
+    if (hasExplicitAlias()) return;
+    aliases_ = new String[] {
+        view_.getTableName().toString().toLowerCase(), view_.getName().toLowerCase()
+    };
   }
 
   /**
@@ -89,23 +111,15 @@ public class InlineViewRef extends TableRef {
   public InlineViewRef(InlineViewRef other) {
     super(other);
     Preconditions.checkNotNull(other.queryStmt_);
-    queryStmt_ = other.queryStmt_.clone();
     view_ = other.view_;
-  }
-
-  /**
-   * Rewrite all subqueries contained within the inline view. The inline view is
-   * modified in place and the rewrite should not alter its select list.
-   */
-  public void rewrite() throws AnalysisException {
-    if (!(queryStmt_ instanceof SelectStmt)) return;
-    int oldSelectListItemCnt =
-        ((SelectStmt)queryStmt_).getSelectList().getItems().size();
-    StmtRewriter.rewriteStatement((SelectStmt)queryStmt_, inlineViewAnalyzer_);
-    queryStmt_ = queryStmt_.clone();
-    int newSelectListItemCnt =
-        ((SelectStmt)queryStmt_).getSelectList().getItems().size();
-    Preconditions.checkState(oldSelectListItemCnt == newSelectListItemCnt);
+    queryStmt_ = other.queryStmt_.clone();
+    inlineViewAnalyzer_ = other.inlineViewAnalyzer_;
+    if (other.explicitColLabels_ != null) {
+      explicitColLabels_ = Lists.newArrayList(other.explicitColLabels_);
+    }
+    materializedTupleIds_.addAll(other.materializedTupleIds_);
+    smap_ = other.smap_.clone();
+    baseTblSmap_ = other.baseTblSmap_.clone();
   }
 
   /**
@@ -116,6 +130,8 @@ public class InlineViewRef extends TableRef {
    */
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
+    if (isAnalyzed_) return;
+
     // Analyze the inline view query statement with its own analyzer
     inlineViewAnalyzer_ = new Analyzer(analyzer);
 
@@ -139,6 +155,11 @@ public class InlineViewRef extends TableRef {
     inlineViewAnalyzer_.setUseHiveColLabels(
         isCatalogView ? true : analyzer.useHiveColLabels());
     queryStmt_.analyze(inlineViewAnalyzer_);
+    correlatedTupleIds_.addAll(queryStmt_.getCorrelatedTupleIds(inlineViewAnalyzer_));
+    if (explicitColLabels_ != null) {
+      Preconditions.checkState(
+          explicitColLabels_.size() == queryStmt_.getColLabels().size());
+    }
 
     inlineViewAnalyzer_.setHasLimitOffsetClause(
         queryStmt_.hasLimit() || queryStmt_.hasOffset());
@@ -160,27 +181,28 @@ public class InlineViewRef extends TableRef {
     // transfer graph through this inline view correctly (ie, predicates can get
     // propagated through the view);
     // if the view stmt contains analytic functions, we cannot propagate predicates
-    // into the view, because those extra filters would alter the results of the
-    // analytic functions (see IMPALA-1243)
+    // into the view, unless the predicates are compatible with the analytic
+    // function's partition by clause, because those extra filters
+    // would alter the results of the analytic functions (see IMPALA-1243)
     // TODO: relax this a bit by allowing propagation out of the inline view (but
     // not into it)
-    boolean createAuxPredicates = !(queryStmt_ instanceof SelectStmt)
-        || !(((SelectStmt) queryStmt_).hasAnalyticInfo());
-    for (int i = 0; i < queryStmt_.getColLabels().size(); ++i) {
-      String colName = queryStmt_.getColLabels().get(i);
+    for (int i = 0; i < getColLabels().size(); ++i) {
+      String colName = getColLabels().get(i).toLowerCase();
       Expr colExpr = queryStmt_.getResultExprs().get(i);
-      SlotDescriptor slotDesc = analyzer.registerColumnRef(getAliasAsName(), colName);
+      Path p = new Path(desc_, Lists.newArrayList(colName));
+      Preconditions.checkState(p.resolve());
+      SlotDescriptor slotDesc = analyzer.registerSlotRef(p);
+      slotDesc.setSourceExpr(colExpr);
       slotDesc.setStats(ColumnStats.fromExpr(colExpr));
       SlotRef slotRef = new SlotRef(slotDesc);
       smap_.put(slotRef, colExpr);
       baseTblSmap_.put(slotRef, queryStmt_.getBaseTblResultExprs().get(i));
-
-      if (createAuxPredicates) {
+      if (createAuxPredicate(colExpr)) {
         analyzer.createAuxEquivPredicate(new SlotRef(slotDesc), colExpr.clone());
       }
     }
-    LOG.trace("inline view " + getAlias() + " smap: " + smap_.debugString());
-    LOG.trace("inline view " + getAlias() + " baseTblSmap: " +
+    LOG.trace("inline view " + getUniqueAlias() + " smap: " + smap_.debugString());
+    LOG.trace("inline view " + getUniqueAlias() + " baseTblSmap: " +
         baseTblSmap_.debugString());
 
     // Now do the remaining join analysis
@@ -188,104 +210,50 @@ public class InlineViewRef extends TableRef {
   }
 
   /**
-   * Create a non-materialized tuple descriptor in descTbl for this inline view.
+   * Checks if an auxiliary predicate should be created for an expr. Returns False if the
+   * inline view has a SELECT stmt with analytic functions and the expr is not in the
+   * common partition exprs of all the analytic functions computed by this inline view.
+   */
+  public boolean createAuxPredicate(Expr e) {
+    if (!(queryStmt_ instanceof SelectStmt)
+        || !((SelectStmt) queryStmt_).hasAnalyticInfo()) {
+      return true;
+    }
+    AnalyticInfo analyticInfo = ((SelectStmt) queryStmt_).getAnalyticInfo();
+    return analyticInfo.getCommonPartitionExprs().contains(e);
+  }
+
+  /**
+   * Create and register a non-materialized tuple descriptor for this inline view.
    * This method is called from the analyzer when registering this inline view.
+   * Create a non-materialized tuple descriptor for this inline view.
    */
   @Override
   public TupleDescriptor createTupleDescriptor(Analyzer analyzer)
       throws AnalysisException {
-    InlineView inlineView =
-        (view_ != null) ? new InlineView(view_) : new InlineView(alias_);
-    for (int i = 0; i < queryStmt_.getColLabels().size(); ++i) {
+    int numColLabels = getColLabels().size();
+    Preconditions.checkState(numColLabels > 0);
+    HashSet<String> uniqueColAliases = Sets.newHashSetWithExpectedSize(numColLabels);
+    ArrayList<StructField> fields = Lists.newArrayListWithCapacity(numColLabels);
+    for (int i = 0; i < numColLabels; ++i) {
       // inline view select statement has been analyzed. Col label should be filled.
       Expr selectItemExpr = queryStmt_.getResultExprs().get(i);
-      String colAlias = queryStmt_.getColLabels().get(i);
+      String colAlias = getColLabels().get(i).toLowerCase();
 
       // inline view col cannot have duplicate name
-      if (inlineView.getColumn(colAlias) != null) {
+      if (!uniqueColAliases.add(colAlias)) {
         throw new AnalysisException("duplicated inline view column alias: '" +
-            colAlias + "'" + " in inline view " + "'" + alias_ + "'");
+            colAlias + "'" + " in inline view " + "'" + getUniqueAlias() + "'");
       }
-
-      // create a column and add it to the inline view
-      Column col = new Column(colAlias, selectItemExpr.getType(), i);
-      inlineView.addColumn(col);
+      fields.add(new StructField(colAlias, selectItemExpr.getType(), null));
     }
 
-    // Create the non-materialized tuple and set the fake table in it.
-    TupleDescriptor result =
-        analyzer.getDescTbl().createTupleDescriptor("inl-view-" + alias_);
+    // Create the non-materialized tuple and set its type.
+    TupleDescriptor result = analyzer.getDescTbl().createTupleDescriptor(
+        getClass().getSimpleName() + " " + getUniqueAlias());
     result.setIsMaterialized(false);
-    result.setTable(inlineView);
+    result.setType(new StructType(fields));
     return result;
-  }
-
-  /**
-   * Makes each rhs expr in baseTblSmap_ nullable, if necessary by wrapping as follows:
-   * IF(TupleIsNull(), NULL, rhs expr)
-   * Should be called only if this inline view is on the nullable side of an outer join.
-   *
-   * We need to make an rhs exprs nullable if it evaluates to a non-NULL value
-   * when all of its contained SlotRefs evaluate to NULL.
-   * For example, constant exprs need to be wrapped or an expr such as
-   * 'case slotref is null then 1 else 2 end'
-   */
-  protected void makeOutputNullable(Analyzer analyzer) {
-    try {
-      makeOutputNullableHelper(analyzer, smap_);
-      makeOutputNullableHelper(analyzer, baseTblSmap_);
-    } catch (Exception e) {
-      // should never happen
-      throw new IllegalStateException(e);
-    }
-  }
-
-  protected void makeOutputNullableHelper(Analyzer analyzer, ExprSubstitutionMap smap)
-      throws InternalException, AnalysisException {
-    // Gather all unique rhs SlotRefs into rhsSlotRefs
-    List<SlotRef> rhsSlotRefs = Lists.newArrayList();
-    TreeNode.collect(smap.getRhs(), Predicates.instanceOf(SlotRef.class), rhsSlotRefs);
-    // Map for substituting SlotRefs with NullLiterals.
-    ExprSubstitutionMap nullSMap = new ExprSubstitutionMap();
-    NullLiteral nullLiteral = new NullLiteral();
-    nullLiteral.analyze(analyzer);
-    for (SlotRef rhsSlotRef: rhsSlotRefs) {
-      nullSMap.put(rhsSlotRef.clone(), nullLiteral.clone());
-    }
-
-    // Make rhs exprs nullable if necessary.
-    for (int i = 0; i < smap.getRhs().size(); ++i) {
-      List<Expr> params = Lists.newArrayList();
-      if (!requiresNullWrapping(analyzer, smap.getRhs().get(i), nullSMap)) continue;
-      params.add(new TupleIsNullPredicate(materializedTupleIds_));
-      params.add(new NullLiteral());
-      params.add(smap.getRhs().get(i));
-      Expr ifExpr = new FunctionCallExpr("if", params);
-      ifExpr.analyze(analyzer);
-      smap.getRhs().set(i, ifExpr);
-    }
-  }
-
-  /**
-   * Replaces all SloRefs in expr with a NullLiteral using nullSMap, and evaluates the
-   * resulting constant expr. Returns true if the constant expr yields a non-NULL value,
-   * false otherwise.
-   */
-  private boolean requiresNullWrapping(Analyzer analyzer, Expr expr,
-      ExprSubstitutionMap nullSMap) throws InternalException, AnalysisException {
-    // If the expr is already wrapped in an IF(TupleIsNull(), NULL, expr)
-    // then do not try to execute it.
-    // TODO: return true in this case?
-    if (expr.contains(Predicates.instanceOf(TupleIsNullPredicate.class))) return true;
-
-    // Replace all SlotRefs in expr with NullLiterals, and wrap the result
-    // with an IS NOT NULL predicate.
-    Expr isNotNullLiteralPred =
-        new IsNullPredicate(expr.substitute(nullSMap, analyzer), true);
-    Preconditions.checkState(isNotNullLiteralPred.isConstant());
-    // analyze to insert casts, etc.
-    isNotNullLiteralPred.analyze(analyzer);
-    return FeSupport.EvalPredicate(isNotNullLiteralPred, analyzer.getQueryCtx());
   }
 
   @Override
@@ -311,19 +279,56 @@ public class InlineViewRef extends TableRef {
   }
 
   public QueryStmt getViewStmt() { return queryStmt_; }
+  public void setRewrittenViewStmt(QueryStmt stmt) {
+    Preconditions.checkState(getAnalyzer().containsSubquery());
+    queryStmt_ = stmt;
+  }
+
+  public List<String> getExplicitColLabels() { return explicitColLabels_; }
+
+  public List<String> getColLabels() {
+    if (explicitColLabels_ != null) return explicitColLabels_;
+    return queryStmt_.getColLabels();
+  }
 
   @Override
-  public TableRef clone() { return new InlineViewRef(this); }
+  protected TableRef clone() { return new InlineViewRef(this); }
+
+  @Override
+  public void reset() {
+    super.reset();
+    queryStmt_.reset();
+    inlineViewAnalyzer_ = null;
+    materializedTupleIds_.clear();
+    smap_.clear();
+    baseTblSmap_.clear();
+  }
 
   @Override
   protected String tableRefToSql() {
     // Enclose the alias in quotes if Hive cannot parse it without quotes.
     // This is needed for view compatibility between Impala and Hive.
-    String aliasSql = (alias_ == null) ? null : ToSqlUtils.getIdentSql(alias_);
+    String aliasSql = null;
+    String alias = getExplicitAlias();
+    if (alias != null) aliasSql = ToSqlUtils.getIdentSql(alias);
     if (view_ != null) {
       return view_.getTableName().toSql() + (aliasSql == null ? "" : " " + aliasSql);
     }
     Preconditions.checkNotNull(aliasSql);
-    return "(" + queryStmt_.toSql() + ") " + aliasSql;
+    StringBuilder sql = new StringBuilder()
+        .append("(")
+        .append(queryStmt_.toSql())
+        .append(") ")
+        .append(aliasSql);
+    // Add explicit col labels for debugging even though this syntax isn't supported.
+    if (explicitColLabels_ != null) {
+      sql.append(" (");
+      for (int i = 0; i < getExplicitColLabels().size(); i++) {
+        if (i > 0) sql.append(", ");
+        sql.append(ToSqlUtils.getIdentSql(getExplicitColLabels().get(i)));
+      }
+      sql.append(")");
+    }
+    return sql.toString();
   }
 }

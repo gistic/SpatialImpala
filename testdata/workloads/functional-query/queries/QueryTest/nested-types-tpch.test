@@ -1,0 +1,178 @@
+====
+---- QUERY
+use tpch_nested_parquet
+====
+---- QUERY
+select count(*)
+from tpch_nested_parquet.customer c, c.c_orders o, o.o_lineitems i
+where c_custkey in (1, 2) and o_orderkey in (4808192, 1374019)
+---- RESULTS
+7
+---- TYPES
+bigint
+====
+---- QUERY
+select count(*)
+from tpch_nested_parquet.customer c, c.c_orders o, o.o_lineitems i
+---- RESULTS
+6001215
+---- TYPES
+bigint
+====
+---- QUERY
+select count(l_linenumber)
+from tpch_nested_parquet.customer.c_orders.o_lineitems i
+---- RESULTS
+6001215
+---- TYPES
+bigint
+====
+---- QUERY
+select count(*)
+from tpch_nested_parquet.customer.c_orders.o_lineitems i
+---- RESULTS
+6001215
+---- TYPES
+bigint
+====
+---- QUERY
+# Relational version of above queries (same results)
+select count(l_linenumber) from tpch_parquet.lineitem
+---- RESULTS
+6001215
+---- TYPES
+bigint
+====
+---- QUERY
+# Relational version (almost) of above query
+select c_custkey, count(*)
+from tpch_parquet.customer join tpch_parquet.orders on c_custkey = o_custkey
+where c_custkey < 10
+group by c_custkey
+order by c_custkey
+---- RESULTS
+1,6
+2,7
+4,20
+5,4
+7,16
+8,13
+---- TYPES
+bigint,bigint
+====
+---- QUERY
+select c_custkey from tpch_nested_parquet.customer c left anti join c.c_orders
+where c_custkey < 10 order by c_custkey
+---- RESULTS
+3
+6
+9
+---- TYPES
+bigint
+====
+---- QUERY
+# Exercise TOP-N node with array data
+select c_custkey, c_name, o_orderkey, o_orderpriority
+from tpch_nested_parquet.customer c, c.c_orders o
+where c_custkey < 100
+order by o_orderpriority, o_orderkey
+limit 10;
+---- RESULTS
+29,'Customer#000000029',24322,'1-URGENT'
+46,'Customer#000000046',74055,'1-URGENT'
+76,'Customer#000000076',309891,'1-URGENT'
+53,'Customer#000000053',322501,'1-URGENT'
+25,'Customer#000000025',330404,'1-URGENT'
+22,'Customer#000000022',346693,'1-URGENT'
+20,'Customer#000000020',360067,'1-URGENT'
+79,'Customer#000000079',400101,'1-URGENT'
+79,'Customer#000000079',410595,'1-URGENT'
+65,'Customer#000000065',438881,'1-URGENT'
+---- TYPES
+bigint,string,bigint,string
+====
+---- QUERY
+# IMPALA-2335: non-nullable zero-width tuples can be NULL. This query hit a DCHECK.
+# In this query no slots of the supplier.s_partssupps array are materialized, so there
+# are NULL tuples once the array is unnested.
+SELECT t2.s_name
+FROM tpch_nested_parquet.customer t1
+INNER JOIN tpch_nested_parquet.supplier t2
+  ON t2.s_phone = t1.c_phone AND t2.s_acctbal = t1.c_acctbal,
+t2.s_partsupps t3
+WHERE t2.s_suppkey > t2.s_nationkey;
+---- RESULTS
+---- TYPES
+string
+====
+---- QUERY
+# IMPALA-2229: deduping of zero-length tuples during exchange hits DCHECK. This query has
+# an exchange that uses full dedup (> 3 tuples, including an array) and includes a tuple
+# that is zero bytes in size.
+SELECT STRAIGHT_JOIN r_regionkey, p_retailprice
+FROM (SELECT p1.p_partkey, p2.p_retailprice, p2.p_mfgr
+      FROM part p1 INNER JOIN part p2 ON p1.p_partkey = p2.p_partkey
+      WHERE p1.p_partkey < 100 AND p2.p_partkey < 100) t2
+RIGHT JOIN (SELECT r_name, r_regionkey
+            FROM region r, r.r_nations
+            WHERE r_name = 'AFRICA') t1
+  ON t1.r_regionkey = t2.p_partkey
+---- RESULTS
+0,NULL
+0,NULL
+0,NULL
+0,NULL
+0,NULL
+---- TYPES
+SMALLINT,DECIMAL
+====
+---- QUERY
+# IMPALA-2338: serialization of arrays in exchange.
+SELECT COALESCE(t2.p_size, t4.pos, o_orderkey) AS int_col, COUNT(*)
+FROM customer t1
+LEFT JOIN part t2 ON t1.c_custkey = t2.p_partkey,
+t1.c_orders t3,
+t3.item.o_lineitems t4
+WHERE t1.c_custkey < 100 AND t2.p_partkey < 100
+GROUP BY 1
+HAVING int_col <= 5
+ORDER BY 1
+---- RESULTS
+1,177
+2,113
+3,119
+5,71
+---- TYPES
+BIGINT,BIGINT
+====
+---- QUERY
+# IMPALA-2357: Test analytic function with order by on top of subplans that
+# generate many rows. This test stresses the order by and should not crash.
+SELECT o_orderkey, r FROM
+  (SELECT o2.o_orderkey, COUNT(o1.pos) OVER (ORDER BY o2.o_orderkey DESC) r
+   FROM tpch_nested_parquet.customer c
+   JOIN c.c_orders o1
+   JOIN c.c_orders o2 ON (o1.pos = o2.pos)) v
+ORDER BY o_orderkey LIMIT 1
+---- RESULTS
+1,1500000
+---- TYPES
+BIGINT,BIGINT
+====
+---- QUERY
+# IMPALA-2376
+# Set memory limit low enough to get the below query to consistently fail.
+set mem_limit=4m
+====
+---- QUERY
+select max(cnt) from customer c,
+(select count(l_returnflag) cnt from c.c_orders.o_lineitems) v;
+---- TYPES
+BIGINT
+---- CATCH
+Memory limit exceeded
+Failed to allocate buffer for collection 'tpch_nested_parquet.customer.c_orders.item.o_lineitems'.
+====
+---- QUERY
+set mem_limit=0
+====

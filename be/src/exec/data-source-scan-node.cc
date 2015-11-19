@@ -30,7 +30,8 @@
 #include "util/periodic-counter-updater.h"
 #include "util/runtime-profile.h"
 
-using namespace std;
+#include "common/names.h"
+
 using namespace strings;
 using namespace impala::extdatasource;
 
@@ -77,7 +78,8 @@ Status DataSourceScanNode::Prepare(RuntimeState* state) {
 
   data_source_executor_.reset(new ExternalDataSourceExecutor());
   RETURN_IF_ERROR(data_source_executor_->Init(data_src_node_.data_source.hdfs_location,
-      data_src_node_.data_source.class_name, data_src_node_.data_source.api_version));
+      data_src_node_.data_source.class_name, data_src_node_.data_source.api_version,
+      data_src_node_.init_string));
 
   // Initialize materialized_slots_ and cols_next_val_idx_.
   BOOST_FOREACH(SlotDescriptor* slot, tuple_desc_->slots()) {
@@ -85,7 +87,7 @@ Status DataSourceScanNode::Prepare(RuntimeState* state) {
     materialized_slots_.push_back(slot);
     cols_next_val_idx_.push_back(0);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataSourceScanNode::Open(RuntimeState* state) {
@@ -98,7 +100,7 @@ Status DataSourceScanNode::Open(RuntimeState* state) {
   BOOST_FOREACH(const SlotDescriptor* slot, materialized_slots_) {
     extdatasource::TColumnDesc col;
     int col_idx = slot->col_pos();
-    col.__set_name(tuple_desc_->table_desc()->col_names()[col_idx]);
+    col.__set_name(tuple_desc_->table_desc()->col_descs()[col_idx].name());
     col.__set_type(slot->type().ToThrift());
     cols.push_back(col);
   }
@@ -121,7 +123,7 @@ Status DataSourceScanNode::Open(RuntimeState* state) {
 }
 
 Status DataSourceScanNode::ValidateRowBatchSize() {
-  if (!input_batch_->__isset.rows) return Status::OK;
+  if (!input_batch_->__isset.rows) return Status::OK();
   const vector<TColumnData>& cols = input_batch_->rows.cols;
   if (materialized_slots_.size() != cols.size()) {
     return Status(Substitute(ERROR_NUM_COLUMNS, materialized_slots_.size(), cols.size()));
@@ -137,7 +139,7 @@ Status DataSourceScanNode::ValidateRowBatchSize() {
     if (num_rows_ < 0) num_rows_ = col_data.is_null.size();
     if (num_rows_ != col_data.is_null.size()) return Status(ERROR_MISMATCHED_COL_SIZES);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataSourceScanNode::GetNextInputBatch() {
@@ -158,7 +160,7 @@ Status DataSourceScanNode::GetNextInputBatch() {
       << "data source.";
     input_batch_->eos = true;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 // Sets the decimal value in the slot. Inline method to avoid nested switch statements.
@@ -186,7 +188,7 @@ inline Status SetDecimalVal(const ColumnType& type, char* bytes, int len,
     }
     default: DCHECK(false);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataSourceScanNode::MaterializeNextRow(MemPool* tuple_pool) {
@@ -285,22 +287,23 @@ Status DataSourceScanNode::MaterializeNextRow(MemPool* tuple_pool) {
         DCHECK(false);
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DataSourceScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   RETURN_IF_CANCELLED(state);
+  RETURN_IF_ERROR(QueryMaintenance(state));
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   if (ReachedLimit()) {
     *eos = true;
-    return Status::OK;
+    return Status::OK();
   }
   *eos = false;
 
   // create new tuple buffer for row_batch
   MemPool* tuple_pool = row_batch->tuple_data_pool();
-  int tuple_buffer_size = row_batch->capacity() * tuple_desc_->byte_size();
+  int tuple_buffer_size = row_batch->MaxTupleBufferSize();
   void* tuple_buffer = tuple_pool->Allocate(tuple_buffer_size);
   tuple_ = reinterpret_cast<Tuple*>(tuple_buffer);
   ExprContext** ctxs = &conjunct_ctxs_[0];
@@ -310,8 +313,8 @@ Status DataSourceScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, boo
     {
       SCOPED_TIMER(materialize_tuple_timer());
       // copy rows until we hit the limit/capacity or until we exhaust input_batch_
-      while (!ReachedLimit() && !row_batch->AtCapacity() && InputBatchHasNext() &&
-          tuple_pool->total_allocated_bytes() < RowBatch::AT_CAPACITY_MEM_USAGE) {
+      while (!ReachedLimit() && !row_batch->AtCapacity(tuple_pool) &&
+          InputBatchHasNext()) {
         RETURN_IF_ERROR(MaterializeNextRow(tuple_pool));
         int row_idx = row_batch->AddRow();
         TupleRow* tuple_row = row_batch->GetRow(row_idx);
@@ -330,7 +333,7 @@ Status DataSourceScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, boo
 
       if (ReachedLimit() || row_batch->AtCapacity() || input_batch_->eos) {
         *eos = ReachedLimit() || input_batch_->eos;
-        return Status::OK;
+        return Status::OK();
       }
     }
 
@@ -338,6 +341,11 @@ Status DataSourceScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, boo
     DCHECK(!InputBatchHasNext());
     RETURN_IF_ERROR(GetNextInputBatch());
   }
+}
+
+Status DataSourceScanNode::Reset(RuntimeState* state) {
+  DCHECK(false) << "NYI";
+  return Status("NYI");
 }
 
 void DataSourceScanNode::Close(RuntimeState* state) {
@@ -350,7 +358,7 @@ void DataSourceScanNode::Close(RuntimeState* state) {
   params.__set_scan_handle(scan_handle_);
   TCloseResult result;
   Status status = data_source_executor_->Close(params, &result);
-  state->LogError(status); // logs the error if status != OK
+  if (!status.ok()) state->LogError(status.msg());
   ExecNode::Close(state);
 }
 

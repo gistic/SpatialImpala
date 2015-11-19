@@ -24,12 +24,14 @@
 #include "gen-cpp/CatalogObjects_types.h"
 #include "gen-cpp/CatalogService_types.h"
 
-using namespace impala;
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
+using boost::bind;
+using boost::mem_fn;
 using namespace apache::thrift;
-using namespace strings;
+using namespace impala;
 using namespace rapidjson;
+using namespace strings;
 
 DEFINE_int32(catalog_service_port, 26000, "port where the CatalogService is running");
 DECLARE_string(state_store_host);
@@ -59,7 +61,7 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
   virtual void ExecDdl(TDdlExecResponse& resp, const TDdlExecRequest& req) {
     VLOG_RPC << "ExecDdl(): request=" << ThriftDebugString(req);
     Status status = catalog_server_->catalog()->ExecDdl(req, &resp);
-    if (!status.ok()) LOG(ERROR) << status.GetErrorMsg();
+    if (!status.ok()) LOG(ERROR) << status.GetDetail();
     TStatus thrift_status;
     status.ToThrift(&thrift_status);
     resp.result.__set_status(thrift_status);
@@ -71,7 +73,7 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
       const TResetMetadataRequest& req) {
     VLOG_RPC << "ResetMetadata(): request=" << ThriftDebugString(req);
     Status status = catalog_server_->catalog()->ResetMetadata(req, &resp);
-    if (!status.ok()) LOG(ERROR) << status.GetErrorMsg();
+    if (!status.ok()) LOG(ERROR) << status.GetDetail();
     TStatus thrift_status;
     status.ToThrift(&thrift_status);
     resp.result.__set_status(thrift_status);
@@ -84,7 +86,7 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
       const TUpdateCatalogRequest& req) {
     VLOG_RPC << "UpdateCatalog(): request=" << ThriftDebugString(req);
     Status status = catalog_server_->catalog()->UpdateCatalog(req, &resp);
-    if (!status.ok()) LOG(ERROR) << status.GetErrorMsg();
+    if (!status.ok()) LOG(ERROR) << status.GetDetail();
     TStatus thrift_status;
     status.ToThrift(&thrift_status);
     resp.result.__set_status(thrift_status);
@@ -97,7 +99,7 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
       const TGetFunctionsRequest& req) {
     VLOG_RPC << "GetFunctions(): request=" << ThriftDebugString(req);
     Status status = catalog_server_->catalog()->GetFunctions(req, &resp);
-    if (!status.ok()) LOG(ERROR) << status.GetErrorMsg();
+    if (!status.ok()) LOG(ERROR) << status.GetDetail();
     TStatus thrift_status;
     status.ToThrift(&thrift_status);
     resp.__set_status(thrift_status);
@@ -110,7 +112,7 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
     VLOG_RPC << "GetCatalogObject(): request=" << ThriftDebugString(req);
     Status status = catalog_server_->catalog()->GetCatalogObject(req.object_desc,
         &resp.catalog_object);
-    if (!status.ok()) LOG(ERROR) << status.GetErrorMsg();
+    if (!status.ok()) LOG(ERROR) << status.GetDetail();
     VLOG_RPC << "GetCatalogObject(): response=" << ThriftDebugString(resp);
   }
 
@@ -121,7 +123,7 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
       const TPrioritizeLoadRequest& req) {
     VLOG_RPC << "PrioritizeLoad(): request=" << ThriftDebugString(req);
     Status status = catalog_server_->catalog()->PrioritizeLoad(req);
-    if (!status.ok()) LOG(ERROR) << status.GetErrorMsg();
+    if (!status.ok()) LOG(ERROR) << status.GetDetail();
     TStatus thrift_status;
     status.ToThrift(&thrift_status);
     resp.__set_status(thrift_status);
@@ -132,7 +134,7 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
       const TSentryAdminCheckRequest& req) {
     VLOG_RPC << "SentryAdminCheck(): request=" << ThriftDebugString(req);
     Status status = catalog_server_->catalog()->SentryAdminCheck(req);
-    if (!status.ok()) LOG(ERROR) << status.GetErrorMsg();
+    if (!status.ok()) LOG(ERROR) << status.GetDetail();
     TStatus thrift_status;
     status.ToThrift(&thrift_status);
     resp.__set_status(thrift_status);
@@ -143,15 +145,14 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
   CatalogServer* catalog_server_;
 };
 
-CatalogServer::CatalogServer(Metrics* metrics)
+CatalogServer::CatalogServer(MetricGroup* metrics)
   : thrift_iface_(new CatalogServiceThriftIf(this)),
     thrift_serializer_(FLAGS_compact_catalog_topic), metrics_(metrics),
     topic_updates_ready_(false), last_sent_catalog_version_(0L),
     catalog_objects_min_version_(0L), catalog_objects_max_version_(0L) {
-  topic_processing_time_metric_ = metrics_->RegisterMetric(
-      new StatsMetric<double>(CATALOG_SERVER_TOPIC_PROCESSING_TIMES));
+  topic_processing_time_metric_ = StatsMetric<double>::CreateAndRegister(metrics,
+      CATALOG_SERVER_TOPIC_PROCESSING_TIMES);
 }
-
 
 Status CatalogServer::Start() {
   TNetworkAddress subscriber_address =
@@ -168,14 +169,14 @@ Status CatalogServer::Start() {
       &CatalogServer::GatherCatalogUpdatesThread, this));
 
   statestore_subscriber_.reset(new StatestoreSubscriber(
-     TNetworkAddressToString(server_address), subscriber_address, statestore_address,
-     metrics_));
+     Substitute("catalog-server@$0", TNetworkAddressToString(server_address)),
+     subscriber_address, statestore_address, metrics_));
 
   StatestoreSubscriber::UpdateCallback cb =
       bind<void>(mem_fn(&CatalogServer::UpdateCatalogTopicCallback), this, _1, _2);
   Status status = statestore_subscriber_->AddTopic(IMPALA_CATALOG_TOPIC, false, cb);
   if (!status.ok()) {
-    status.AddErrorMsg("CatalogService failed to start");
+    status.AddDetail("CatalogService failed to start");
     return status;
   }
   RETURN_IF_ERROR(statestore_subscriber_->Start());
@@ -185,7 +186,7 @@ Status CatalogServer::Start() {
     lock_guard<mutex> l(catalog_lock_);
     catalog_update_cv_.notify_one();
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void CatalogServer::RegisterWebpages(Webserver* webserver) {
@@ -267,7 +268,7 @@ void CatalogServer::GatherCatalogUpdatesThread() {
     long current_catalog_version;
     Status status = catalog_->GetCatalogVersion(&current_catalog_version);
     if (!status.ok()) {
-      LOG(ERROR) << status.GetErrorMsg();
+      LOG(ERROR) << status.GetDetail();
     } else if (current_catalog_version != last_sent_catalog_version_) {
       // If there has been a change since the last time the catalog was queried,
       // call into the Catalog to find out what has changed.
@@ -275,7 +276,7 @@ void CatalogServer::GatherCatalogUpdatesThread() {
       status = catalog_->GetAllCatalogObjects(last_sent_catalog_version_,
           &catalog_objects);
       if (!status.ok()) {
-        LOG(ERROR) << status.GetErrorMsg();
+        LOG(ERROR) << status.GetDetail();
       } else {
         // Use the catalog objects to build a topic update list.
         BuildTopicUpdates(catalog_objects.objects);
@@ -317,7 +318,7 @@ void CatalogServer::BuildTopicUpdates(const vector<TCatalogObject>& catalog_obje
     item.key = entry_key;
     Status status = thrift_serializer_.Serialize(&catalog_object, &item.value);
     if (!status.ok()) {
-      LOG(ERROR) << "Error serializing topic value: " << status.GetErrorMsg();
+      LOG(ERROR) << "Error serializing topic value: " << status.GetDetail();
       pending_topic_updates_.pop_back();
     }
   }
@@ -339,7 +340,7 @@ void CatalogServer::CatalogUrlCallback(const Webserver::ArgumentMap& args,
   TGetDbsResult get_dbs_result;
   Status status = catalog_->GetDbNames(NULL, &get_dbs_result);
   if (!status.ok()) {
-    Value error(status.GetErrorMsg().c_str(), document->GetAllocator());
+    Value error(status.GetDetail().c_str(), document->GetAllocator());
       document->AddMember("error", error, document->GetAllocator());
     return;
   }
@@ -352,7 +353,7 @@ void CatalogServer::CatalogUrlCallback(const Webserver::ArgumentMap& args,
     TGetTablesResult get_table_results;
     Status status = catalog_->GetTableNames(db, NULL, &get_table_results);
     if (!status.ok()) {
-      Value error(status.GetErrorMsg().c_str(), document->GetAllocator());
+      Value error(status.GetDetail().c_str(), document->GetAllocator());
       database.AddMember("error", error, document->GetAllocator());
       continue;
     }
@@ -393,7 +394,7 @@ void CatalogServer::CatalogObjectsUrlCallback(const Webserver::ArgumentMap& args
       Value debug_string(ThriftDebugString(result).c_str(), document->GetAllocator());
       document->AddMember("thrift_string", debug_string, document->GetAllocator());
     } else {
-      Value error(status.GetErrorMsg().c_str(), document->GetAllocator());
+      Value error(status.GetDetail().c_str(), document->GetAllocator());
       document->AddMember("error", error, document->GetAllocator());
     }
   } else {

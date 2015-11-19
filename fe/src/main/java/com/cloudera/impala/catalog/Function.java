@@ -26,6 +26,7 @@ import com.cloudera.impala.thrift.TCatalogObjectType;
 import com.cloudera.impala.thrift.TColumnType;
 import com.cloudera.impala.thrift.TFunction;
 import com.cloudera.impala.thrift.TFunctionBinaryType;
+import com.cloudera.impala.thrift.TFunctionCategory;
 import com.cloudera.impala.thrift.TScalarFunction;
 import com.cloudera.impala.thrift.TSymbolLookupParams;
 import com.cloudera.impala.thrift.TSymbolLookupResult;
@@ -59,12 +60,16 @@ public class Function implements CatalogObject {
     // e.g. fn(NULL, int) is indistinguishable from fn(int, int)
     IS_INDISTINGUISHABLE,
 
-    // X is a supertype of Y if Y.arg[i] can be implicitly cast to X.arg[i]. If X has
-    // vargs, the remaining arguments of Y must be implicitly castable to the var arg
-    // type. The key property this provides is that X can be used in place of Y.
-    // e.g.
-    // fn(int, double, string...) is a supertype of fn(tinyint, float, string, string)
+    // X is a supertype of Y if Y.arg[i] can be strictly implicitly cast to X.arg[i]. If
+    /// X has vargs, the remaining arguments of Y must be strictly implicitly castable
+    // to the var arg type. The key property this provides is that X can be used in place
+    // of Y. e.g. fn(int, double, string...) is a supertype of fn(tinyint, float, string,
+    // string)
     IS_SUPERTYPE_OF,
+
+    // Nonstrict supertypes broaden the definition of supertype to accept implicit casts
+    // of arguments that may result in loss of precision - e.g. decimal to float.
+    IS_NONSTRICT_SUPERTYPE_OF,
   }
 
   // User specified function name e.g. "Add"
@@ -158,7 +163,8 @@ public class Function implements CatalogObject {
     switch (mode) {
       case IS_IDENTICAL: return isIdentical(other);
       case IS_INDISTINGUISHABLE: return isIndistinguishable(other);
-      case IS_SUPERTYPE_OF: return isSuperTypeOf(other);
+      case IS_SUPERTYPE_OF: return isSuperTypeOf(other, true);
+      case IS_NONSTRICT_SUPERTYPE_OF: return isSuperTypeOf(other, false);
       default:
         Preconditions.checkState(false);
         return false;
@@ -166,18 +172,17 @@ public class Function implements CatalogObject {
   }
   /**
    * Returns true if 'this' is a supertype of 'other'. Each argument in other must
-   * be implicitly castable to the matching argument in this.
-   * TODO: look into how we resolve implicitly castable functions. Is there a rule
-   * for "most" compatible or maybe return an error if it is ambiguous?
+   * be implicitly castable to the matching argument in this. If strict is true,
+   * only consider conversions where there is no loss of precision.
    */
-  private boolean isSuperTypeOf(Function other) {
+  private boolean isSuperTypeOf(Function other, boolean strict) {
     if (!other.name_.equals(name_)) return false;
     if (!this.hasVarArgs_ && other.argTypes_.length != this.argTypes_.length) {
       return false;
     }
     if (this.hasVarArgs_ && other.argTypes_.length < this.argTypes_.length) return false;
     for (int i = 0; i < this.argTypes_.length; ++i) {
-      if (!Type.isImplicitlyCastable(other.argTypes_[i], this.argTypes_[i])) {
+      if (!Type.isImplicitlyCastable(other.argTypes_[i], this.argTypes_[i], strict)) {
         return false;
       }
     }
@@ -185,13 +190,42 @@ public class Function implements CatalogObject {
     if (this.hasVarArgs_) {
       for (int i = this.argTypes_.length; i < other.argTypes_.length; ++i) {
         if (other.argTypes_[i].matchesType(this.getVarArgsType())) continue;
-        if (!Type.isImplicitlyCastable(other.argTypes_[i],
-            this.getVarArgsType())) {
+        if (!Type.isImplicitlyCastable(other.argTypes_[i], this.getVarArgsType(),
+              strict)) {
           return false;
         }
       }
     }
     return true;
+  }
+
+  /**
+   * Converts any CHAR arguments to be STRING arguments
+   */
+  public Function promoteCharsToStrings() {
+    Type[] promoted = argTypes_.clone();
+    for (int i = 0; i < promoted.length; ++i) {
+      if (promoted[i].isScalarType(PrimitiveType.CHAR)) promoted[i] = ScalarType.STRING;
+    }
+    return new Function(name_, promoted, retType_, hasVarArgs_);
+  }
+
+  /**
+   * Given a list of functions which are a super type of this function, select the best
+   * match. This is the one which requires the fewest type promotions.
+   */
+  public Function selectClosestSuperType(List<Function> candidates) {
+    Preconditions.checkArgument(candidates.size() > 0);
+    if (candidates.size() == 1) return candidates.get(0);
+
+    // Always promote CHAR to STRING before attempting any other promotions.
+    Function withStrs = promoteCharsToStrings();
+    for (Function f: candidates) {
+      if (withStrs.isIndistinguishable(f)) return f;
+    }
+    // Otherwise, we use the previous rules of resolution which are to take the first
+    // one in the list.
+    return candidates.get(0);
   }
 
   private boolean isIdentical(Function o) {
@@ -261,6 +295,9 @@ public class Function implements CatalogObject {
 
   @Override
   public String getName() { return getFunctionName().toString(); }
+
+  // Child classes must override this function.
+  public String toSql(boolean ifNotExists) { return ""; }
 
   public TFunction toThrift() {
     TFunction fn = new TFunction();
@@ -397,5 +434,19 @@ public class Function implements CatalogObject {
       Preconditions.checkState(false, t.toString());
       return "";
     }
+  }
+
+  /**
+   * Returns true if the given function matches the specified category.
+   */
+  public static boolean categoryMatch(Function fn, TFunctionCategory category) {
+    Preconditions.checkNotNull(category);
+    return (category == TFunctionCategory.SCALAR && fn instanceof ScalarFunction)
+        || (category == TFunctionCategory.AGGREGATE
+            && fn instanceof AggregateFunction
+            && ((AggregateFunction)fn).isAggregateFn())
+        || (category == TFunctionCategory.ANALYTIC
+            && fn instanceof AggregateFunction
+            && ((AggregateFunction)fn).isAnalyticFn());
   }
 }

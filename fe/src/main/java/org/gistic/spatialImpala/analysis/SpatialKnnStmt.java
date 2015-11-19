@@ -8,6 +8,7 @@ import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.authorization.Privilege;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.analysis.Analyzer;
+import com.cloudera.impala.analysis.Path;
 import com.cloudera.impala.analysis.StatementBase;
 import com.cloudera.impala.analysis.SelectStmt;
 import com.cloudera.impala.analysis.SelectListItem;
@@ -86,11 +87,11 @@ public class SpatialKnnStmt extends StatementBase {
 
 		// Preparing data for SelectStmt.
 		List<TableRef> tableRefs = new ArrayList<TableRef>();
-		tableRefs.add(new TableRef(tableName_, null));
+		tableRefs.add(new TableRef(tableName_.toPath(), null));
 
 		List<SelectListItem> items = new ArrayList<SelectListItem>();
-		items.add(new SelectListItem(new SlotRef(tableName_, X), null));
-		items.add(new SelectListItem(new SlotRef(tableName_, Y), null));
+		items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName_.toString(), X)), null));
+		items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName_.toString(), Y)), null));
 
 		selectStmt_ = new SelectStmt(new SelectList(items), tableRefs,
 				createWherePredicate(globalIndexes), null, null, dist_, k_);
@@ -109,7 +110,7 @@ public class SpatialKnnStmt extends StatementBase {
 	}
 
 	private Expr createWherePredicate(List<GlobalIndexRecord> globalIndexes) {
-		SlotRef globalIndexSlotRef = new SlotRef(tableName_, TAG);
+		SlotRef globalIndexSlotRef = new SlotRef(Path.createRawPath(tableName_.toString(), TAG));
 		if (globalIndexes == null || globalIndexes.size() == 0) {
 			return new IsNullPredicate(globalIndexSlotRef, false);
 		}

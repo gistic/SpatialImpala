@@ -16,23 +16,26 @@
 #ifndef IMPALA_UTIL_INTERNAL_QUEUE_H
 #define IMPALA_UTIL_INTERNAL_QUEUE_H
 
+#include <boost/thread/locks.hpp>
+
 #include "common/atomic.h"
 #include "util/spinlock.h"
 
+
 namespace impala {
 
-// Thread safe fifo-queue. This is an internal queue, meaning the links to nodes
-// are maintained in the object itself. This is in contrast to the stl list which
-// allocates a wrapper Node object around the data. Since it's an internal queue,
-// the list pointers are maintained in the Nodes which is memory owned by the user.
-// The nodes cannot be deallocated while the queue has elements.
-// To use: subclass InternalQueue::Node.
-// The internal structure is a doubly-linked list.
-//  NULL <-- N1 <--> N2 <--> N3 --> NULL
-//          (head)          (tail)
-// TODO: this is an ideal candidate to be made lock free.
+/// Thread safe fifo-queue. This is an internal queue, meaning the links to nodes
+/// are maintained in the object itself. This is in contrast to the stl list which
+/// allocates a wrapper Node object around the data. Since it's an internal queue,
+/// the list pointers are maintained in the Nodes which is memory owned by the user.
+/// The nodes cannot be deallocated while the queue has elements.
+/// To use: subclass InternalQueue::Node.
+/// The internal structure is a doubly-linked list.
+///  NULL <-- N1 <--> N2 <--> N3 --> NULL
+///          (head)          (tail)
+/// TODO: this is an ideal candidate to be made lock free.
 
-// T must be a subclass of InternalQueue::Node
+/// T must be a subclass of InternalQueue::Node
 template<typename T>
 class InternalQueue {
  public:
@@ -41,20 +44,20 @@ class InternalQueue {
     Node() : parent_queue(NULL), next(NULL), prev(NULL) {}
     virtual ~Node() {}
 
-    // Returns the Next/Prev node or NULL if this is the end/front.
+    /// Returns the Next/Prev node or NULL if this is the end/front.
     T* Next() const {
-      ScopedSpinLock lock(&parent_queue->lock_);
+      boost::lock_guard<SpinLock> lock(parent_queue->lock_);
       return reinterpret_cast<T*>(next);
     }
     T* Prev() const {
-      ScopedSpinLock lock(&parent_queue->lock_);
+      boost::lock_guard<SpinLock> lock(parent_queue->lock_);
       return reinterpret_cast<T*>(prev);
     }
 
    private:
     friend class InternalQueue;
 
-    // Pointer to the queue this Node is on. NULL if not on any queue.
+    /// Pointer to the queue this Node is on. NULL if not on any queue.
     InternalQueue* parent_queue;
     Node* next;
     Node* prev;
@@ -62,23 +65,23 @@ class InternalQueue {
 
   InternalQueue() : head_(NULL), tail_(NULL), size_(0) {}
 
-  // Returns the element at the head of the list without dequeuing or NULL
-  // if the queue is empty. This is O(1).
+  /// Returns the element at the head of the list without dequeuing or NULL
+  /// if the queue is empty. This is O(1).
   T* head() const {
-    ScopedSpinLock lock(&lock_);
+    boost::lock_guard<SpinLock> lock(lock_);
     if (empty()) return NULL;
     return reinterpret_cast<T*>(head_);
   }
 
-  // Returns the element at the end of the list without dequeuing or NULL
-  // if the queue is empty. This is O(1).
+  /// Returns the element at the end of the list without dequeuing or NULL
+  /// if the queue is empty. This is O(1).
   T* tail() {
-    ScopedSpinLock lock(&lock_);
+    boost::lock_guard<SpinLock> lock(lock_);
     if (empty()) return NULL;
     return reinterpret_cast<T*>(tail_);
   }
 
-  // Enqueue node onto the queue's tail. This is O(1).
+  /// Enqueue node onto the queue's tail. This is O(1).
   void Enqueue(T* n) {
     Node* node = (Node*)n;
     DCHECK(node->next == NULL);
@@ -86,7 +89,7 @@ class InternalQueue {
     DCHECK(node->parent_queue == NULL);
     node->parent_queue = this;
     {
-      ScopedSpinLock lock(&lock_);
+      boost::lock_guard<SpinLock> lock(lock_);
       if (tail_ != NULL) tail_->next = node;
       node->prev = tail_;
       tail_ = node;
@@ -95,12 +98,12 @@ class InternalQueue {
     }
   }
 
-  // Dequeues an element from the queue's head. Returns NULL if the queue
-  // is empty. This is O(1).
+  /// Dequeues an element from the queue's head. Returns NULL if the queue
+  /// is empty. This is O(1).
   T* Dequeue() {
     Node* result = NULL;
     {
-      ScopedSpinLock lock(&lock_);
+      boost::lock_guard<SpinLock> lock(lock_);
       if (empty()) return NULL;
       --size_;
       result = head_;
@@ -117,12 +120,12 @@ class InternalQueue {
     return reinterpret_cast<T*>(result);
   }
 
-  // Dequeues an element from the queue's tail. Returns NULL if the queue
-  // is empty. This is O(1).
+  /// Dequeues an element from the queue's tail. Returns NULL if the queue
+  /// is empty. This is O(1).
   T* PopBack() {
     Node* result = NULL;
     {
-      ScopedSpinLock lock(&lock_);
+      boost::lock_guard<SpinLock> lock(lock_);
       if (empty()) return NULL;
       --size_;
       result = tail_;
@@ -139,14 +142,14 @@ class InternalQueue {
     return reinterpret_cast<T*>(result);
   }
 
-  // Removes 'node' from the queue. This is O(1). No-op if node is
-  // not on the list.
+  /// Removes 'node' from the queue. This is O(1). No-op if node is
+  /// not on the list.
   void Remove(T* n) {
     Node* node = (Node*)n;
     if (node->parent_queue == NULL) return;
     DCHECK(node->parent_queue == this);
     {
-      ScopedSpinLock lock(&lock_);
+      boost::lock_guard<SpinLock> lock(lock_);
       if (node->next == NULL && node->prev == NULL) {
         // Removing only node
         DCHECK(node == head_);
@@ -177,9 +180,9 @@ class InternalQueue {
     node->parent_queue = NULL;
   }
 
-  // Clears all elements in the list.
+  /// Clears all elements in the list.
   void Clear() {
-    ScopedSpinLock lock(&lock_);
+    boost::lock_guard<SpinLock> lock(lock_);
     Node* cur = head_;
     while (cur != NULL) {
       Node* tmp = cur;
@@ -194,16 +197,16 @@ class InternalQueue {
   int size() const { return size_; }
   bool empty() const { return head_ == NULL; }
 
-  // Returns if the target is on the queue. This is O(1) and intended to
-  // be used for debugging.
+  /// Returns if the target is on the queue. This is O(1) and intended to
+  /// be used for debugging.
   bool Contains(const T* target) const {
     return target->parent_queue == this;
   }
 
-  // Validates the internal structure of the list
+  /// Validates the internal structure of the list
   bool Validate() {
     int num_elements_found = 0;
-    ScopedSpinLock lock(&lock_);
+    boost::lock_guard<SpinLock> lock(lock_);
     if (head_ == NULL) {
       if (tail_ != NULL) return false;
       if (size() != 0) return false;
@@ -227,12 +230,12 @@ class InternalQueue {
     return true;
   }
 
-  // Prints the queue ptrs to a string.
+  /// Prints the queue ptrs to a string.
   std::string DebugString() {
     std::stringstream ss;
     ss << "(";
     {
-      ScopedSpinLock lock(&lock_);
+      boost::lock_guard<SpinLock> lock(lock_);
       Node* curr = head_;
       while (curr != NULL) {
         ss << (void*)curr;

@@ -28,12 +28,12 @@
 #include <thrift/Thrift.h>
 #include <transport/TSasl.h>
 #include <transport/TSaslServerTransport.h>
-#include <glog/logging.h>
 #include <gflags/gflags.h>
 
 #include <ldap.h>
 
 #include "rpc/auth-provider.h"
+#include "rpc/thrift-server.h"
 #include "transport/TSaslClientTransport.h"
 #include "util/debug-util.h"
 #include "util/error-util.h"
@@ -47,12 +47,16 @@
 #include <sys/stat.h>     // for stat system call
 #include <unistd.h>       // for stat system call
 
+#include "common/names.h"
+
+using boost::algorithm::is_any_of;
+using boost::algorithm::replace_all;
+using boost::algorithm::split;
+using boost::mt19937;
+using boost::uniform_int;
 using namespace apache::thrift;
-using namespace std;
-using namespace strings;
-using namespace boost;
-using namespace boost::random;
 using namespace boost::filesystem;   // for is_regular()
+using namespace strings;
 
 DECLARE_string(keytab_file);
 DECLARE_string(principal);
@@ -61,8 +65,7 @@ DECLARE_string(krb5_conf);
 DECLARE_string(krb5_debug_file);
 
 DEFINE_int32(kerberos_reinit_interval, 60,
-    "Interval, in minutes, between kerberos ticket renewals. Each renewal will request "
-    "a ticket with a lifetime that is at least 2x the renewal interval.");
+    "Interval, in minutes, between kerberos ticket renewals.");
 DEFINE_string(sasl_path, "/usr/lib/sasl2:/usr/lib64/sasl2:/usr/local/lib/sasl2:"
     "/usr/lib/x86_64-linux-gnu/sasl2", "Colon separated list of paths to look for SASL "
     "security library plugins.");
@@ -202,7 +205,10 @@ int SaslLdapCheckPass(sasl_conn_t* conn, void* context, const char* user,
   int ldap_ver = 3;
   ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &ldap_ver);
 
-  if (FLAGS_ldap_tls) {
+  // If -ldap_tls is turned on, and the URI is ldap://, issue a STARTTLS operation.
+  // Note that we'll ignore -ldap_tls when using ldaps:// because we've already
+  // got a secure connection (and the LDAP server will reject the STARTTLS).
+  if (FLAGS_ldap_tls && (FLAGS_ldap_uri.find(LDAP_URI_PREFIX) == 0)) {
     int tls_rc = ldap_start_tls_s(ld, NULL, NULL);
     if (tls_rc != LDAP_SUCCESS) {
       LOG(WARNING) << "Could not start TLS secure connection to LDAP server ("
@@ -431,21 +437,12 @@ static int SaslGetPath(void* context, const char** path) {
 //              the parent thread
 // Return: Only if the first call to 'kinit' fails
 void SaslAuthProvider::RunKinit(Promise<Status>* first_kinit) {
-  // Minumum lifetime to request for each ticket renewal.
-  static const int MIN_TICKET_LIFETIME_IN_MINS = 1440;
-
-  // Set the ticket lifetime to an arbitrarily large value or 2x the renewal interval,
-  // whichever is larger. The KDC will automatically fall back to using the maximum
-  // allowed allowed value if a longer lifetime is requested, so it is okay to be greedy
-  // here.
-  int ticket_lifetime_mins =
-      max(MIN_TICKET_LIFETIME_IN_MINS, FLAGS_kerberos_reinit_interval * 2);
 
   // Pass the path to the key file and the principal. Make the ticket renewable.
   // Calling kinit -R ensures the ticket makes it to the cache, and should be a separate
   // call to kinit.
-  const string kinit_cmd = Substitute("kinit -r $0m -k -t $1 $2 2>&1",
-      ticket_lifetime_mins, keytab_file_, principal_);
+  const string kinit_cmd = Substitute("kinit -k -t $0 $1 2>&1",
+      keytab_file_, principal_);
 
   bool first_time = true;
   int failures_since_renewal = 0;
@@ -469,7 +466,7 @@ void SaslAuthProvider::RunKinit(Promise<Status>* first_kinit) {
     if (success) {
       if (first_time) {
         first_time = false;
-        first_kinit->Set(Status::OK);
+        first_kinit->Set(Status::OK());
       }
       failures_since_renewal = 0;
       // Workaround for Kerberos 1.8.1 - wait a short time, before requesting a renewal of
@@ -591,7 +588,7 @@ Status InitAuth(const string& appname) {
   }
 
   RETURN_IF_ERROR(AuthManager::GetInstance()->Init());
-  return Status::OK;
+  return Status::OK();
 }
 
 // Ensure that /var/tmp (the location of the Kerberos replay cache) has drwxrwxrwt
@@ -615,11 +612,19 @@ Status CheckReplayCacheDirPermissions() {
         "rectify this issue, run \"chmod 01777 /var/tmp\" as root.");
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SaslAuthProvider::InitKerberos(const string& principal,
     const string& keytab_file) {
+
+  // Disallow starting Impala with Kerberos and server<->server SSL both enabled at the
+  // same time, which is known to cause hangs (IMPALA-2598).
+  // TODO: Remove when IMPALA-2598 is fixed.
+  if (is_internal_ && EnableInternalSslConnections()) {
+    return Status(TErrorCode::IMPALA_2598_KERBEROS_SSL_DISALLOWED);
+  }
+
   principal_ = principal;
   keytab_file_ = keytab_file;
   // The logic here is that needs_kinit_ is false unless we are the internal
@@ -653,7 +658,7 @@ Status SaslAuthProvider::InitKerberos(const string& principal,
             << " kerberos principal \"" << service_name_ << "/"
             << hostname_ << "@" << realm_ << "\"";
 
-  return Status::OK;
+  return Status::OK();
 }
 
 // For the environment variable attr, append "-Dthing=thingval" if "thing" is not already
@@ -671,7 +676,7 @@ static Status EnvAppend(const string& attr, const string& thing, const string& t
 
   if (!current_val.empty() && (current_val.find(thing) != string::npos)) {
     // Case 3 above
-    return Status::OK;
+    return Status::OK();
   }
 
   stringstream val_out;
@@ -686,14 +691,14 @@ static Status EnvAppend(const string& attr, const string& thing, const string& t
         thing, thingval, attr, GetStrErrMsg()));
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SaslAuthProvider::InitKerberosEnv() {
   DCHECK(!principal_.empty());
 
   // Called only during setup; no locking required.
-  if (env_setup_complete_) return Status::OK;
+  if (env_setup_complete_) return Status::OK();
 
   if (!is_regular(keytab_file_)) {
     return Status(Substitute("Bad --keytab_file value: The file $0 is not a "
@@ -756,7 +761,7 @@ Status SaslAuthProvider::InitKerberosEnv() {
   }
 
   env_setup_complete_ = true;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SaslAuthProvider::Start() {
@@ -800,7 +805,7 @@ Status SaslAuthProvider::Start() {
     }
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SaslAuthProvider::GetServerTransportFactory(
@@ -838,7 +843,7 @@ Status SaslAuthProvider::GetServerTransportFactory(
            << (!principal_.empty() ? "Kerberos " : " ")
            << (has_ldap_ ? "LDAP " : " ") << "authentication";
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SaslAuthProvider::WrapClientTransport(const string& hostname,
@@ -869,13 +874,13 @@ Status SaslAuthProvider::WrapClientTransport(const string& hostname,
   // that we successfully authenticated as a client.
   VLOG_RPC << "Initiating client connection using principal " << principal_;
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status NoAuthProvider::GetServerTransportFactory(shared_ptr<TTransportFactory>* factory) {
-  // No Sasl - yawn.  Here, have a regular old transport.
+  // No Sasl - yawn.  Here, have a regular old buffered transport.
   factory->reset(new TBufferedTransportFactory());
-  return Status::OK;
+  return Status::OK();
 }
 
 Status NoAuthProvider::WrapClientTransport(const string& hostname,
@@ -883,7 +888,7 @@ Status NoAuthProvider::WrapClientTransport(const string& hostname,
     shared_ptr<TTransport>* wrapped_transport) {
   // No Sasl - yawn.  Don't do any transport wrapping for clients.
   *wrapped_transport = raw_transport;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status AuthManager::Init() {
@@ -1012,7 +1017,7 @@ Status AuthManager::Init() {
   }
   RETURN_IF_ERROR(external_auth_provider_->Start());
 
-  return Status::OK;
+  return Status::OK();
 }
 
 AuthProvider* AuthManager::GetExternalAuthProvider() {

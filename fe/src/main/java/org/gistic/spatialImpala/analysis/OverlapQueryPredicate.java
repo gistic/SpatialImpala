@@ -12,6 +12,7 @@ import com.cloudera.impala.catalog.HdfsTable;
 import com.cloudera.impala.authorization.Privilege;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.analysis.Analyzer;
+import com.cloudera.impala.analysis.Path;
 import com.cloudera.impala.analysis.StatementBase;
 import com.cloudera.impala.analysis.SelectStmt;
 import com.cloudera.impala.analysis.SelectListItem;
@@ -119,8 +120,8 @@ public class OverlapQueryPredicate extends Predicate {
       spatialTable1 = (SpatialHdfsTable) ((SlotRef)children_.get(0)).getDesc().getParent().getTable();
       spatialTable2 = (SpatialHdfsTable) ((SlotRef)children_.get(1)).getDesc().getParent().getTable();
     } 
-    SlotRef leftSlotRef = new SlotRef(((SlotRef)children_.get(0)).getTableName(), "tag");
-    SlotRef rightSlotRef = new SlotRef(((SlotRef)children_.get(1)).getTableName(), "tag");
+    SlotRef leftSlotRef = new SlotRef(Path.createRawPath(((SlotRef)children_.get(0)).getTableName().toString(), "tag"));
+    SlotRef rightSlotRef = new SlotRef(Path.createRawPath(((SlotRef)children_.get(1)).getTableName().toString(), "tag"));
     
     leftSlotRef.analyze(analyzer);
     rightSlotRef.analyze(analyzer);

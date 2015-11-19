@@ -35,7 +35,10 @@
     <hive.version>${env.IMPALA_HIVE_VERSION}</hive.version>
     <sentry.version>${env.IMPALA_SENTRY_VERSION}</sentry.version>
     <hbase.version>${env.IMPALA_HBASE_VERSION}</hbase.version>
+    <parquet.version>${env.IMPALA_PARQUET_VERSION}</parquet.version>
     <impala.extdatasrc.api.version>1.0-SNAPSHOT</impala.extdatasrc.api.version>
+    <!-- Impala does not currently support the Hive .13 JDBC driver -->
+    <hive-jdbc.version>0.13.1-cdh5.2.0-SNAPSHOT</hive-jdbc.version>
   </properties>
 
   <dependencies>
@@ -63,79 +66,130 @@
     </dependency>
 
     <dependency>
-      <groupId>com.cloudera.impala</groupId>
-      <artifactId>cdh4-extras</artifactId>
-      <version>${version}</version>
-      <scope>system</scope>
-      <systemPath>${env.IMPALA_HOME}/thirdparty/cdh4-extras/target/cdh4-extras-${version}.jar</systemPath>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-aws</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-mapreduce-client-core</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-yarn-api</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-yarn-server-resourcemanager</artifactId>
+      <version>${hadoop.version}</version>
     </dependency>
 
     <dependency>
       <groupId>org.apache.sentry</groupId>
-      <artifactId>sentry-core</artifactId>
+      <artifactId>sentry-core-common</artifactId>
       <version>${sentry.version}</version>
-      <scope>system</scope>
-      <systemPath>${env.IMPALA_HOME}/thirdparty/sentry-${sentry.version}-SNAPSHOT/lib/sentry-core-${sentry.version}.jar</systemPath>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.sentry</groupId>
+      <artifactId>sentry-core-model-db</artifactId>
+      <version>${sentry.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.sentry</groupId>
+      <artifactId>sentry-provider-common</artifactId>
+      <version>${sentry.version}</version>
     </dependency>
 
     <dependency>
       <groupId>org.apache.sentry</groupId>
       <artifactId>sentry-provider-file</artifactId>
       <version>${sentry.version}</version>
-      <scope>system</scope>
-      <systemPath>${env.IMPALA_HOME}/thirdparty/sentry-${sentry.version}-SNAPSHOT/lib/sentry-provider-file-${sentry.version}.jar</systemPath>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.sentry</groupId>
+      <artifactId>sentry-provider-cache</artifactId>
+      <version>${sentry.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.sentry</groupId>
+      <artifactId>sentry-policy-common</artifactId>
+      <version>${sentry.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.sentry</groupId>
+      <artifactId>sentry-policy-db</artifactId>
+      <version>${sentry.version}</version>
     </dependency>
 
     <dependency>
       <groupId>org.apache.sentry</groupId>
       <artifactId>sentry-binding-hive</artifactId>
       <version>${sentry.version}</version>
-      <scope>system</scope>
-      <systemPath>${env.IMPALA_HOME}/thirdparty/sentry-${sentry.version}-SNAPSHOT/lib/sentry-binding-hive-${sentry.version}.jar</systemPath>
+      <exclusions>
+        <exclusion>
+          <groupId>org.apache.sentry</groupId>
+          <artifactId>sentry-provider-db</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
-      <groupId>parquet</groupId>
-      <artifactId>parquet-hive</artifactId>
-      <version>${env.IMPALA_PARQUET_VERSION}</version>
-      <scope>system</scope>
-      <systemPath>${env.IMPALA_HOME}/thirdparty/hive-${hive.version}/lib/parquet-hive-${env.IMPALA_PARQUET_VERSION}-cdh4.5.0.jar</systemPath>
-    </dependency>
-
-    <dependency>
-      <groupId>com.twitter</groupId>
-      <artifactId>parquet-format</artifactId>
-      <version>${env.IMPALA_PARQUET_FORMAT_VERSION}</version>
-    </dependency>
-
-    <dependency>
-      <groupId>com.twitter</groupId>
-      <artifactId>parquet-hadoop</artifactId>
-      <version>${env.IMPALA_PARQUET_HADOOP_VERSION}</version>
+      <groupId>org.apache.sentry</groupId>
+      <artifactId>sentry-provider-db</artifactId>
+      <version>${sentry.version}</version>
+      <classifier>sh</classifier>
     </dependency>
 
     <dependency>
       <groupId>com.twitter</groupId>
-      <artifactId>parquet-common</artifactId>
-      <version>${env.IMPALA_PARQUET_HADOOP_VERSION}</version>
+      <artifactId>parquet-hadoop-bundle</artifactId>
+      <version>${parquet.version}</version>
     </dependency>
 
     <dependency>
-      <groupId>com.twitter</groupId>
-      <artifactId>parquet-encoding</artifactId>
-      <version>${env.IMPALA_PARQUET_HADOOP_VERSION}</version>
+      <groupId>org.apache.hbase</groupId>
+      <artifactId>hbase-client</artifactId>
+      <version>${hbase.version}</version>
     </dependency>
 
     <dependency>
-      <groupId>com.twitter</groupId>
-      <artifactId>parquet-thrift</artifactId>
-      <version>${env.IMPALA_PARQUET_HADOOP_VERSION}</version>
+      <groupId>org.apache.hbase</groupId>
+      <artifactId>hbase-common</artifactId>
+      <version>${hbase.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.hbase</groupId>
+      <artifactId>hbase-protocol</artifactId>
+      <version>${hbase.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.cloudera.htrace</groupId>
+      <artifactId>htrace-core</artifactId>
+      <version>2.00</version>
     </dependency>
 
     <dependency>
       <groupId>org.apache.shiro</groupId>
       <artifactId>shiro-core</artifactId>
       <version>1.2.1</version>
+    </dependency>
+
+    <dependency>
+      <groupId>commons-lang</groupId>
+      <artifactId>commons-lang</artifactId>
+      <version>2.6</version>
     </dependency>
 
     <dependency>
@@ -150,12 +204,34 @@
     <dependency>
       <groupId>org.apache.thrift</groupId>
       <artifactId>libthrift</artifactId>
-      <version>${env.IMPALA_THRIFT_VERSION}</version>
+      <version>${env.IMPALA_THRIFT_JAVA_VERSION}</version>
+      <!-- libthrift depends httpcore 4.1.3 which does not work with KMS. To workaround
+           this problem the dependency is excluded here and we explicitly add a newer
+           httpcore dependency version. See CDH-22024. TODO: Find a better fix. -->
+      <exclusions>
+        <exclusion>
+          <groupId>org.apache.httpcomponents</groupId>
+          <artifactId>httpcore</artifactId>
+      </exclusion>
+    </exclusions>
     </dependency>
+
+    <dependency>
+      <groupId>org.apache.httpcomponents</groupId>
+      <artifactId>httpcore</artifactId>
+      <version>4.2.5</version>
+    </dependency>
+
     <dependency>
       <groupId>org.apache.thrift</groupId>
       <artifactId>libfb303</artifactId>
-      <version>${env.IMPALA_THRIFT_VERSION}</version>
+      <version>${env.IMPALA_THRIFT_JAVA_VERSION}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.derby</groupId>
+      <artifactId>derby</artifactId>
+      <version>10.4.2.0</version>
     </dependency>
 
     <dependency>
@@ -163,17 +239,16 @@
       <artifactId>hive-hbase-handler</artifactId>
       <version>${hive.version}</version>
     </dependency>
-
     <dependency>
-      <groupId>org.apache.hbase</groupId>
-      <artifactId>hbase</artifactId>
-      <version>${hbase.version}</version>
+      <groupId>org.apache.hive</groupId>
+      <artifactId>hive-service</artifactId>
+      <version>${hive.version}</version>
     </dependency>
-
     <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-mapreduce-client-core</artifactId>
-      <version>${hadoop.version}</version>
+      <groupId>org.apache.hive</groupId>
+      <artifactId>hive-jdbc</artifactId>
+      <version>${hive-jdbc.version}</version>
+      <scope>test</scope>
     </dependency>
 
     <dependency>
@@ -198,12 +273,7 @@
     </dependency>
     <dependency>
       <groupId>org.apache.hive</groupId>
-      <artifactId>hive-service</artifactId>
-      <version>${hive.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.hive</groupId>
-      <artifactId>hive-jdbc</artifactId>
+      <artifactId>hive-exec</artifactId>
       <version>${hive.version}</version>
     </dependency>
 
@@ -214,9 +284,19 @@
       <version>9.0-801.jdbc4</version>
     </dependency>
     <dependency>
-      <groupId>org.apache.derby</groupId>
-      <artifactId>derby</artifactId>
-      <version>10.4.2.0</version>
+      <groupId>commons-dbcp</groupId>
+      <artifactId>commons-dbcp</artifactId>
+      <version>1.4</version>
+    </dependency>
+    <dependency>
+      <groupId>javax.jdo</groupId>
+      <artifactId>jdo-api</artifactId>
+      <version>3.0.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.antlr</groupId>
+      <artifactId>antlr-runtime</artifactId>
+      <version>3.3</version>
     </dependency>
 
     <dependency>
@@ -226,14 +306,20 @@
     </dependency>
 
     <dependency>
+      <groupId>commons-codec</groupId>
+      <artifactId>commons-codec</artifactId>
+      <version>1.9</version>
+    </dependency>
+
+    <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
-      <version>1.6.1</version>
+      <version>1.7.5</version>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-log4j12</artifactId>
-      <version>1.6.1</version>
+      <version>1.7.5</version>
     </dependency>
 
     <dependency>
@@ -245,8 +331,19 @@
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
-      <version>4.8.2</version>
+      <version>4.12</version>
       <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>com.googlecode.json-simple</groupId>
+      <artifactId>json-simple</artifactId>
+      <version>1.1.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.glassfish</groupId>
+      <artifactId>javax.json</artifactId>
+      <version>1.0.2</version>
     </dependency>
   </dependencies>
 
@@ -265,10 +362,10 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>2.3.2</version>
+        <version>3.3</version>
         <configuration>
-          <source>1.6</source>
-          <target>1.6</target>
+          <source>1.7</source>
+          <target>1.7</target>
         </configuration>
       </plugin>
 
@@ -324,30 +421,10 @@
         </executions>
       </plugin>
 
-<!-- PDH - I don't think we need this right now, regardless there's a better way (ie not part of dev workflow) -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-assembly-plugin</artifactId>
-        <configuration>
-          <descriptorRefs>
-            <descriptorRef>jar-with-dependencies</descriptorRef>
-          </descriptorRefs>
-        </configuration>
-        <executions>
-          <execution>
-            <id>make-assembly</id>
-            <phase>package</phase>
-            <goals>
-              <goal>single</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-dependency-plugin</artifactId>
-        <version>2.3</version>
+        <version>2.10</version>
         <executions>
           <execution>
             <id>copy-dependencies</id>
@@ -357,6 +434,8 @@
             </goals>
             <configuration>
               <excludeTypes>pom</excludeTypes>
+              <includeScope>runtime</includeScope>
+              <silent>true</silent>
             </configuration>
           </execution>
         </executions>
@@ -365,7 +444,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>2.12</version>
+        <version>2.18</version>
         <configuration>
           <redirectTestOutputToFile>true</redirectTestOutputToFile>
           <argLine>-Djava.library.path=${java.library.path}:${backend.library.path}</argLine>
@@ -507,6 +586,18 @@
   </build>
 
   <repositories>
+    <repository>
+       <id>apache.snapshots</id>
+       <name>Apache Development Snapshot Repository</name>
+        <url>https://repository.apache.org/content/repositories/snapshots/</url>
+        <releases>
+            <enabled>false</enabled>
+        </releases>
+        <snapshots>
+            <enabled>true</enabled>
+        </snapshots>
+    </repository>
+
     <repository>
       <id>cdh.rcs.releases.repo</id>
       <url>https://repository.cloudera.com/content/groups/cdh-releases-rcs</url>

@@ -20,6 +20,9 @@ include "Types.thrift"
 include "Status.thrift"
 include "TCLIService.thrift"
 
+// This is a short value due to the HDFS API limits
+const i16 HDFS_DEFAULT_CACHE_REPLICATION_FACTOR = 1
+
 // Structs used to execute DDL operations using the JniCatalog.
 
 enum TDdlType {
@@ -45,6 +48,7 @@ enum TDdlType {
   REVOKE_ROLE,
   GRANT_PRIVILEGE,
   REVOKE_PRIVILEGE,
+  TRUNCATE_TABLE,
 }
 
 // Types of ALTER TABLE commands supported.
@@ -62,6 +66,7 @@ enum TAlterTableType {
   // Used internally by the COMPUTE STATS DDL command.
   UPDATE_STATS,
   SET_CACHED,
+  RECOVER_PARTITIONS,
 }
 
 // Parameters of CREATE DATABASE commands
@@ -102,6 +107,11 @@ struct TDropDataSourceParams {
 struct TDropStatsParams {
   // Fully qualified name of the target table
   1: required CatalogObjects.TTableName table_name
+
+  // If set, delete the stats only for a particular partition, but do not recompute the
+  // stats for the whole table. This is set only for
+  // DROP INCREMENTAL STATS <table> PARTITION(...)
+  2: optional list<CatalogObjects.TPartitionKeyValue> partition_spec
 }
 
 // Parameters of CREATE FUNCTION commands
@@ -135,6 +145,11 @@ struct THdfsCachingOp {
 
   // Set only if set_cached=true. Provides the name of the pool to use when caching.
   2: optional string cache_pool_name
+
+  // The optional cache replication factor to use. If the replication factor is not
+  // specified it's either inherited from the table if the underlying object is a
+  // partition or is set to our default HDFS cache replication factor.
+  3: optional i16 replication
 }
 
 // Parameters for ALTER TABLE rename commands
@@ -181,6 +196,9 @@ struct TAlterTableDropPartitionParams {
 
   // If true, no error is raised if no partition with the specified spec exists.
   2: required bool if_exists
+
+  // If true, underlying data is purged using -skipTrash
+  3: required bool purge
 }
 
 // Parameters for ALTER TABLE CHANGE COLUMN commands
@@ -235,10 +253,17 @@ struct TAlterTableUpdateStatsParams {
 
   // Partition-level stats. Maps from a list of partition-key values
   // to its partition stats.
-  3: optional map<list<string>, CatalogObjects.TTableStats> partition_stats
+  3: optional map<list<string>, CatalogObjects.TPartitionStats> partition_stats
 
   // Column-level stats. Maps from column name to column stats.
   4: optional map<string, CatalogObjects.TColumnStats> column_stats
+
+  // If true, the computation should produce results for all partitions (partitions with
+  // no results from the stats queries will be given an empty entry)
+  5: optional bool expect_all_partitions
+
+  // If true, this is the result of an incremental stats computation
+  6: optional bool is_incremental
 }
 
 // Parameters for ALTER TABLE SET [PARTITION partitionSpec] CACHED|UNCACHED
@@ -395,11 +420,34 @@ struct TComputeStatsParams {
   1: required CatalogObjects.TTableName table_name
 
   // Query for gathering per-partition row count.
-  2: required string tbl_stats_query
+  // Not set if this is an incremental computation and no partitions are selected.
+  2: optional string tbl_stats_query
 
   // Query for gathering per-column NDVs and number of NULLs.
-  // Not set if there are no columns we can compute stats for.
+  // Not set if there are no columns we can compute stats for, or if this is an
+  // incremental computation and no partitions are selected
   3: optional string col_stats_query
+
+  // If true, stats will be gathered incrementally (i.e. only for partitions that have no
+  // valid statistics). Ignore for non-partitioned tables.
+  4: optional bool is_incremental
+
+  // The intermediate state for all partitions that have valid stats. Only set if
+  // is_incremental is true.
+  5: optional list<CatalogObjects.TPartitionStats> existing_part_stats
+
+  // List of partitions that we expect to see results for when performing an incremental
+  // computation. Only set if is_incremental is true. Used to ensure that even empty
+  // partitions emit results.
+  6: optional list<list<string>> expected_partitions
+
+  // If true, all partitions are expected, to avoid sending every partition in
+  // expected_partitions.
+  7: optional bool expect_all_partitions
+
+  // The number of partition columns for the target table. Only set if this is_incremental
+  // is true.
+  8: optional i32 num_partition_cols
 }
 
 // Parameters for CREATE/DROP ROLE
@@ -425,7 +473,8 @@ struct TGrantRevokeRoleParams {
 
 // Parameters for GRANT/REVOKE privilege TO/FROM role.
 struct TGrantRevokePrivParams {
-  // List of privileges being granted or revoked.
+  // List of privileges being granted or revoked. The 'has_grant_opt' for each
+  // TPrivilege is inherited from the 'has_grant_opt' of this object.
   1: required list<CatalogObjects.TPrivilege> privileges
 
   // The role name this change should apply to.
@@ -433,6 +482,9 @@ struct TGrantRevokePrivParams {
 
   // True if this is a GRANT statement false if this is a REVOKE statement.
   3: required bool is_grant
+
+  // True if WITH GRANT OPTION is set.
+  4: required bool has_grant_opt
 }
 
 // Parameters of DROP DATABASE commands
@@ -442,6 +494,9 @@ struct TDropDbParams {
 
   // If true, no error is raised if the target db does not exist
   2: required bool if_exists
+
+  // If true, drops all tables of the database
+  3: required bool cascade
 }
 
 // Parameters of DROP TABLE/VIEW commands
@@ -451,6 +506,15 @@ struct TDropTableOrViewParams {
 
   // If true, no error is raised if the target table/view does not exist
   2: required bool if_exists
+
+  // If true, underlying data is purged using -skipTrash
+  3: required bool purge
+}
+
+// Parameters of TRUNCATE commands
+struct TTruncateParams {
+  // Fully qualified name of table to truncate
+  1: required CatalogObjects.TTableName table_name
 }
 
 // Parameters of DROP FUNCTION commands
@@ -459,7 +523,7 @@ struct TDropFunctionParams {
   1: required Types.TFunctionName fn_name
 
   // The types of the arguments to the function
-  2: required list<Types.TColumnType> arg_types;
+  2: required list<Types.TColumnType> arg_types
 
   // If true, no error is raised if the target fn does not exist
   3: required bool if_exists

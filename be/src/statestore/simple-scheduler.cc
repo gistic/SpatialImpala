@@ -39,15 +39,16 @@
 #include "util/debug-util.h"
 #include "util/error-util.h"
 #include "util/llama-util.h"
+#include "util/mem-info.h"
 #include "util/parse-util.h"
 #include "gen-cpp/ResourceBrokerService_types.h"
 
-using namespace std;
-using namespace boost;
-using namespace boost::algorithm;
+#include "common/names.h"
+
+using boost::algorithm::join;
 using namespace apache::thrift;
-using namespace strings;
 using namespace rapidjson;
+using namespace strings;
 
 DECLARE_int32(be_port);
 DECLARE_string(hostname);
@@ -55,9 +56,8 @@ DECLARE_bool(enable_rm);
 DECLARE_int32(rm_default_cpu_vcores);
 DECLARE_string(rm_default_memory);
 
-// Admission control is disabled by default (CDH4 only) due to HUE-994, Hue doesn't
-// close queries (fixed in CDH5). Default is false on CDH5.
 DEFINE_bool(disable_admission_control, true, "Disables admission control.");
+
 DEFINE_bool(require_username, false, "Requires that a user be provided in order to "
     "schedule requests. If enabled and a user is not provided, requests will be "
     "rejected, otherwise requests without a username will be submitted with the "
@@ -85,9 +85,9 @@ static const string ERROR_USER_NOT_SPECIFIED("User must be specified because "
 
 SimpleScheduler::SimpleScheduler(StatestoreSubscriber* subscriber,
     const string& backend_id, const TNetworkAddress& backend_address,
-    Metrics* metrics, Webserver* webserver, ResourceBroker* resource_broker,
+    MetricGroup* metrics, Webserver* webserver, ResourceBroker* resource_broker,
     RequestPoolService* request_pool_service)
-  : metrics_(metrics),
+  : metrics_(metrics->GetChildGroup("scheduler")),
     webserver_(webserver),
     statestore_subscriber_(subscriber),
     backend_id_(backend_id),
@@ -114,7 +114,7 @@ SimpleScheduler::SimpleScheduler(StatestoreSubscriber* subscriber,
     }
     bool is_percent;
     int64_t mem_bytes =
-        ParseUtil::ParseMemSpec(FLAGS_rm_default_memory, &is_percent);
+        ParseUtil::ParseMemSpec(FLAGS_rm_default_memory, &is_percent, MemInfo::physical_mem());
     if (mem_bytes <= 1024 * 1024) {
       LOG(ERROR) << "Bad value for --rm_default_memory (must be larger than 1M):"
                  << FLAGS_rm_default_memory;
@@ -128,7 +128,7 @@ SimpleScheduler::SimpleScheduler(StatestoreSubscriber* subscriber,
 }
 
 SimpleScheduler::SimpleScheduler(const vector<TNetworkAddress>& backends,
-    Metrics* metrics, Webserver* webserver, ResourceBroker* resource_broker,
+    MetricGroup* metrics, Webserver* webserver, ResourceBroker* resource_broker,
     RequestPoolService* request_pool_service)
   : metrics_(metrics),
     webserver_(webserver),
@@ -153,7 +153,7 @@ SimpleScheduler::SimpleScheduler(const vector<TNetworkAddress>& backends,
     Status status = HostnameToIpAddrs(backends[i].hostname, &ipaddrs);
     if (!status.ok()) {
       VLOG(1) << "Failed to resolve " << backends[i].hostname << ": "
-              << status.GetErrorMsg();
+              << status.GetDetail();
       continue;
     }
 
@@ -193,7 +193,7 @@ Status SimpleScheduler::Init() {
         bind<void>(mem_fn(&SimpleScheduler::UpdateMembership), this, _1, _2);
     Status status = statestore_subscriber_->AddTopic(IMPALA_MEMBERSHIP_TOPIC, true, cb);
     if (!status.ok()) {
-      status.AddErrorMsg("SimpleScheduler failed to register membership topic");
+      status.AddDetail("SimpleScheduler failed to register membership topic");
       return status;
     }
     if (!FLAGS_disable_admission_control) {
@@ -201,13 +201,10 @@ Status SimpleScheduler::Init() {
     }
   }
   if (metrics_ != NULL) {
-    total_assignments_ =
-        metrics_->CreateAndRegisterPrimitiveMetric(ASSIGNMENTS_KEY, 0L);
-    total_local_assignments_ =
-        metrics_->CreateAndRegisterPrimitiveMetric(LOCAL_ASSIGNMENTS_KEY, 0L);
-    initialised_ =
-        metrics_->CreateAndRegisterPrimitiveMetric(SCHEDULER_INIT_KEY, true);
-    num_backends_metric_ = metrics_->CreateAndRegisterPrimitiveMetric<int64_t>(
+    total_assignments_ = metrics_->AddCounter(ASSIGNMENTS_KEY, 0L);
+    total_local_assignments_ = metrics_->AddCounter(LOCAL_ASSIGNMENTS_KEY, 0L);
+    initialised_ = metrics_->AddProperty(SCHEDULER_INIT_KEY, true);
+    num_backends_metric_ = metrics_->AddGauge<int64_t>(
         NUM_BACKENDS_KEY, backend_map_.size());
   }
 
@@ -218,8 +215,8 @@ Status SimpleScheduler::Init() {
     const string& hostname = backend_descriptor_.address.hostname;
     Status status = HostnameToIpAddrs(hostname, &ipaddrs);
     if (!status.ok()) {
-      VLOG(1) << "Failed to resolve " << hostname << ": " << status.GetErrorMsg();
-      status.AddErrorMsg("SimpleScheduler failed to start");
+      VLOG(1) << "Failed to resolve " << hostname << ": " << status.GetDetail();
+      status.AddDetail("SimpleScheduler failed to start");
       return status;
     }
     // Find a non-localhost address for this host; if one can't be
@@ -243,7 +240,7 @@ Status SimpleScheduler::Init() {
       backend_descriptor_.__set_secure_webserver(webserver_->IsSecure());
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 // Utility method to help sort backends by ascending network address
@@ -263,7 +260,6 @@ void SimpleScheduler::BackendsUrlCallback(const Webserver::ArgumentMap& args,
   }
 
   document->AddMember("backends", backends_list, document->GetAllocator());
-  document->AddMember("num_backends", backends.size(), document->GetAllocator());
 }
 
 void SimpleScheduler::UpdateMembership(
@@ -350,7 +346,7 @@ void SimpleScheduler::UpdateMembership(
       Status status = thrift_serializer_.Serialize(&backend_descriptor_, &item.value);
       if (!status.ok()) {
         LOG(WARNING) << "Failed to serialize Impala backend address for statestore topic: "
-                     << status.GetErrorMsg();
+                     << status.GetDetail();
         subscriber_topic_updates->pop_back();
       }
     } else if (is_offline &&
@@ -361,7 +357,7 @@ void SimpleScheduler::UpdateMembership(
       update.topic_name = IMPALA_MEMBERSHIP_TOPIC;
       update.topic_deletions.push_back(backend_id_);
     }
-    if (metrics_ != NULL) num_backends_metric_->Update(current_membership_.size());
+    if (metrics_ != NULL) num_backends_metric_->set_value(current_membership_.size());
   }
 }
 
@@ -374,7 +370,7 @@ Status SimpleScheduler::GetBackends(
     backendports->push_back(backend);
   }
   DCHECK_EQ(data_locations.size(), backendports->size());
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SimpleScheduler::GetBackend(const TNetworkAddress& data_location,
@@ -427,7 +423,7 @@ Status SimpleScheduler::GetBackend(const TNetworkAddress& data_location,
     s << " -> " << backend->address << ")";
     VLOG_FILE << "SimpleScheduler assignment (data->backend):  " << s.str();
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void SimpleScheduler::GetAllKnownBackends(BackendList* backends) {
@@ -455,7 +451,7 @@ Status SimpleScheduler::ComputeScanRangeAssignment(const TQueryExecRequest& exec
         schedule->query_options(), assignment));
     schedule->AddScanRanges(entry->second.size());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SimpleScheduler::ComputeScanRangeAssignment(
@@ -486,34 +482,48 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
     const TNetworkAddress* data_host = NULL;  // data server; not necessarily backend
     int volume_id = -1;
     bool is_cached = false;
-    BOOST_FOREACH(const TScanRangeLocation& location, scan_range_locations.locations) {
-      DCHECK_LT(location.host_idx, host_list.size());
-      const TNetworkAddress& replica_host = host_list[location.host_idx];
-      // Deprioritize non-collocated datanodes by assigning a very high initial bytes
-      uint64_t initial_bytes =
-          !HasLocalBackend(replica_host) ? numeric_limits<int64_t>::max() : 0L;
-      uint64_t* assigned_bytes =
-          FindOrInsert(&assigned_bytes_per_host, replica_host, initial_bytes);
 
-      // Adjust whether or not this replica should count as being cached based on
-      // the query option and whether it is collocated. If the DN is not collocated
-      // treat the replica as not cached (network transfer dominates anyway in this
-      // case).
-      // TODO: measure this in a cluster setup. Are remote reads better with caching?
-      bool is_replica_cached = location.is_cached && schedule_with_caching;
-      if (initial_bytes != 0) is_replica_cached = false;
-
-      // We've found a cached replica and this one is not, skip this replica.
-      if (is_cached && !is_replica_cached) continue;
-
-      // Update the assignment if this is the first cached replica or if this is
-      // a less busy host.
-      if ((is_replica_cached && !is_cached) || *assigned_bytes < min_assigned_bytes) {
-        min_assigned_bytes = *assigned_bytes;
-        data_host = &replica_host;
-        volume_id = location.volume_id;
-        is_cached = is_replica_cached;
+    // Separate cached replicas from non-cached replicas
+    vector<const TScanRangeLocation*> cached_locations;
+    if (schedule_with_caching) {
+      BOOST_FOREACH(const TScanRangeLocation& location, scan_range_locations.locations) {
+        // Adjust whether or not this replica should count as being cached based on
+        // the query option and whether it is collocated. If the DN is not collocated
+        // treat the replica as not cached (network transfer dominates anyway in this
+        // case).
+        // TODO: measure this in a cluster setup. Are remote reads better with caching?
+        if (location.is_cached && HasLocalBackend(host_list[location.host_idx])) {
+          cached_locations.push_back(&location);
+        }
       }
+    }
+    // If no replicas are cached find the ones based on assigned bytes
+    if (cached_locations.size() == 0) {
+      BOOST_FOREACH(const TScanRangeLocation& location, scan_range_locations.locations) {
+        DCHECK_LT(location.host_idx, host_list.size());
+        const TNetworkAddress& replica_host = host_list[location.host_idx];
+        // Deprioritize non-collocated datanodes by assigning a very high initial bytes
+        uint64_t initial_bytes =
+            HasLocalBackend(replica_host) ? 0L : numeric_limits<int64_t>::max();
+        uint64_t* assigned_bytes =
+            FindOrInsert(&assigned_bytes_per_host, replica_host, initial_bytes);
+        // Update the assignment if this is a less busy host.
+        if (*assigned_bytes < min_assigned_bytes) {
+          min_assigned_bytes = *assigned_bytes;
+          data_host = &replica_host;
+          volume_id = location.volume_id;
+          is_cached = false;
+        }
+      }
+    } else {
+      // Randomly pick a cached host based on the extracted list of cached local hosts
+      size_t rand_host = rand() % cached_locations.size();
+      const TNetworkAddress& replica_host = host_list[cached_locations[rand_host]->host_idx];
+      uint64_t initial_bytes = 0L;
+      min_assigned_bytes = *FindOrInsert(&assigned_bytes_per_host, replica_host, initial_bytes);
+      data_host = &replica_host;
+      volume_id = cached_locations[rand_host]->volume_id;
+      is_cached = true;
     }
 
     int64_t scan_range_length = 0;
@@ -552,16 +562,17 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
     // Explicitly set the optional fields.
     scan_range_params.__set_volume_id(volume_id);
     scan_range_params.__set_is_cached(is_cached);
+    scan_range_params.__set_is_remote(remote_read);
     scan_range_params_list->push_back(scan_range_params);
   }
 
   if (VLOG_FILE_IS_ON) {
     VLOG_FILE << "Total remote scan volume = " <<
-        PrettyPrinter::Print(remote_bytes, TCounterType::BYTES);
+        PrettyPrinter::Print(remote_bytes, TUnit::BYTES);
     VLOG_FILE << "Total local scan volume = " <<
-        PrettyPrinter::Print(local_bytes, TCounterType::BYTES);
+        PrettyPrinter::Print(local_bytes, TUnit::BYTES);
     VLOG_FILE << "Total cached scan volume = " <<
-        PrettyPrinter::Print(cached_bytes, TCounterType::BYTES);
+        PrettyPrinter::Print(cached_bytes, TUnit::BYTES);
     if (remote_hosts.size() > 0) {
       stringstream remote_node_log;
       remote_node_log << "Remote data node list: ";
@@ -582,7 +593,7 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
     }
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void SimpleScheduler::ComputeFragmentExecParams(const TQueryExecRequest& exec_request,
@@ -655,7 +666,6 @@ void SimpleScheduler::ComputeFragmentHosts(const TQueryExecRequest& exec_request
   scan_node_types.push_back(TPlanNodeType::HBASE_SCAN_NODE);
   scan_node_types.push_back(TPlanNodeType::DATA_SOURCE_NODE);
 
-  unordered_set<TNetworkAddress> unique_hosts;
   // compute hosts of producer fragment before those of consumer fragment(s),
   // the latter might inherit the set of hosts from the former
   for (int i = exec_request.fragments.size() - 1; i >= 0; --i) {
@@ -697,7 +707,6 @@ void SimpleScheduler::ComputeFragmentHosts(const TQueryExecRequest& exec_request
       }
       DCHECK(!hosts.empty()) << "no hosts for fragment " << i << " with a UnionNode";
 
-      // Set unique hosts in the fragment's params.
       params.hosts.assign(hosts.begin(), hosts.end());
       continue;
     }
@@ -719,8 +728,13 @@ void SimpleScheduler::ComputeFragmentHosts(const TQueryExecRequest& exec_request
     // This fragment is executed on those hosts that have scan ranges
     // for the leftmost scan.
     GetScanHosts(leftmost_scan_id, exec_request, params, &params.hosts);
-    unique_hosts.insert(params.hosts.begin(), params.hosts.end());
   }
+
+  unordered_set<TNetworkAddress> unique_hosts;
+  BOOST_FOREACH(const FragmentExecParams& exec_params, *fragment_exec_params) {
+    unique_hosts.insert(exec_params.hosts.begin(), exec_params.hosts.end());
+  }
+
   schedule->SetUniqueHosts(unique_hosts);
 }
 
@@ -816,7 +830,7 @@ Status SimpleScheduler::GetRequestPool(const string& user,
   const string& configured_pool = query_options.request_pool;
   RETURN_IF_ERROR(request_pool_service_->ResolveRequestPool(configured_pool, user,
         &resolve_pool_result));
-  if (resolve_pool_result.status.status_code != TStatusCode::OK) {
+  if (resolve_pool_result.status.status_code != TErrorCode::OK) {
     return Status(join(resolve_pool_result.status.error_msgs, "; "));
   }
   if (resolve_pool_result.resolved_pool.empty()) {
@@ -828,7 +842,7 @@ Status SimpleScheduler::GetRequestPool(const string& user,
           configured_pool, resolve_pool_result.resolved_pool));
   }
   *pool = resolve_pool_result.resolved_pool;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SimpleScheduler::Schedule(Coordinator* coord, QuerySchedule* schedule) {
@@ -857,7 +871,7 @@ Status SimpleScheduler::Schedule(Coordinator* coord, QuerySchedule* schedule) {
   RETURN_IF_ERROR(ComputeScanRangeAssignment(schedule->request(), schedule));
   ComputeFragmentHosts(schedule->request(), schedule);
   ComputeFragmentExecParams(schedule->request(), schedule);
-  if (!FLAGS_enable_rm) return Status::OK;
+  if (!FLAGS_enable_rm) return Status::OK();
   schedule->PrepareReservationRequest(pool, user);
   const TResourceBrokerReservationRequest& reservation_request =
       schedule->reservation_request();
@@ -867,16 +881,17 @@ Status SimpleScheduler::Schedule(Coordinator* coord, QuerySchedule* schedule) {
     if (!status.ok()) {
       // Warn about missing table and/or column stats if necessary.
       const TQueryCtx& query_ctx = schedule->request().query_ctx;
-      if(query_ctx.__isset.tables_missing_stats &&
+      if(!query_ctx.__isset.parent_query_id &&
+          query_ctx.__isset.tables_missing_stats &&
           !query_ctx.tables_missing_stats.empty()) {
-        status.AddErrorMsg(GetTablesMissingStatsWarning(query_ctx.tables_missing_stats));
+        status.AddDetail(GetTablesMissingStatsWarning(query_ctx.tables_missing_stats));
       }
       return status;
     }
     RETURN_IF_ERROR(schedule->ValidateReservation());
     AddToActiveResourceMaps(*schedule->reservation(), coord);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SimpleScheduler::Release(QuerySchedule* schedule) {
@@ -885,18 +900,14 @@ Status SimpleScheduler::Release(QuerySchedule* schedule) {
   }
   if (FLAGS_enable_rm && schedule->NeedsRelease()) {
     DCHECK(resource_broker_ != NULL);
-    TResourceBrokerReleaseRequest request;
-    TResourceBrokerReleaseResponse response;
-    request.reservation_id = schedule->reservation()->reservation_id;
-    resource_broker_->Release(request, &response);
+    Status status = resource_broker_->ReleaseReservation(
+        schedule->reservation()->reservation_id);
     // Remove the reservation from the active-resource maps even if there was an error
     // releasing the reservation because the query running in the reservation is done.
     RemoveFromActiveResourceMaps(*schedule->reservation());
-    if (response.status.status_code != TStatusCode::OK) {
-      return Status(join(response.status.error_msgs, ", "));
-    }
+    RETURN_IF_ERROR(status);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void SimpleScheduler::AddToActiveResourceMaps(
@@ -927,7 +938,9 @@ void SimpleScheduler::RemoveFromActiveResourceMaps(
   }
 }
 
+// TODO: Refactor the Handle*{Reservation,Resource} functions to avoid code duplication.
 void SimpleScheduler::HandlePreemptedReservation(const TUniqueId& reservation_id) {
+  VLOG_QUERY << "HandlePreemptedReservation client_id=" << reservation_id;
   Coordinator* coord = NULL;
   {
     lock_guard<mutex> l(active_resources_lock_);
@@ -946,6 +959,7 @@ void SimpleScheduler::HandlePreemptedReservation(const TUniqueId& reservation_id
 }
 
 void SimpleScheduler::HandlePreemptedResource(const TUniqueId& client_resource_id) {
+  VLOG_QUERY << "HandlePreemptedResource client_id=" << client_resource_id;
   Coordinator* coord = NULL;
   {
     lock_guard<mutex> l(active_resources_lock_);
@@ -960,11 +974,12 @@ void SimpleScheduler::HandlePreemptedResource(const TUniqueId& client_resource_i
     stringstream err_msg;
     err_msg << "Resource " << client_resource_id << " was preempted";
     Status status(err_msg.str());
-    coord->Cancel();
+    coord->Cancel(&status);
   }
 }
 
 void SimpleScheduler::HandleLostResource(const TUniqueId& client_resource_id) {
+  VLOG_QUERY << "HandleLostResource preempting client_id=" << client_resource_id;
   Coordinator* coord = NULL;
   {
     lock_guard<mutex> l(active_resources_lock_);
@@ -979,7 +994,7 @@ void SimpleScheduler::HandleLostResource(const TUniqueId& client_resource_id) {
     stringstream err_msg;
     err_msg << "Resource " << client_resource_id << " was lost";
     Status status(err_msg.str());
-    coord->Cancel();
+    coord->Cancel(&status);
   }
 }
 

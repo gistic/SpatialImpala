@@ -15,8 +15,9 @@
 #include "util/impalad-metrics.h"
 
 #include "util/debug-util.h"
+#include "util/histogram-metric.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -28,8 +29,6 @@ const char* ImpaladMetricKeys::IMPALA_SERVER_VERSION =
     "impala-server.version";
 const char* ImpaladMetricKeys::IMPALA_SERVER_READY =
     "impala-server.ready";
-const char* ImpaladMetricKeys::IMPALA_SERVER_LAST_REFRESH_TIME =
-    "impala-server.last-refresh-time";
 const char* ImpaladMetricKeys::IMPALA_SERVER_NUM_QUERIES =
     "impala-server.num-queries";
 const char* ImpaladMetricKeys::IMPALA_SERVER_NUM_FRAGMENTS =
@@ -56,8 +55,20 @@ const char* ImpaladMetricKeys::IO_MGR_LOCAL_BYTES_READ =
     "impala-server.io-mgr.local-bytes-read";
 const char* ImpaladMetricKeys::IO_MGR_SHORT_CIRCUIT_BYTES_READ =
     "impala-server.io-mgr.short-circuit-bytes-read";
+const char* ImpaladMetricKeys::IO_MGR_CACHED_BYTES_READ =
+    "impala-server.io-mgr.cached-bytes-read";
 const char* ImpaladMetricKeys::IO_MGR_BYTES_WRITTEN =
     "impala-server.io-mgr.bytes-written";
+const char* ImpaladMetricKeys::IO_MGR_NUM_CACHED_FILE_HANDLES =
+    "impala-server.io.mgr.num-cached-file-handles";
+const char* ImpaladMetricKeys::IO_MGR_NUM_FILE_HANDLES_OUTSTANDING =
+    "impala-server.io.mgr.num-file-handles-outstanding";
+const char* ImpaladMetricKeys::IO_MGR_CACHED_FILE_HANDLES_HIT_RATIO =
+    "impala-server.io.mgr.cached-file-handles-hit-ratio";
+const char* ImpaladMetricKeys::IO_MGR_CACHED_FILE_HANDLES_HIT_COUNT =
+    "impala-server.io.mgr.cached-file-handles-hit-count";
+const char* ImpaladMetricKeys::IO_MGR_CACHED_FILE_HANDLES_MISS_COUNT =
+    "impala-server.io.mgr.cached-file-handles-miss-count";
 const char* ImpaladMetricKeys::CATALOG_NUM_DBS =
     "catalog.num-databases";
 const char* ImpaladMetricKeys::CATALOG_NUM_TABLES =
@@ -80,108 +91,150 @@ const char* ImpaladMetricKeys::RESULTSET_CACHE_TOTAL_NUM_ROWS =
     "impala-server.resultset-cache.total-num-rows";
 const char* ImpaladMetricKeys::RESULTSET_CACHE_TOTAL_BYTES =
     "impala-server.resultset-cache.total-bytes";
+const char* ImpaladMetricKeys::QUERY_DURATIONS =
+    "impala-server.query-durations-ms";
+const char* ImpaladMetricKeys::DDL_DURATIONS =
+    "impala-server.ddl-durations-ms";
 
 // These are created by impala-server during startup.
-Metrics::StringMetric* ImpaladMetrics::IMPALA_SERVER_START_TIME = NULL;
-Metrics::StringMetric* ImpaladMetrics::IMPALA_SERVER_VERSION = NULL;
-Metrics::BooleanMetric* ImpaladMetrics::IMPALA_SERVER_READY = NULL;
-Metrics::StringMetric* ImpaladMetrics::IMPALA_SERVER_LAST_REFRESH_TIME = NULL;
-Metrics::IntMetric* ImpaladMetrics::IMPALA_SERVER_NUM_QUERIES = NULL;
-Metrics::IntMetric* ImpaladMetrics::IMPALA_SERVER_NUM_FRAGMENTS = NULL;
-Metrics::IntMetric* ImpaladMetrics::IMPALA_SERVER_NUM_OPEN_BEESWAX_SESSIONS = NULL;
-Metrics::IntMetric* ImpaladMetrics::IMPALA_SERVER_NUM_OPEN_HS2_SESSIONS = NULL;
-Metrics::IntMetric* ImpaladMetrics::NUM_RANGES_PROCESSED = NULL;
-Metrics::IntMetric* ImpaladMetrics::NUM_RANGES_MISSING_VOLUME_ID = NULL;
-Metrics::BytesMetric* ImpaladMetrics::MEM_POOL_TOTAL_BYTES = NULL;
-Metrics::BytesMetric* ImpaladMetrics::HASH_TABLE_TOTAL_BYTES = NULL;
-Metrics::IntMetric* ImpaladMetrics::IO_MGR_NUM_OPEN_FILES = NULL;
-Metrics::IntMetric* ImpaladMetrics::IO_MGR_NUM_BUFFERS = NULL;
-Metrics::IntMetric* ImpaladMetrics::IO_MGR_TOTAL_BYTES = NULL;
-Metrics::IntMetric* ImpaladMetrics::IO_MGR_NUM_UNUSED_BUFFERS = NULL;
-Metrics::BytesMetric* ImpaladMetrics::IO_MGR_BYTES_READ = NULL;
-Metrics::BytesMetric* ImpaladMetrics::IO_MGR_LOCAL_BYTES_READ = NULL;
-Metrics::BytesMetric* ImpaladMetrics::IO_MGR_SHORT_CIRCUIT_BYTES_READ = NULL;
-Metrics::BytesMetric* ImpaladMetrics::IO_MGR_BYTES_WRITTEN = NULL;
-Metrics::IntMetric* ImpaladMetrics::CATALOG_NUM_DBS = NULL;
-Metrics::IntMetric* ImpaladMetrics::CATALOG_NUM_TABLES = NULL;
-Metrics::BooleanMetric* ImpaladMetrics::CATALOG_READY = NULL;
-Metrics::IntMetric* ImpaladMetrics::NUM_FILES_OPEN_FOR_INSERT = NULL;
-Metrics::IntMetric* ImpaladMetrics::NUM_SESSIONS_EXPIRED = NULL;
-Metrics::IntMetric* ImpaladMetrics::NUM_QUERIES_EXPIRED = NULL;
-Metrics::IntMetric* ImpaladMetrics::NUM_QUERIES_SPILLED = NULL;
-Metrics::IntMetric* ImpaladMetrics::RESULTSET_CACHE_TOTAL_NUM_ROWS = NULL;
-Metrics::BytesMetric* ImpaladMetrics::RESULTSET_CACHE_TOTAL_BYTES = NULL;
+// =======
+// Counters
+IntGauge* ImpaladMetrics::HASH_TABLE_TOTAL_BYTES = NULL;
+IntCounter* ImpaladMetrics::IMPALA_SERVER_NUM_FRAGMENTS = NULL;
+IntCounter* ImpaladMetrics::IMPALA_SERVER_NUM_QUERIES = NULL;
+IntCounter* ImpaladMetrics::NUM_QUERIES_EXPIRED = NULL;
+IntCounter* ImpaladMetrics::NUM_QUERIES_SPILLED = NULL;
+IntCounter* ImpaladMetrics::NUM_RANGES_MISSING_VOLUME_ID = NULL;
+IntCounter* ImpaladMetrics::NUM_RANGES_PROCESSED = NULL;
+IntCounter* ImpaladMetrics::NUM_SESSIONS_EXPIRED = NULL;
+IntCounter* ImpaladMetrics::IO_MGR_BYTES_READ = NULL;
+IntCounter* ImpaladMetrics::IO_MGR_LOCAL_BYTES_READ = NULL;
+IntCounter* ImpaladMetrics::IO_MGR_SHORT_CIRCUIT_BYTES_READ = NULL;
+IntCounter* ImpaladMetrics::IO_MGR_CACHED_BYTES_READ = NULL;
+IntCounter* ImpaladMetrics::IO_MGR_BYTES_WRITTEN = NULL;
 
-void ImpaladMetrics::CreateMetrics(Metrics* m) {
+// Gauges
+IntGauge* ImpaladMetrics::CATALOG_NUM_DBS = NULL;
+IntGauge* ImpaladMetrics::CATALOG_NUM_TABLES = NULL;
+IntGauge* ImpaladMetrics::IMPALA_SERVER_NUM_OPEN_BEESWAX_SESSIONS = NULL;
+IntGauge* ImpaladMetrics::IMPALA_SERVER_NUM_OPEN_HS2_SESSIONS = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_NUM_BUFFERS = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_NUM_OPEN_FILES = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_NUM_UNUSED_BUFFERS = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_NUM_CACHED_FILE_HANDLES = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_NUM_FILE_HANDLES_OUTSTANDING = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_CACHED_FILE_HANDLES_HIT_COUNT = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_CACHED_FILE_HANDLES_MISS_COUNT = NULL;
+IntGauge* ImpaladMetrics::IO_MGR_TOTAL_BYTES = NULL;
+IntGauge* ImpaladMetrics::MEM_POOL_TOTAL_BYTES = NULL;
+IntGauge* ImpaladMetrics::NUM_FILES_OPEN_FOR_INSERT = NULL;
+IntGauge* ImpaladMetrics::RESULTSET_CACHE_TOTAL_NUM_ROWS = NULL;
+IntGauge* ImpaladMetrics::RESULTSET_CACHE_TOTAL_BYTES = NULL;
+
+// Properties
+BooleanProperty* ImpaladMetrics::CATALOG_READY = NULL;
+BooleanProperty* ImpaladMetrics::IMPALA_SERVER_READY = NULL;
+StringProperty* ImpaladMetrics::IMPALA_SERVER_START_TIME = NULL;
+StringProperty* ImpaladMetrics::IMPALA_SERVER_VERSION = NULL;
+
+// Histograms
+HistogramMetric* ImpaladMetrics::QUERY_DURATIONS = NULL;
+HistogramMetric* ImpaladMetrics::DDL_DURATIONS = NULL;
+
+// Other
+StatsMetric<uint64_t, StatsType::MEAN>*
+ImpaladMetrics::IO_MGR_CACHED_FILE_HANDLES_HIT_RATIO = NULL;
+
+void ImpaladMetrics::CreateMetrics(MetricGroup* m) {
   // Initialize impalad metrics
-  IMPALA_SERVER_START_TIME = m->CreateAndRegisterPrimitiveMetric<string>(
+  IMPALA_SERVER_START_TIME = m->AddProperty<string>(
       ImpaladMetricKeys::IMPALA_SERVER_START_TIME, "");
-  IMPALA_SERVER_VERSION = m->CreateAndRegisterPrimitiveMetric<string>(
+  IMPALA_SERVER_VERSION = m->AddProperty<string>(
       ImpaladMetricKeys::IMPALA_SERVER_VERSION, GetVersionString(true));
-  IMPALA_SERVER_READY = m->CreateAndRegisterPrimitiveMetric(
+  IMPALA_SERVER_READY = m->AddProperty<bool>(
       ImpaladMetricKeys::IMPALA_SERVER_READY, false);
-  IMPALA_SERVER_LAST_REFRESH_TIME = m->CreateAndRegisterPrimitiveMetric<string>(
-      ImpaladMetricKeys::IMPALA_SERVER_LAST_REFRESH_TIME, "n/a");
-  IMPALA_SERVER_NUM_QUERIES = m->CreateAndRegisterPrimitiveMetric(
+
+  IMPALA_SERVER_NUM_QUERIES = m->AddCounter(
       ImpaladMetricKeys::IMPALA_SERVER_NUM_QUERIES, 0L);
-  NUM_QUERIES_EXPIRED = m->CreateAndRegisterPrimitiveMetric(
+  NUM_QUERIES_EXPIRED = m->AddCounter(
       ImpaladMetricKeys::NUM_QUERIES_EXPIRED, 0L);
-  NUM_QUERIES_SPILLED = m->CreateAndRegisterPrimitiveMetric(
+  NUM_QUERIES_SPILLED = m->AddCounter(
       ImpaladMetricKeys::NUM_QUERIES_SPILLED, 0L);
-  IMPALA_SERVER_NUM_FRAGMENTS = m->CreateAndRegisterPrimitiveMetric(
+  IMPALA_SERVER_NUM_FRAGMENTS = m->AddCounter(
       ImpaladMetricKeys::IMPALA_SERVER_NUM_FRAGMENTS, 0L);
-  IMPALA_SERVER_NUM_OPEN_HS2_SESSIONS = m->CreateAndRegisterPrimitiveMetric(
+  IMPALA_SERVER_NUM_OPEN_HS2_SESSIONS = m->AddGauge<int64_t>(
       ImpaladMetricKeys::IMPALA_SERVER_NUM_OPEN_HS2_SESSIONS, 0L);
-  IMPALA_SERVER_NUM_OPEN_BEESWAX_SESSIONS = m->CreateAndRegisterPrimitiveMetric(
+  IMPALA_SERVER_NUM_OPEN_BEESWAX_SESSIONS = m->AddGauge<int64_t>(
       ImpaladMetricKeys::IMPALA_SERVER_NUM_OPEN_BEESWAX_SESSIONS, 0L);
-  NUM_SESSIONS_EXPIRED = m->CreateAndRegisterPrimitiveMetric(
+  NUM_SESSIONS_EXPIRED = m->AddCounter(
       ImpaladMetricKeys::NUM_SESSIONS_EXPIRED, 0L);
-  RESULTSET_CACHE_TOTAL_NUM_ROWS = m->CreateAndRegisterPrimitiveMetric(
+  RESULTSET_CACHE_TOTAL_NUM_ROWS = m->AddGauge(
       ImpaladMetricKeys::RESULTSET_CACHE_TOTAL_NUM_ROWS, 0L);
-  RESULTSET_CACHE_TOTAL_BYTES = m->RegisterMetric(
-      new Metrics::BytesMetric(ImpaladMetricKeys::RESULTSET_CACHE_TOTAL_BYTES, 0L));
+  RESULTSET_CACHE_TOTAL_BYTES = m->AddGauge(
+      ImpaladMetricKeys::RESULTSET_CACHE_TOTAL_BYTES, 0L);
 
   // Initialize scan node metrics
-  NUM_RANGES_PROCESSED = m->CreateAndRegisterPrimitiveMetric(
+  NUM_RANGES_PROCESSED = m->AddCounter(
       ImpaladMetricKeys::TOTAL_SCAN_RANGES_PROCESSED, 0L);
-  NUM_RANGES_MISSING_VOLUME_ID = m->CreateAndRegisterPrimitiveMetric(
+  NUM_RANGES_MISSING_VOLUME_ID = m->AddCounter(
       ImpaladMetricKeys::NUM_SCAN_RANGES_MISSING_VOLUME_ID, 0L);
 
   // Initialize memory usage metrics
-  MEM_POOL_TOTAL_BYTES = m->RegisterMetric(
-      new Metrics::BytesMetric(ImpaladMetricKeys::MEM_POOL_TOTAL_BYTES, 0L));
-  HASH_TABLE_TOTAL_BYTES = m->RegisterMetric(
-      new Metrics::BytesMetric(ImpaladMetricKeys::HASH_TABLE_TOTAL_BYTES, 0L));
+  MEM_POOL_TOTAL_BYTES = m->AddGauge<int64_t>(
+      ImpaladMetricKeys::MEM_POOL_TOTAL_BYTES, 0L);
+  HASH_TABLE_TOTAL_BYTES = m->AddGauge(
+      ImpaladMetricKeys::HASH_TABLE_TOTAL_BYTES, 0L);
 
   // Initialize insert metrics
-  NUM_FILES_OPEN_FOR_INSERT = m->CreateAndRegisterPrimitiveMetric(
+  NUM_FILES_OPEN_FOR_INSERT = m->AddGauge<int64_t>(
       ImpaladMetricKeys::NUM_FILES_OPEN_FOR_INSERT, 0L);
 
   // Initialize IO mgr metrics
-  IO_MGR_NUM_OPEN_FILES = m->CreateAndRegisterPrimitiveMetric(
+  IO_MGR_NUM_OPEN_FILES = m->AddGauge<int64_t>(
       ImpaladMetricKeys::IO_MGR_NUM_OPEN_FILES, 0L);
-  IO_MGR_NUM_BUFFERS = m->CreateAndRegisterPrimitiveMetric(
-      ImpaladMetricKeys::IO_MGR_NUM_BUFFERS, 0L);
-  IO_MGR_TOTAL_BYTES = m->CreateAndRegisterPrimitiveMetric(
-      ImpaladMetricKeys::IO_MGR_TOTAL_BYTES, 0L);
-  IO_MGR_NUM_UNUSED_BUFFERS = m->CreateAndRegisterPrimitiveMetric(
+  IO_MGR_NUM_BUFFERS = m->AddGauge<int64_t>(ImpaladMetricKeys::IO_MGR_NUM_BUFFERS, 0L);
+  IO_MGR_TOTAL_BYTES = m->AddGauge<int64_t>(ImpaladMetricKeys::IO_MGR_TOTAL_BYTES, 0L);
+  IO_MGR_NUM_UNUSED_BUFFERS = m->AddGauge<int64_t>(
       ImpaladMetricKeys::IO_MGR_NUM_UNUSED_BUFFERS, 0L);
-  IO_MGR_BYTES_READ = m->RegisterMetric(
-      new Metrics::BytesMetric(ImpaladMetricKeys::IO_MGR_BYTES_READ, 0L));
-  IO_MGR_LOCAL_BYTES_READ = m->RegisterMetric(
-      new Metrics::BytesMetric(ImpaladMetricKeys::IO_MGR_LOCAL_BYTES_READ, 0L));
-  IO_MGR_SHORT_CIRCUIT_BYTES_READ = m->RegisterMetric(
-      new Metrics::BytesMetric(ImpaladMetricKeys::IO_MGR_SHORT_CIRCUIT_BYTES_READ, 0L));
-  IO_MGR_BYTES_WRITTEN = m->RegisterMetric(
-      new Metrics::BytesMetric(ImpaladMetricKeys::IO_MGR_BYTES_WRITTEN, 0L));
+  IO_MGR_NUM_CACHED_FILE_HANDLES = m->AddGauge<int64_t>(
+      ImpaladMetricKeys::IO_MGR_NUM_CACHED_FILE_HANDLES, 0L);
+  IO_MGR_NUM_FILE_HANDLES_OUTSTANDING = m->AddGauge<int64_t>(
+      ImpaladMetricKeys::IO_MGR_NUM_FILE_HANDLES_OUTSTANDING, 0L);
+
+  IO_MGR_CACHED_FILE_HANDLES_HIT_COUNT = m->AddGauge<int64_t>(
+      ImpaladMetricKeys::IO_MGR_CACHED_FILE_HANDLES_HIT_COUNT, 0L);
+
+  IO_MGR_CACHED_FILE_HANDLES_MISS_COUNT = m->AddGauge<int64_t>(
+      ImpaladMetricKeys::IO_MGR_CACHED_FILE_HANDLES_MISS_COUNT, 0L);
+
+  IO_MGR_BYTES_READ = m->AddCounter(ImpaladMetricKeys::IO_MGR_BYTES_READ, 0L);
+  IO_MGR_LOCAL_BYTES_READ = m->AddCounter(
+      ImpaladMetricKeys::IO_MGR_LOCAL_BYTES_READ, 0L);
+  IO_MGR_CACHED_BYTES_READ = m->AddCounter<int64_t>(
+      ImpaladMetricKeys::IO_MGR_CACHED_BYTES_READ, 0L);
+  IO_MGR_SHORT_CIRCUIT_BYTES_READ = m->AddCounter<int64_t>(
+      ImpaladMetricKeys::IO_MGR_SHORT_CIRCUIT_BYTES_READ, 0L);
+  IO_MGR_BYTES_WRITTEN = m->AddCounter<int64_t>(
+      ImpaladMetricKeys::IO_MGR_BYTES_WRITTEN, 0L);
+
+  IO_MGR_CACHED_FILE_HANDLES_HIT_RATIO =
+      StatsMetric<uint64_t, StatsType::MEAN>::CreateAndRegister(m,
+      ImpaladMetricKeys::IO_MGR_CACHED_FILE_HANDLES_HIT_RATIO);
 
   // Initialize catalog metrics
-  CATALOG_NUM_DBS = m->CreateAndRegisterPrimitiveMetric(
-      ImpaladMetricKeys::CATALOG_NUM_DBS, 0L);
-  CATALOG_NUM_TABLES = m->CreateAndRegisterPrimitiveMetric(
-      ImpaladMetricKeys::CATALOG_NUM_TABLES, 0L);
-  CATALOG_READY = m->CreateAndRegisterPrimitiveMetric(
-      ImpaladMetricKeys::CATALOG_READY, false);
+  CATALOG_NUM_DBS = m->AddGauge<int64_t>(ImpaladMetricKeys::CATALOG_NUM_DBS, 0L);
+  CATALOG_NUM_TABLES = m->AddGauge<int64_t>(ImpaladMetricKeys::CATALOG_NUM_TABLES, 0L);
+  CATALOG_READY = m->AddProperty<bool>(ImpaladMetricKeys::CATALOG_READY, false);
+
+  // Maximum duration to be tracked by the query durations metric. No particular reasoning
+  // behind five hours, except to say that there's some threshold beyond which queries
+  // just become "long running", and at that point the distribution of their run times
+  // isn't so interesting.
+  const int FIVE_HOURS_IN_MS = 60 * 60 * 1000 * 5;
+  QUERY_DURATIONS = m->RegisterMetric(new HistogramMetric(
+      MetricDefs::Get(ImpaladMetricKeys::QUERY_DURATIONS), FIVE_HOURS_IN_MS, 3));
+  DDL_DURATIONS = m->RegisterMetric(new HistogramMetric(
+      MetricDefs::Get(ImpaladMetricKeys::DDL_DURATIONS), FIVE_HOURS_IN_MS, 3));
 }
 
 }

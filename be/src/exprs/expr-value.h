@@ -15,6 +15,7 @@
 #ifndef IMPALA_EXPRS_EXPR_VALUE_H
 #define IMPALA_EXPRS_EXPR_VALUE_H
 
+#include "runtime/array-value.h"
 #include "runtime/decimal-value.h"
 #include "runtime/string-value.h"
 #include "runtime/timestamp-value.h"
@@ -28,7 +29,7 @@ using namespace spatialimpala;
 
 namespace impala {
 
-// The materialized value returned by ExprContext::GetValue().
+/// The materialized value returned by ExprContext::GetValue().
 struct ExprValue {
   bool bool_val;
   int8_t tinyint_val;
@@ -47,6 +48,7 @@ struct ExprValue {
   Rectangle rectangle_val;
   Polygon polygon_val;
   LineString linestring_val;
+  ArrayValue array_val;
 
   ExprValue()
     : bool_val(false),
@@ -65,19 +67,20 @@ struct ExprValue {
       line_val(),
       rectangle_val(),
       linestring_val(),
-      polygon_val() {
+      polygon_val(),
+      array_val() {
   }
 
-  ExprValue(bool v): bool_val(v) {}
-  ExprValue(int8_t v): tinyint_val(v) {}
-  ExprValue(int16_t v): smallint_val(v) {}
-  ExprValue(int32_t v): int_val(v) {}
-  ExprValue(int64_t v): bigint_val(v) {}
-  ExprValue(float v): float_val(v) {}
-  ExprValue(double v): double_val(v) {}
+  ExprValue(bool v) : bool_val(v) {}
+  ExprValue(int8_t v) : tinyint_val(v) {}
+  ExprValue(int16_t v) : smallint_val(v) {}
+  ExprValue(int32_t v) : int_val(v) {}
+  ExprValue(int64_t v) : bigint_val(v) {}
+  ExprValue(float v) : float_val(v) {}
+  ExprValue(double v) : double_val(v) {}
   ExprValue(int64_t t, int64_t n) : timestamp_val(t, n) {}
 
-  // c'tor for string values
+  /// c'tor for string values
   ExprValue(const std::string& str)
     : string_data(str) {
     string_val.ptr = const_cast<char*>(string_data.data());
@@ -90,7 +93,7 @@ struct ExprValue {
   ExprValue(Polygon pl) { polygon_val = pl; }
   ExprValue(LineString pl) { linestring_val = pl; }
 
-  // Sets the value for type to '0' and returns a pointer to the data
+  /// Sets the value for type to '0' and returns a pointer to the data
   void* SetToZero(const ColumnType& type) {
     switch (type.type) {
       case TYPE_NULL:
@@ -122,7 +125,7 @@ struct ExprValue {
     }
   }
 
-  // Sets the value for type to min and returns a pointer to the data
+  /// Sets the value for type to min and returns a pointer to the data
   void* SetToMin(const ColumnType& type) {
     switch (type.type) {
       case TYPE_NULL:
@@ -156,7 +159,7 @@ struct ExprValue {
     }
   }
 
-  // Sets the value for type to max and returns a pointer to the data
+  /// Sets the value for type to max and returns a pointer to the data
   void* SetToMax(const ColumnType& type) {
     switch (type.type) {
       case TYPE_NULL:
@@ -187,8 +190,6 @@ struct ExprValue {
         return NULL;
     }
   }
-
-  std::string& GetStringData() { return string_data; }
 
  private:
   std::string string_data; // Stores the data for string_val if necessary.

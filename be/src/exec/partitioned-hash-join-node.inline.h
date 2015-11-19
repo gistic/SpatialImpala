@@ -25,23 +25,13 @@ inline void PartitionedHashJoinNode::ResetForProbe() {
   current_probe_row_ = NULL;
   probe_batch_pos_ = 0;
   matched_probe_ = true;
-  hash_tbl_iterator_.reset();
+  hash_tbl_iterator_.SetAtEnd();
 }
 
 inline bool PartitionedHashJoinNode::AppendRow(BufferedTupleStream* stream,
-    TupleRow* row) {
-  if (LIKELY(stream->AddRow(row))) return true;
-  status_ = stream->status();
-  if (!status_.ok()) return false;
-  // We ran out of memory. Pick a partition to spill.
-  status_ = SpillPartition();
-  if (!status_.ok()) return false;
-  if (!stream->AddRow(row)) {
-    // Can this happen? we just spilled a partition so this shouldn't fail.
-    status_ = Status("Could not spill row.");
-    return false;
-  }
-  return true;
+    TupleRow* row, Status* status) {
+  if (LIKELY(stream->AddRow(row, status))) return true;
+  return AppendRowStreamFull(stream, row, status);
 }
 
 }

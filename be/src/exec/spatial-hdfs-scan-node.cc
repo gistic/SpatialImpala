@@ -1,5 +1,7 @@
 // Copyright 2015 GISTIC.
 
+#include "common/names.h"
+#include "common/object-pool.h"
 #include "exec/spatial-hdfs-scan-node.h"
 
 using namespace spatialimpala;
@@ -38,7 +40,7 @@ void SpatialHdfsScanNode::UpdateScanRanges(const THdfsFileFormat::type& file_typ
     scan_ranges_complete_counter()->Add(scan_ranges_to_complete);
     progress_.Update(scan_ranges_to_complete);
     {
-      ScopedSpinLock l(&file_type_counts_lock_);
+      boost::lock_guard<SpinLock> l(file_type_counts_lock_);
       file_type_counts_[make_pair(file_type, compression_type)] += scan_ranges_to_complete;
     }
   }

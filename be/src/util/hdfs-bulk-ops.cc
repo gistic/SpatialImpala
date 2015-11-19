@@ -21,9 +21,9 @@
 #include "util/error-util.h"
 #include "util/hdfs-util.h"
 
-using namespace std;
+#include "common/names.h"
+
 using namespace impala;
-using namespace boost;
 
 HdfsOp::HdfsOp(HdfsOpType op, const std::string& src, HdfsOperationSet* op_set)
     : op_(op), src_(src), op_set_(op_set) {
@@ -55,19 +55,28 @@ void HdfsOp::Execute() const {
   switch (op_) {
     case DELETE:
       err = hdfsDelete(*hdfs_connection, src_.c_str(), 1);
+      VLOG_FILE << "hdfsDelete() file=" << src_.c_str();
       break;
     case CREATE_DIR:
       err = hdfsCreateDirectory(*hdfs_connection, src_.c_str());
+      VLOG_FILE << "hdfsCreateDirectory() file=" << src_.c_str();
       break;
     case RENAME:
       err = hdfsRename(*hdfs_connection, src_.c_str(), dst_.c_str());
+      VLOG_FILE << "hdfsRename() src_file=" << src_.c_str()
+                << " dst_file=" << dst_.c_str();
       break;
     case DELETE_THEN_CREATE:
       err = hdfsDelete(*hdfs_connection, src_.c_str(), 1);
-      if (err != -1) err = hdfsCreateDirectory(*hdfs_connection, src_.c_str());
+      VLOG_FILE << "hdfsDelete() file=" << src_.c_str();
+      if (err != -1) {
+        err = hdfsCreateDirectory(*hdfs_connection, src_.c_str());
+        VLOG_FILE << "hdfsCreateDirectory() file=" << src_.c_str();
+      }
       break;
     case CHMOD:
       err = hdfsChmod(*hdfs_connection, src_.c_str(), permissions_);
+      VLOG_FILE << "hdfsChmod() file=" << src_.c_str();
       break;
   }
 

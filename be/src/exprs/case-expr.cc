@@ -23,8 +23,9 @@
 
 #include "gen-cpp/Exprs_types.h"
 
+#include "common/names.h"
+
 using namespace llvm;
-using namespace std;
 
 namespace impala {
 
@@ -46,13 +47,13 @@ Status CaseExpr::Prepare(RuntimeState* state, const RowDescriptor& desc,
                          ExprContext* ctx) {
   RETURN_IF_ERROR(Expr::Prepare(state, desc, ctx));
   RegisterFunctionContext(ctx, state);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status CaseExpr::Open(RuntimeState* state, ExprContext* ctx,
                       FunctionContext::FunctionStateScope scope) {
   RETURN_IF_ERROR(Expr::Open(state, ctx, scope));
-  FunctionContext* fn_ctx = ctx->fn_context(context_index_);
+  FunctionContext* fn_ctx = ctx->fn_context(fn_context_index_);
   CaseExprState* case_state =
       reinterpret_cast<CaseExprState*>(fn_ctx->Allocate(sizeof(CaseExprState)));
   fn_ctx->SetFunctionState(FunctionContext::THREAD_LOCAL, case_state);
@@ -63,13 +64,13 @@ Status CaseExpr::Open(RuntimeState* state, ExprContext* ctx,
     case_state->case_val = CreateAnyVal(state->obj_pool(), TYPE_BOOLEAN);
     case_state->when_val = CreateAnyVal(state->obj_pool(), children_[0]->type());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void CaseExpr::Close(RuntimeState* state, ExprContext* ctx,
                      FunctionContext::FunctionStateScope scope) {
-  if (context_index_ != -1) {
-    FunctionContext* fn_ctx = ctx->fn_context(context_index_);
+  if (fn_context_index_ != -1) {
+    FunctionContext* fn_ctx = ctx->fn_context(fn_context_index_);
     void* case_state = fn_ctx->GetFunctionState(FunctionContext::THREAD_LOCAL);
     fn_ctx->Free(reinterpret_cast<uint8_t*>(case_state));
   }
@@ -92,13 +93,13 @@ string CaseExpr::DebugString() const {
 //                                    %"class.impala::TupleRow"* %row)
 //   %is_null = trunc i64 %case_val to i1
 //   br i1 %is_null, label %return_else_expr, label %eval_first_when_expr
-// 
+//
 // eval_first_when_expr:                             ; preds = %eval_case_expr
 //   %when_val = call i64 @Literal(%"class.impala::ExprContext"* %context,
 //                                 %"class.impala::TupleRow"* %row)
 //   %is_null1 = trunc i64 %when_val to i1
 //   br i1 %is_null1, label %return_else_expr, label %check_when_expr_block
-// 
+//
 // check_when_expr_block:                            ; preds = %eval_first_when_expr
 //   %0 = ashr i64 %when_val, 32
 //   %1 = trunc i64 %0 to i32
@@ -106,12 +107,12 @@ string CaseExpr::DebugString() const {
 //   %3 = trunc i64 %2 to i32
 //   %eq = icmp eq i32 %3, %1
 //   br i1 %eq, label %return_then_expr, label %return_else_expr
-// 
+//
 // return_then_expr:                                 ; preds = %check_when_expr_block
 //   %then_val = call i16 @Literal12(%"class.impala::ExprContext"* %context,
 //                                   %"class.impala::TupleRow"* %row)
 //   ret i16 %then_val
-// 
+//
 // return_else_expr:                                 ; preds = %check_when_expr_block, %eval_first_when_expr, %eval_case_expr
 //   %else_val = call i16 @Literal13(%"class.impala::ExprContext"* %context,
 //                                   %"class.impala::TupleRow"* %row)
@@ -126,13 +127,13 @@ string CaseExpr::DebugString() const {
 //                                    %"class.impala::TupleRow"* %row)
 //   %is_null = trunc i64 %case_val to i1
 //   br i1 %is_null, label %return_null, label %eval_first_when_expr
-// 
+//
 // eval_first_when_expr:                             ; preds = %eval_case_expr
 //   %when_val = call i64 @Literal(%"class.impala::ExprContext"* %context,
 //                                 %"class.impala::TupleRow"* %row)
 //   %is_null1 = trunc i64 %when_val to i1
 //   br i1 %is_null1, label %return_null, label %check_when_expr_block
-// 
+//
 // check_when_expr_block:                            ; preds = %eval_first_when_expr
 //   %0 = ashr i64 %when_val, 32
 //   %1 = trunc i64 %0 to i32
@@ -140,12 +141,12 @@ string CaseExpr::DebugString() const {
 //   %3 = trunc i64 %2 to i32
 //   %eq = icmp eq i32 %3, %1
 //   br i1 %eq, label %return_then_expr, label %return_null
-// 
+//
 // return_then_expr:                                 ; preds = %check_when_expr_block
 //   %then_val = call i16 @Literal12(%"class.impala::ExprContext"* %context,
 //                                   %"class.impala::TupleRow"* %row)
 //   ret i16 %then_val
-// 
+//
 // return_null:                                      ; preds = %check_when_expr_block, %eval_first_when_expr, %eval_case_expr
 //   ret i16 1
 // }
@@ -158,18 +159,18 @@ string CaseExpr::DebugString() const {
 //       %"class.impala::ExprContext"* %context, %"class.impala::TupleRow"* %row)
 //   %is_null = trunc i16 %when_val to i1
 //   br i1 %is_null, label %return_else_expr, label %check_when_expr_block
-// 
+//
 // check_when_expr_block:                            ; preds = %eval_first_when_expr
 //   %0 = ashr i16 %when_val, 8
 //   %1 = trunc i16 %0 to i8
 //   %val = trunc i8 %1 to i1
 //   br i1 %val, label %return_then_expr, label %return_else_expr
-// 
+//
 // return_then_expr:                                 ; preds = %check_when_expr_block
 //   %then_val = call i16 @Literal14(%"class.impala::ExprContext"* %context,
 //                                   %"class.impala::TupleRow"* %row)
 //   ret i16 %then_val
-// 
+//
 // return_else_expr:                                 ; preds = %check_when_expr_block, %eval_first_when_expr
 //   %else_val = call i16 @Literal15(%"class.impala::ExprContext"* %context,
 //                                   %"class.impala::TupleRow"* %row)
@@ -178,7 +179,7 @@ string CaseExpr::DebugString() const {
 Status CaseExpr::GetCodegendComputeFn(RuntimeState* state, Function** fn) {
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
-    return Status::OK;
+    return Status::OK();
   }
 
   const int num_children = GetNumChildren();
@@ -283,7 +284,7 @@ Status CaseExpr::GetCodegendComputeFn(RuntimeState* state, Function** fn) {
   *fn = codegen->FinalizeFunction(function);
   DCHECK(*fn != NULL);
   ir_compute_fn_ = *fn;
-  return Status::OK;
+  return Status::OK();
 }
 
 void CaseExpr::GetChildVal(int child_idx, ExprContext* ctx, TupleRow* row, AnyVal* dst) {
@@ -328,35 +329,35 @@ void CaseExpr::GetChildVal(int child_idx, ExprContext* ctx, TupleRow* row, AnyVa
 bool CaseExpr::AnyValEq(const ColumnType& type, const AnyVal* v1, const AnyVal* v2) {
   switch (type.type) {
     case TYPE_BOOLEAN:
-      return *reinterpret_cast<const BooleanVal*>(v1) ==
-             *reinterpret_cast<const BooleanVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const BooleanVal*>(v1),
+                                *reinterpret_cast<const BooleanVal*>(v2));
     case TYPE_TINYINT:
-      return *reinterpret_cast<const TinyIntVal*>(v1) ==
-             *reinterpret_cast<const TinyIntVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const TinyIntVal*>(v1),
+                                *reinterpret_cast<const TinyIntVal*>(v2));
     case TYPE_SMALLINT:
-      return *reinterpret_cast<const SmallIntVal*>(v1) ==
-             *reinterpret_cast<const SmallIntVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const SmallIntVal*>(v1),
+                                *reinterpret_cast<const SmallIntVal*>(v2));
     case TYPE_INT:
-      return *reinterpret_cast<const IntVal*>(v1) ==
-             *reinterpret_cast<const IntVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const IntVal*>(v1),
+                                *reinterpret_cast<const IntVal*>(v2));
     case TYPE_BIGINT:
-      return *reinterpret_cast<const BigIntVal*>(v1) ==
-             *reinterpret_cast<const BigIntVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const BigIntVal*>(v1),
+                                *reinterpret_cast<const BigIntVal*>(v2));
     case TYPE_FLOAT:
-      return *reinterpret_cast<const FloatVal*>(v1) ==
-             *reinterpret_cast<const FloatVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const FloatVal*>(v1),
+                                *reinterpret_cast<const FloatVal*>(v2));
     case TYPE_DOUBLE:
-      return *reinterpret_cast<const DoubleVal*>(v1) ==
-             *reinterpret_cast<const DoubleVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const DoubleVal*>(v1),
+                                *reinterpret_cast<const DoubleVal*>(v2));
     case TYPE_TIMESTAMP:
-      return *reinterpret_cast<const TimestampVal*>(v1) ==
-             *reinterpret_cast<const TimestampVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const TimestampVal*>(v1),
+                                *reinterpret_cast<const TimestampVal*>(v2));
     case TYPE_STRING:
-      return *reinterpret_cast<const StringVal*>(v1) ==
-             *reinterpret_cast<const StringVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const StringVal*>(v1),
+                                *reinterpret_cast<const StringVal*>(v2));
     case TYPE_DECIMAL:
-      return *reinterpret_cast<const DecimalVal*>(v1) ==
-             *reinterpret_cast<const DecimalVal*>(v2);
+      return AnyValUtil::Equals(type, *reinterpret_cast<const DecimalVal*>(v1),
+                                *reinterpret_cast<const DecimalVal*>(v2));
     default:
       DCHECK(false) << type;
       return false;
@@ -365,7 +366,7 @@ bool CaseExpr::AnyValEq(const ColumnType& type, const AnyVal* v1, const AnyVal* 
 
 #define CASE_COMPUTE_FN(THEN_TYPE) \
   THEN_TYPE CaseExpr::Get##THEN_TYPE(ExprContext* ctx, TupleRow* row) { \
-    FunctionContext* fn_ctx = ctx->fn_context(context_index_); \
+    FunctionContext* fn_ctx = ctx->fn_context(fn_context_index_); \
     CaseExprState* state = reinterpret_cast<CaseExprState*>( \
         fn_ctx->GetFunctionState(FunctionContext::THREAD_LOCAL)); \
     DCHECK(state->case_val != NULL); \

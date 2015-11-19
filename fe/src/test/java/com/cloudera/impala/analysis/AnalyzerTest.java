@@ -23,8 +23,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import junit.framework.Assert;
+import org.junit.Assert;
 
+import org.junit.After;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,11 +33,15 @@ import org.slf4j.LoggerFactory;
 import com.cloudera.impala.authorization.AuthorizationConfig;
 import com.cloudera.impala.catalog.AggregateFunction;
 import com.cloudera.impala.catalog.Catalog;
+import com.cloudera.impala.catalog.Column;
+import com.cloudera.impala.catalog.Db;
 import com.cloudera.impala.catalog.Function;
+import com.cloudera.impala.catalog.HdfsTable;
 import com.cloudera.impala.catalog.ImpaladCatalog;
 import com.cloudera.impala.catalog.PrimitiveType;
 import com.cloudera.impala.catalog.ScalarFunction;
 import com.cloudera.impala.catalog.ScalarType;
+import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.testutil.ImpaladTestCatalog;
@@ -51,6 +56,10 @@ import com.google.common.collect.Lists;
 public class AnalyzerTest {
   protected final static Logger LOG = LoggerFactory.getLogger(AnalyzerTest.class);
   protected static ImpaladCatalog catalog_ = new ImpaladTestCatalog();
+
+  // Test-local list of test databases and tables. These are cleaned up in @After.
+  protected final List<Db> testDbs_ = Lists.newArrayList();
+  protected final List<Table> testTables_ = Lists.newArrayList();
 
   protected Analyzer analyzer_;
 
@@ -119,8 +128,65 @@ public class AnalyzerTest {
 
   protected void addTestUda(String name, Type retType, Type... argTypes) {
     FunctionName fnName = new FunctionName("default", name);
-    catalog_.addFunction(new AggregateFunction(fnName,
-        new FunctionArgs(Lists.newArrayList(argTypes), false), retType));
+    catalog_.addFunction(
+        new AggregateFunction(fnName, Lists.newArrayList(argTypes), retType, retType,
+            null, null, null, null, null, null, null, null));
+  }
+
+  /**
+   * Add a new dummy database with the given name to the catalog.
+   * Returns the new dummy database.
+   * The database is registered in testDbs_ and removed in the @After method.
+   */
+  protected Db addTestDb(String dbName) {
+    Db db = catalog_.getDb(dbName);
+    Preconditions.checkState(db == null, "Test db must not already exist.");
+    db = new Db(dbName, catalog_, null);
+    catalog_.addDb(db);
+    testDbs_.add(db);
+    return db;
+  }
+
+  protected void clearTestDbs() {
+    for (Db testDb: testDbs_) {
+      catalog_.removeDb(testDb.getName());
+    }
+  }
+
+  /**
+   * Add a new dummy table to the catalog based on the given CREATE TABLE sql.
+   * The dummy table only has the column definitions and no other metadata.
+   * Returns the new dummy table.
+   * The test tables are registered in testTables_ and removed in the @After method.
+   */
+  protected Table addTestTable(String createTableSql) {
+    CreateTableStmt createTableStmt = (CreateTableStmt) AnalyzesOk(createTableSql);
+    // Currently does not support partitioned tables.
+    Preconditions.checkState(createTableStmt.getPartitionColumnDefs().isEmpty());
+    Db db = catalog_.getDb(createTableStmt.getDb());
+    Preconditions.checkNotNull(db, "Test tables must be created in an existing db.");
+    HdfsTable dummyTable = new HdfsTable(null, null, db, createTableStmt.getTbl(),
+        createTableStmt.getOwner());
+    List<ColumnDef> columnDefs = createTableStmt.getColumnDefs();
+    for (int i = 0; i < columnDefs.size(); ++i) {
+      ColumnDef colDef = columnDefs.get(i);
+      dummyTable.addColumn(new Column(colDef.getColName(), colDef.getType(), i));
+    }
+    db.addTable(dummyTable);
+    testTables_.add(dummyTable);
+    return dummyTable;
+  }
+
+  protected void clearTestTables() {
+    for (Table testTable: testTables_) {
+      testTable.getDb().removeTable(testTable.getName());
+    }
+  }
+
+  @After
+  public void tearDown() {
+    clearTestTables();
+    clearTestDbs();
   }
 
   /**
@@ -272,12 +338,48 @@ public class AnalyzerTest {
       Preconditions.checkNotNull(analysisResult.getStmt());
     } catch (Exception e) {
       String errorString = e.getMessage();
+      Preconditions.checkNotNull(errorString, "Stack trace lost during exception.");
       Assert.assertTrue(
           "got error:\n" + errorString + "\nexpected:\n" + expectedErrorString,
           errorString.startsWith(expectedErrorString));
       return;
     }
-    fail("Stmt didn't result in rewrite error: " + stmt);
+    fail("Stmt didn't result in analysis error: " + stmt);
+  }
+
+  /**
+   * Generates and analyzes two variants of the given query by replacing all occurrences
+   * of "$TBL" in the query string with the unqualified and fully-qualified version of
+   * the given table name. The unqualified variant is analyzed using an analyzer that has
+   * tbl's db set as the default database.
+   * Example:
+   * query = "select id from $TBL, $TBL"
+   * tbl = "functional.alltypes"
+   * Variants generated and analyzed:
+   * select id from alltypes, alltypes (default db is "functional")
+   * select id from functional.alltypes, functional.alltypes (default db is "default")
+   */
+  protected void TblsAnalyzeOk(String query, TableName tbl) {
+    Preconditions.checkState(tbl.isFullyQualified());
+    Preconditions.checkState(query.contains("$TBL"));
+    String uqQuery = query.replace("$TBL", tbl.getTbl());
+    AnalyzesOk(uqQuery, createAnalyzer(tbl.getDb()));
+    String fqQuery = query.replace("$TBL", tbl.toString());
+    AnalyzesOk(fqQuery);
+  }
+
+  /**
+   * Same as TblsAnalyzeOk(), except that analysis of all variants is expected
+   * to fail with the given error message.
+   */
+  protected void TblsAnalysisError(String query, TableName tbl,
+      String expectedError) {
+    Preconditions.checkState(tbl.isFullyQualified());
+    Preconditions.checkState(query.contains("$TBL"));
+    String uqQuery = query.replace("$TBL", tbl.getTbl());
+    AnalysisError(uqQuery, createAnalyzer(tbl.getDb()), expectedError);
+    String fqQuery = query.replace("$TBL", tbl.toString());
+    AnalysisError(fqQuery, expectedError);
   }
 
   /**
@@ -323,7 +425,7 @@ public class AnalyzerTest {
       slotD.setIsMaterialized(true);
     }
     descTbl.computeMemLayout();
-    Assert.assertEquals(97.0f, tupleD.getAvgSerializedSize());
+    Assert.assertEquals(97.0f, tupleD.getAvgSerializedSize(), 0.0);
     checkLayoutParams("functional.alltypes.bool_col", 1, 2, 0, 0);
     checkLayoutParams("functional.alltypes.tinyint_col", 1, 3, 0, 1);
     checkLayoutParams("functional.alltypes.smallint_col", 2, 4, 0, 2);
@@ -352,7 +454,7 @@ public class AnalyzerTest {
       slotD.setIsMaterialized(true);
     }
     descTbl.computeMemLayout();
-    Assert.assertEquals(16.0f, aggDesc.getAvgSerializedSize());
+    Assert.assertEquals(16.0f, aggDesc.getAvgSerializedSize(), 0.0);
     Assert.assertEquals(16, aggDesc.getByteSize());
     checkLayoutParams(aggDesc.getSlots().get(0), 8, 0, 0, -1);
     checkLayoutParams(aggDesc.getSlots().get(1), 8, 8, 0, -1);
@@ -372,7 +474,7 @@ public class AnalyzerTest {
       slotD.setIsMaterialized(true);
     }
     descTbl.computeMemLayout();
-    Assert.assertEquals(16.0f, aggDesc.getAvgSerializedSize());
+    Assert.assertEquals(16.0f, aggDesc.getAvgSerializedSize(), 0.0);
     Assert.assertEquals(24, aggDesc.getByteSize());
     checkLayoutParams(aggDesc.getSlots().get(0), 8, 8, 0, 0);
     checkLayoutParams(aggDesc.getSlots().get(1), 8, 16, 0, -1);
@@ -395,7 +497,7 @@ public class AnalyzerTest {
     slots.get(9).setIsMaterialized(false);
 
     descTbl.computeMemLayout();
-    Assert.assertEquals(68.0f, tupleD.getAvgSerializedSize());
+    Assert.assertEquals(68.0f, tupleD.getAvgSerializedSize(), 0.0);
     // Check non-materialized slots.
     checkLayoutParams("functional.alltypes.id", 0, -1, 0, 0);
     checkLayoutParams("functional.alltypes.double_col", 0, -1, 0, 0);
@@ -427,6 +529,13 @@ public class AnalyzerTest {
     checkLayoutParams(d, byteSize, byteOffset, nullIndicatorByte, nullIndicatorBit);
   }
 
+  // Analyzes query and asserts that the first result expr returns the given type.
+  // Requires query to parse to a SelectStmt.
+  protected void checkExprType(String query, Type type) {
+    SelectStmt select = (SelectStmt) AnalyzesOk(query);
+    Assert.assertEquals(select.getResultExprs().get(0).getType(), type);
+  }
+
   /**
    * We distinguish between three classes of unsupported types:
    * 1. Complex types, e.g., map
@@ -442,6 +551,10 @@ public class AnalyzerTest {
   public void TestUnsupportedTypes() {
     // Select supported types from a table with mixed supported/unsupported types.
     AnalyzesOk("select int_col, str_col, bigint_col from functional.unsupported_types");
+
+    // Select supported types from a table with mixed supported/unsupported types.
+    AnalyzesOk("select int_col, str_col, bigint_col from functional.unsupported_types");
+
     // Unsupported type binary.
     AnalysisError("select bin_col from functional.unsupported_types",
         "Unsupported type 'BINARY' in 'bin_col'.");
@@ -451,7 +564,7 @@ public class AnalyzerTest {
         "Unsupported type 'BINARY' in 'bin_col'.");
     // Unsupported partition-column type.
     AnalysisError("select * from functional.unsupported_partition_types",
-        "Failed to load metadata for table: functional.unsupported_partition_types");
+        "Failed to load metadata for table: 'functional.unsupported_partition_types'");
 
     // Try with hbase
     AnalyzesOk("describe functional_hbase.allcomplextypes");
@@ -465,7 +578,7 @@ public class AnalyzerTest {
   @Test
   public void TestUnsupportedSerde() {
     AnalysisError("select * from functional.bad_serde",
-                  "Failed to load metadata for table: functional.bad_serde");
+        "Failed to load metadata for table: 'functional.bad_serde'");
   }
 
   @Test
@@ -502,7 +615,7 @@ public class AnalyzerTest {
     // Analysis error from explain query
     AnalysisError("explain " +
         "select id from (select id+2 from functional_hbase.alltypessmall) a",
-        "couldn't resolve column reference: 'id'");
+        "Could not resolve column/field reference: 'id'");
 
     // Positive test for explain query
     AnalyzesOk("explain select * from functional.AllTypes");

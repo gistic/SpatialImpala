@@ -20,21 +20,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.apache.hadoop.hive.common.StatsSetupConst;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import org.apache.hadoop.hive.metastore.TableType;
-import org.apache.hadoop.hive.metastore.api.ColumnStatistics;
+import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
-import org.apache.hadoop.hive.ql.stats.StatsSetupConst;
 import org.apache.log4j.Logger;
 
 import com.cloudera.impala.analysis.TableName;
+import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.thrift.TAccessLevel;
 import com.cloudera.impala.thrift.TCatalogObject;
 import com.cloudera.impala.thrift.TCatalogObjectType;
 import com.cloudera.impala.thrift.TColumn;
+import com.cloudera.impala.thrift.TColumnDescriptor;
 import com.cloudera.impala.thrift.TTable;
 import com.cloudera.impala.thrift.TTableDescriptor;
 import com.cloudera.impala.thrift.TTableStats;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
@@ -63,7 +66,6 @@ public abstract class Table implements CatalogObject {
   protected final String name_;
   protected final String owner_;
   protected TTableDescriptor tableDesc_;
-  protected List<FieldSchema> fields_;
   protected TAccessLevel accessLevel_ = TAccessLevel.READ_WRITE;
 
   // Number of clustering columns.
@@ -74,10 +76,13 @@ public abstract class Table implements CatalogObject {
 
   // colsByPos[i] refers to the ith column in the table. The first numClusteringCols are
   // the clustering columns.
-  private final ArrayList<Column> colsByPos_;
+  protected final ArrayList<Column> colsByPos_ = Lists.newArrayList();
 
   // map from lowercase column name to Column object.
-  private final Map<String, Column> colsByName_;
+  private final Map<String, Column> colsByName_ = Maps.newHashMap();
+
+  // Type of this table (array of struct) that mirrors the columns. Useful for analysis.
+  protected final ArrayType type_ = new ArrayType(new StructType());
 
   // The lastDdlTime for this table; -1 if not set
   protected long lastDdlTime_;
@@ -93,14 +98,10 @@ public abstract class Table implements CatalogObject {
     db_ = db;
     name_ = name.toLowerCase();
     owner_ = owner;
-    colsByPos_ = Lists.newArrayList();
-    colsByName_ = Maps.newHashMap();
     lastDdlTime_ = (msTable_ != null) ?
         CatalogServiceCatalog.getLastDdlTime(msTable_) : -1;
   }
 
-  //number of nodes that contain data for this table; -1: unknown
-  public abstract int getNumNodes();
   public abstract TTableDescriptor toThriftDescriptor(Set<Long> referencedPartitions);
   public abstract TCatalogObjectType getCatalogObjectType();
 
@@ -114,11 +115,14 @@ public abstract class Table implements CatalogObject {
   public void addColumn(Column col) {
     colsByPos_.add(col);
     colsByName_.put(col.getName().toLowerCase(), col);
+    ((StructType) type_.getItemType()).addField(
+        new StructField(col.getName(), col.getType(), col.getComment()));
   }
 
   public void clearColumns() {
     colsByPos_.clear();
     colsByName_.clear();
+    ((StructType) type_.getItemType()).clearFields();
   }
 
   /**
@@ -131,35 +135,54 @@ public abstract class Table implements CatalogObject {
     if (ddlTime > lastDdlTime_) lastDdlTime_ = ddlTime;
   }
 
+  // Returns a list of all column names for this table which we expect to have column
+  // stats in the HMS. This exists because, when we request the column stats from HMS,
+  // including a column name that does not have stats causes the
+  // getTableColumnStatistics() to return nothing. For Hdfs tables, partition columns do
+  // not have column stats in the HMS, but HBase table clustering columns do have column
+  // stats. This method allows each table type to volunteer the set of columns we should
+  // ask the metastore for in loadAllColumnStats().
+  protected List<String> getColumnNamesWithHmsStats() {
+    List<String> ret = Lists.newArrayList();
+    for (String name: colsByName_.keySet()) ret.add(name);
+    return ret;
+  }
+
   /**
-   * Loads the column stats for col from the Hive Metastore.
+   * Loads column statistics for all columns in this table from the Hive metastore. Any
+   * errors are logged and ignored, since the absence of column stats is not critical to
+   * the correctness of the system.
    */
-  protected void loadColumnStats(Column col, HiveMetaStoreClient client) {
-    ColumnStatistics colStats = null;
+  protected void loadAllColumnStats(HiveMetaStoreClient client) {
+    LOG.debug("Loading column stats for table: " + name_);
+    List<ColumnStatisticsObj> colStats;
+
+    // We need to only query those columns which may have stats; asking HMS for other
+    // columns causes loadAllColumnStats() to return nothing.
+    List<String> colNames = getColumnNamesWithHmsStats();
+
     try {
-      colStats = client.getTableColumnStatistics(db_.getName(), name_, col.getName());
+      colStats = client.getTableColumnStatistics(db_.getName(), name_, colNames);
     } catch (Exception e) {
-      // don't try to load stats for this column
+      LOG.warn("Could not load column statistics for: " + getFullName(), e);
       return;
     }
 
-    // we should never see more than one ColumnStatisticsObj here
-    if (colStats.getStatsObj().size() > 1) return;
+    for (ColumnStatisticsObj stats: colStats) {
+      Column col = getColumn(stats.getColName());
+      Preconditions.checkNotNull(col);
+      if (!ColumnStats.isSupportedColType(col.getType())) {
+        LOG.warn(String.format("Statistics for %s, column %s are not supported as " +
+                "column has type %s", getFullName(), col.getName(), col.getType()));
+        continue;
+      }
 
-    if (!ColumnStats.isSupportedColType(col.getType())) {
-      LOG.warn(String.format("Column stats are available for table %s / " +
-          "column '%s', but Impala does not currently support column stats for this " +
-          "type of column (%s)",  name_, col.getName(), col.getType().toString()));
-      return;
-    }
-
-    // Update the column stats data
-    if (!col.updateStats(colStats.getStatsObj().get(0).getStatsData())) {
-      LOG.warn(String.format("Applying the column stats update to table %s / " +
-          "column '%s' did not succeed because column type (%s) was not compatible " +
-          "with the column stats data. Performance may suffer until column stats are" +
-          " regenerated for this column.",
-          name_, col.getName(), col.getType().toString()));
+      if (!col.updateStats(stats.getStatsData())) {
+        LOG.warn(String.format("Failed to load column stats for %s, column %s. Stats " +
+            "may be incompatible with column type %s. Consider regenerating statistics " +
+            "for %s.", getFullName(), col.getName(), col.getType(), getFullName()));
+        continue;
+      }
     }
   }
 
@@ -188,7 +211,7 @@ public abstract class Table implements CatalogObject {
     Table table = null;
     if (TableType.valueOf(msTbl.getTableType()) == TableType.VIRTUAL_VIEW) {
       table = new View(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
-    } else if (msTbl.getSd().getInputFormat().equals(HBaseTable.getInputFormat())) {
+    } else if (HBaseTable.isHBaseTable(msTbl)) {
       table = new HBaseTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
     } else if (DataSourceTable.isDataSourceTable(msTbl)) {
       // It's important to check if this is a DataSourceTable before HdfsTable because
@@ -196,7 +219,7 @@ public abstract class Table implements CatalogObject {
       // have a special table property to indicate that Impala should use an external
       // data source.
       table = new DataSourceTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
-    } else if (HdfsFileFormat.isHdfsFormatClass(msTbl.getSd().getInputFormat())) {
+    } else if (HdfsFileFormat.isHdfsInputFormatClass(msTbl.getSd().getInputFormat())) {
     	// Checking if the table is Spatial or not.
     	if (SpatialHdfsTable.isSpatial(msTbl))
     		table = new SpatialHdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
@@ -230,15 +253,14 @@ public abstract class Table implements CatalogObject {
     columns.addAll(thriftTable.getClustering_columns());
     columns.addAll(thriftTable.getColumns());
 
-    fields_ = new ArrayList<FieldSchema>();
     colsByPos_.clear();
     colsByPos_.ensureCapacity(columns.size());
     for (int i = 0; i < columns.size(); ++i) {
       Column col = Column.fromThrift(columns.get(i));
       colsByPos_.add(col.getPosition(), col);
       colsByName_.put(col.getName().toLowerCase(), col);
-      fields_.add(new FieldSchema(col.getName(),
-        col.getType().toString().toLowerCase(), col.getComment()));
+      ((StructType) type_.getItemType()).addField(
+          new StructField(col.getName(), col.getType(), col.getComment()));
     }
 
     numClusteringCols_ = thriftTable.getClustering_columns().size();
@@ -306,30 +328,31 @@ public abstract class Table implements CatalogObject {
    *   - Supported by Impala, in which case the type is returned.
    *   - A type Impala understands but is not yet implemented (e.g. date), the type is
    *     returned but type.IsSupported() returns false.
+   *   - A supported type that exceeds an Impala limit, e.g., on the nesting depth.
    *   - A type Impala can't understand at all, and a TableLoadingException is thrown.
    */
    protected Type parseColumnType(FieldSchema fs) throws TableLoadingException {
-     Type type = Type.parseColumnType(fs);
+     Type type = Type.parseColumnType(fs.getType());
      if (type == null) {
        throw new TableLoadingException(String.format(
            "Unsupported type '%s' in column '%s' of table '%s'",
            fs.getType(), fs.getName(), getName()));
      }
+     if (type.exceedsMaxNestingDepth()) {
+       throw new TableLoadingException(String.format(
+           "Type exceeds the maximum nesting depth of %s:\n%s",
+           Type.MAX_NESTING_DEPTH, type.toSql()));
+     }
      return type;
    }
 
-  /**
-   * Returns true if this table is not a base table that stores data (e.g., a view).
-   * Virtual tables should not be added to the descriptor table sent to the BE, i.e.,
-   * toThrift() should not work on virtual tables.
-   */
-  public boolean isVirtualTable() { return false; }
   public Db getDb() { return db_; }
   public String getName() { return name_; }
   public String getFullName() { return (db_ != null ? db_.getName() + "." : "") + name_; }
   public TableName getTableName() {
     return new TableName(db_ != null ? db_.getName() : null, name_);
   }
+
   public String getOwner() { return owner_; }
   public ArrayList<Column> getColumns() { return colsByPos_; }
 
@@ -345,6 +368,17 @@ public abstract class Table implements CatalogObject {
   }
 
   /**
+   * Returns a list of thrift column descriptors ordered by position.
+   */
+  public List<TColumnDescriptor> getTColumnDescriptors() {
+    List<TColumnDescriptor> colDescs = Lists.<TColumnDescriptor>newArrayList();
+    for (Column col: colsByPos_) {
+      colDescs.add(new TColumnDescriptor(col.getName(), col.getType().toThrift()));
+    }
+    return colDescs;
+  }
+
+  /**
    * Subclasses should override this if they provide a storage handler class. Currently
    * only HBase tables need to provide a storage handler.
    */
@@ -356,15 +390,30 @@ public abstract class Table implements CatalogObject {
    * which Hive enumerates columns.
    */
   public ArrayList<Column> getColumnsInHiveOrder() {
-    ArrayList<Column> columns = Lists.newArrayList();
-    for (Column column: colsByPos_.subList(numClusteringCols_, colsByPos_.size())) {
-      columns.add(column);
-    }
+    ArrayList<Column> columns = Lists.newArrayList(getNonClusteringColumns());
 
     for (Column column: colsByPos_.subList(0, numClusteringCols_)) {
       columns.add(column);
     }
     return columns;
+  }
+
+  /**
+   * Returns a struct type with the columns in the same order as getColumnsInHiveOrder().
+   */
+  public StructType getHiveColumnsAsStruct() {
+    ArrayList<StructField> fields = Lists.newArrayListWithCapacity(colsByPos_.size());
+    for (Column col: getColumnsInHiveOrder()) {
+      fields.add(new StructField(col.getName(), col.getType(), col.getComment()));
+    }
+    return new StructType(fields);
+  }
+
+  /**
+   * Returns the list of all columns excluding any partition columns.
+   */
+  public List<Column> getNonClusteringColumns() {
+    return colsByPos_.subList(numClusteringCols_, colsByPos_.size());
   }
 
   /**
@@ -383,6 +432,7 @@ public abstract class Table implements CatalogObject {
   public int getNumClusteringCols() { return numClusteringCols_; }
   public TableId getId() { return id_; }
   public long getNumRows() { return numRows_; }
+  public ArrayType getType() { return type_; }
 
   @Override
   public long getCatalogVersion() { return catalogVersion_; }

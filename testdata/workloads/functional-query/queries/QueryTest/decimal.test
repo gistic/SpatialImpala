@@ -87,17 +87,17 @@ decimal,decimal
 ---- QUERY
 select ndv(c1), distinctpc(c2), distinctpcsa(c1 + c2) from decimal_tiny
 ---- RESULTS
-95,'94','137'
+98,94,103
 ---- TYPES
-bigint,string,string
+bigint,bigint,bigint
 ====
 ---- QUERY
 select ndv(d1), distinctpc(d1), distinctpcsa(d1), count(distinct d1)
 from decimal_tbl;
 ---- RESULTS
-4,'5','84',4
+4,5,4,4
 ---- TYPES
-bigint,string,string,bigint
+bigint,bigint,bigint,bigint
 ====
 ---- QUERY
 select c1 + c2 from decimal_tiny order by 1 limit 5
@@ -288,4 +288,86 @@ from decimal_tiny where c2 < 112
 4.3329,647.66658,2.2,0.7221,107.94443,0.5
 ---- TYPES
 DECIMAL, DECIMAL, DECIMAL, DECIMAL, DECIMAL, DECIMAL
+====
+---- QUERY
+# IMPALA-1559: FIRST_VALUE rewrite function intermediate type not matching slot type
+select
+first_value(c3) over (order by c3 rows between 92 preceding and current row),
+first_value(c2) over (order by c3 rows between 92 preceding and 1 preceding)
+from decimal_tiny where c3 = 0.0
+---- RESULTS
+0.0,NULL
+0.0,100.00000
+0.0,100.00000
+0.0,100.00000
+0.0,100.00000
+0.0,100.00000
+0.0,100.00000
+0.0,100.00000
+0.0,100.00000
+0.0,100.00000
+---- TYPES
+DECIMAL, DECIMAL
+====
+---- QUERY
+select histogram(d1) from decimal_tbl;
+---- RESULTS
+'1234, 2345, 12345, 12345, 132842'
+---- TYPES
+STRING
+====
+---- QUERY
+select appx_median(c1), appx_median(c2), appx_median(c3) from decimal_tiny
+---- RESULTS
+5.5550,161.11100,0.5
+---- TYPES
+DECIMAL, DECIMAL, DECIMAL
+====
+---- QUERY
+select sample(d1) from decimal_tbl;
+---- TYPES
+# Results are unstable, just check that this doesn't crash
+STRING
+====
+---- QUERY
+# IMPALA-1837: Handle loss of precision when implicitly casting a literal to a decimal.
+# Here "1.8" will be implicitly cast to a decimal(38,38), losing precision.
+select coalesce(1.8, cast(0 as decimal(38,38)))
+---- TYPES
+DECIMAL
+---- RESULTS
+0.00000000000000000000000000000000000000
+---- ERRORS
+UDF WARNING: Expression overflowed, returning NULL
+====
+---- QUERY
+# IMPALA-1837: Handle loss of precision when implicitly casting a literal to a decimal.
+# Here "1.8" will be implicitly cast to a decimal(38,38), losing precision.
+# No error is reported because the overflowed expr is never evaluated.
+select coalesce(cast(0 as decimal(38,38)), 1.8)
+---- TYPES
+DECIMAL
+---- RESULTS
+0.00000000000000000000000000000000000000
+---- ERRORS
+====
+---- QUERY
+# IMPALA-2259 - wrong overload chosen for analytic function.
+select lag(c1, 1) over (order by c1), c1
+from decimal_tiny
+order by c1
+limit 10
+---- RESULTS
+NULL,0.0000
+0.0000,0.1111
+0.1111,0.2222
+0.2222,0.3333
+0.3333,0.4444
+0.4444,0.5555
+0.5555,0.6666
+0.6666,0.7777
+0.7777,0.8888
+0.8888,0.9999
+---- TYPES
+DECIMAL, DECIMAL
 ====

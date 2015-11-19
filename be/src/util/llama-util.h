@@ -39,9 +39,11 @@ std::ostream& operator<<(std::ostream& os,
 std::ostream& operator<<(std::ostream& os,
     const llama::TLlamaAMReleaseRequest& request);
 
-// 'Assignment' operators to convert types between the llama and impala namespaces.
+/// 'Assignment' operators to convert types between the llama and impala namespaces.
 llama::TUniqueId& operator<<(llama::TUniqueId& dest, const impala::TUniqueId& src);
 impala::TUniqueId& operator<<(impala::TUniqueId& dest, const llama::TUniqueId& src);
+
+std::string PrintId(const llama::TUniqueId& id, const std::string& separator = ":");
 
 bool operator==(const impala::TUniqueId& impala_id, const llama::TUniqueId& llama_id);
 
@@ -53,13 +55,17 @@ impala::TNetworkAddress& operator<<(impala::TNetworkAddress& dest,
 impala::Status LlamaStatusToImpalaStatus(const llama::TStatus& status,
     const std::string& err_prefix = "");
 
-// This function must be called 'hash_value' to be picked up by boost.
+/// This function must be called 'hash_value' to be picked up by boost.
 inline std::size_t hash_value(const llama::TUniqueId& id) {
   std::size_t seed = 0;
   boost::hash_combine(seed, id.lo);
   boost::hash_combine(seed, id.hi);
   return seed;
 }
+
+/// Get the short version of the user name (the user's name up to the first '/' or '@')
+/// If neither are found (or are found at the beginning of the user name) return username.
+std::string GetShortName(const std::string& user);
 
 }
 

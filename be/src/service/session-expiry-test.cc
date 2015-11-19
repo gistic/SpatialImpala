@@ -24,11 +24,11 @@
 #include "util/impalad-metrics.h"
 #include "util/time.h"
 
-using namespace apache::thrift;
+#include "common/names.h"
+
 using namespace apache::hive::service::cli::thrift;
-using namespace boost;
+using namespace apache::thrift;
 using namespace impala;
-using namespace std;
 
 DECLARE_int32(idle_session_timeout);
 DECLARE_int32(be_port);
@@ -45,13 +45,15 @@ TEST(SessionTest, TestExpiry) {
       new InProcessImpalaServer("localhost", FLAGS_be_port, 0, 0, "", 0);
   EXIT_IF_ERROR(
       impala->StartWithClientServers(FLAGS_beeswax_port, FLAGS_beeswax_port + 1, false));
-  Metrics::IntMetric* expired_metric = impala->metrics()->GetMetric<Metrics::IntMetric>(
-      ImpaladMetricKeys::NUM_SESSIONS_EXPIRED);
-  Metrics::IntMetric* beeswax_session_metric =
-      impala->metrics()->GetMetric<Metrics::IntMetric>(
+  IntCounter* expired_metric =
+      impala->metrics()->FindMetricForTesting<IntCounter>(
+          ImpaladMetricKeys::NUM_SESSIONS_EXPIRED);
+  DCHECK(expired_metric != NULL);
+  IntGauge* beeswax_session_metric =
+      impala->metrics()->FindMetricForTesting<IntGauge>(
           ImpaladMetricKeys::IMPALA_SERVER_NUM_OPEN_BEESWAX_SESSIONS);
-  Metrics::IntMetric* hs2_session_metric =
-      impala->metrics()->GetMetric<Metrics::IntMetric>(
+  IntGauge* hs2_session_metric =
+      impala->metrics()->FindMetricForTesting<IntGauge>(
           ImpaladMetricKeys::IMPALA_SERVER_NUM_OPEN_HS2_SESSIONS);
   EXPECT_EQ(expired_metric->value(), 0L);
   EXPECT_EQ(beeswax_session_metric->value(), 0L);
@@ -73,8 +75,8 @@ TEST(SessionTest, TestExpiry) {
     hs2_clients[i]->iface()->OpenSession(response, request);
   }
 
-  int64_t start = ms_since_epoch();
-  while (expired_metric->value() != 10 && ms_since_epoch() - start < 5000) {
+  int64_t start = UnixMillis();
+  while (expired_metric->value() != 10 && UnixMillis() - start < 5000) {
     SleepForMs(100);
   }
 

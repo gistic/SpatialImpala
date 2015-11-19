@@ -14,8 +14,11 @@
 
 package com.cloudera.impala.analysis;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+
+import org.apache.hadoop.fs.permission.FsAction;
 
 import com.cloudera.impala.authorization.AuthorizeableFn;
 import com.cloudera.impala.authorization.Privilege;
@@ -32,7 +35,7 @@ import com.google.common.collect.Lists;
 /**
  * Base class for CREATE [] FUNCTION.
  */
-public class CreateFunctionStmtBase extends StatementBase {
+public abstract class CreateFunctionStmtBase extends StatementBase {
   // Enums for valid keys for optional arguments.
   public enum OptArg {
     COMMENT,
@@ -46,19 +49,26 @@ public class CreateFunctionStmtBase extends StatementBase {
     FINALIZE_FN       // Only used for Udas
   };
 
-  protected final Function fn_;
+  protected final FunctionName fnName_;
+  protected final FunctionArgs args_;
+  protected final TypeDef retTypeDef_;
+  protected final HdfsUri location_;
+  protected final HashMap<CreateFunctionStmtBase.OptArg, String> optArgs_;
   protected final boolean ifNotExists_;
 
-  // Additional arguments to create function.
-  protected final HashMap<OptArg, String> optArgs_;
+  // Result of analysis.
+  protected Function fn_;
 
   // Set in analyze()
   protected String sqlString_;
 
-  protected CreateFunctionStmtBase(Function fn, HdfsUri location, boolean ifNotExists,
-      HashMap<OptArg, String> optArgs) {
-    fn_ = fn;
-    fn_.setLocation(location);
+  protected CreateFunctionStmtBase(FunctionName fnName, FunctionArgs args,
+      TypeDef retTypeDef, HdfsUri location, boolean ifNotExists,
+      HashMap<CreateFunctionStmtBase.OptArg, String> optArgs) {
+    fnName_ = fnName;
+    args_ = args;
+    retTypeDef_ = retTypeDef;
+    location_ = location;
     ifNotExists_ = ifNotExists;
     optArgs_ = optArgs;
   }
@@ -114,7 +124,14 @@ public class CreateFunctionStmtBase extends StatementBase {
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
     // Validate function name is legal
-    fn_.getFunctionName().analyze(analyzer);
+    fnName_.analyze(analyzer);
+
+    // Validate function arguments and return type.
+    args_.analyze(analyzer);
+    retTypeDef_.analyze(analyzer);
+
+    fn_ = createFunction(fnName_, args_.getArgTypes(), retTypeDef_.getType(),
+        args_.hasVarArgs());
 
     // For now, if authorization is enabled, the user needs ALL on the server
     // to create functions.
@@ -128,12 +145,6 @@ public class CreateFunctionStmtBase extends StatementBase {
           fn_.getFunctionName().getFunction());
     }
 
-    // Validate function arguments
-    for (Type t: fn_.getArgs()) {
-      t.analyze();
-    }
-    fn_.getReturnType().analyze();
-
     // Forbid unsupported and complex types.
     List<Type> refdTypes = Lists.newArrayList(fn_.getReturnType());
     refdTypes.addAll(Lists.newArrayList(fn_.getArgs()));
@@ -144,20 +155,23 @@ public class CreateFunctionStmtBase extends StatementBase {
       }
     }
 
-    if (analyzer.getDb(fn_.dbName(), Privilege.CREATE) == null) {
-      throw new AnalysisException(Analyzer.DB_DOES_NOT_EXIST_ERROR_MSG + fn_.dbName());
-    }
-
-    Function existingFn = analyzer.getCatalog().getFunction(
-        fn_, Function.CompareMode.IS_INDISTINGUISHABLE);
+    Db db = analyzer.getDb(fn_.dbName(), Privilege.CREATE);
+    Function existingFn = db.getFunction(fn_, Function.CompareMode.IS_INDISTINGUISHABLE);
     if (existingFn != null && !ifNotExists_) {
       throw new AnalysisException(Analyzer.FN_ALREADY_EXISTS_ERROR_MSG +
           existingFn.signatureString());
     }
 
-    fn_.getLocation().analyze(analyzer, Privilege.CREATE);
+    location_.analyze(analyzer, Privilege.CREATE, FsAction.READ);
+    fn_.setLocation(location_);
 
     // Check the file type from the binary type to infer the type of the UDA
     fn_.setBinaryType(getBinaryType());
   }
+
+  /**
+   * Creates a concrete function.
+   */
+  protected abstract Function createFunction(FunctionName fnName,
+      ArrayList<Type> argTypes, Type retType, boolean hasVarArgs);
 }

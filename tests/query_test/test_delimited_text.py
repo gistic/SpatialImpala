@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # Targeted Impala tests for different tuple delimiters, field delimiters,
 # and escape characters.
@@ -7,6 +6,7 @@ from tests.common.test_vector import *
 from tests.common.impala_test_suite import *
 from tests.common.test_dimensions import create_exec_option_dimension
 from tests.common.test_dimensions import create_uncompressed_text_dimension
+
 
 class TestDelimitedText(ImpalaTestSuite):
   """

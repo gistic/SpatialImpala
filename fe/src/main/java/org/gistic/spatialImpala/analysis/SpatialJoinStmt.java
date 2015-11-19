@@ -22,6 +22,7 @@ import com.cloudera.impala.analysis.BinaryPredicate;
 import com.cloudera.impala.analysis.IsNullPredicate;
 import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.NumericLiteral;
+import com.cloudera.impala.analysis.Path;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -106,18 +107,18 @@ public class SpatialJoinStmt extends StatementBase {
 
 		// Preparing data for SelectStmt.
 		List<TableRef> tableRefs = new ArrayList<TableRef>();
-		tableRefs.add(new TableRef(tableName1_, null));
-    tableRefs.add(new TableRef(tableName2_, null));
+		tableRefs.add(new TableRef(tableName1_.toPath(), null));
+    tableRefs.add(new TableRef(tableName2_.toPath(), null));
 
 		List<SelectListItem> items = new ArrayList<SelectListItem>();
-		items.add(new SelectListItem(new SlotRef(tableName1_, X1), null));
-		items.add(new SelectListItem(new SlotRef(tableName1_, Y1), null));
-    items.add(new SelectListItem(new SlotRef(tableName1_, X2), null));
-    items.add(new SelectListItem(new SlotRef(tableName1_, Y2), null));
-    items.add(new SelectListItem(new SlotRef(tableName2_, X1), null));
-    items.add(new SelectListItem(new SlotRef(tableName2_, Y1), null));
-    items.add(new SelectListItem(new SlotRef(tableName2_, X2), null));
-    items.add(new SelectListItem(new SlotRef(tableName2_, Y2), null));
+		items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName1_.toString(), X1)), null));
+		items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName1_.toString(), Y1)), null));
+    items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName1_.toString(), X2)), null));
+    items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName1_.toString(), Y2)), null));
+    items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName2_.toString(), X1)), null));
+    items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName2_.toString(), Y1)), null));
+    items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName2_.toString(), X2)), null));
+    items.add(new SelectListItem(new SlotRef(Path.createRawPath(tableName2_.toString(), Y2)), null));
 
 		selectStmt_ = new SelectStmt(new SelectList(items), tableRefs,
 				createWherePredicate(null), null, null, null, null);
@@ -137,14 +138,14 @@ public class SpatialJoinStmt extends StatementBase {
 	private Expr createWherePredicate(List<GlobalIndexRecord> globalIndexes) { 
 
 		// Create Rectangle predicate.
-		SlotRef x11 = new SlotRef(tableName1_, X1);
-    SlotRef y11 = new SlotRef(tableName1_, Y1);
-    SlotRef x12 = new SlotRef(tableName1_, X2);
-    SlotRef y12 = new SlotRef(tableName1_, Y2);
-    SlotRef x21 = new SlotRef(tableName2_, X1);
-    SlotRef y21 = new SlotRef(tableName2_, Y1);
-    SlotRef x22 = new SlotRef(tableName2_, X2);
-    SlotRef y22 = new SlotRef(tableName2_, Y2);
+		SlotRef x11 = new SlotRef(Path.createRawPath(tableName1_.toString(), X1));
+    SlotRef y11 = new SlotRef(Path.createRawPath(tableName1_.toString(), Y1));
+    SlotRef x12 = new SlotRef(Path.createRawPath(tableName1_.toString(), X2));
+    SlotRef y12 = new SlotRef(Path.createRawPath(tableName1_.toString(), Y2));
+    SlotRef x21 = new SlotRef(Path.createRawPath(tableName2_.toString(), X1));
+    SlotRef y21 = new SlotRef(Path.createRawPath(tableName2_.toString(), Y1));
+    SlotRef x22 = new SlotRef(Path.createRawPath(tableName2_.toString(), X2));
+    SlotRef y22 = new SlotRef(Path.createRawPath(tableName2_.toString(), Y2));
 
 		Expr wherePredicate = new BinaryPredicate(
 						BinaryPredicate.Operator.LE, x11,x22);

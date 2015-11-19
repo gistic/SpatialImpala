@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 #
 # This modules contians utility functions used to help verify query test results.
@@ -337,7 +336,13 @@ def verify_raw_results(test_section, exec_result, file_format, update_section=Fa
   # then sort the actual and expected results before verification.
   if verifier and verifier.upper() == 'VERIFY_IS_EQUAL_SORTED':
     order_matters = False
-  expected = QueryTestResult(expected_results.split('\n'), expected_types,
+  expected_results_list = []
+  if 'MULTI_LINE' in test_section:
+    expected_results_list = map(lambda s: s.replace('\n', '\\n'),
+        re.findall(r'\[(.*?)\]', expected_results, flags=re.DOTALL))
+  else:
+    expected_results_list = expected_results.split('\n')
+  expected = QueryTestResult(expected_results_list, expected_types,
       actual_labels, order_matters)
   actual = QueryTestResult(parse_result_rows(exec_result), actual_types,
       actual_labels, order_matters)
@@ -391,7 +396,8 @@ def parse_result_rows(exec_result):
     new_cols = list()
     for i in xrange(len(cols)):
       if col_types[i] == 'STRING' or col_types[i] == 'CHAR':
-        new_cols.append("'%s'" % cols[i])
+        col = cols[i].encode('unicode_escape')
+        new_cols.append("'%s'" % col)
       else:
         new_cols.append(cols[i])
     result.append(','.join(new_cols))

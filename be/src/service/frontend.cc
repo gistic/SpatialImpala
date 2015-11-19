@@ -18,11 +18,12 @@
 #include <string>
 
 #include "common/logging.h"
-#include "rpc/thrift-util.h"
+#include "rpc/jni-thrift-util.h"
 #include "util/jni-util.h"
 #include "util/logging-support.h"
 
-using namespace std;
+#include "common/names.h"
+
 using namespace impala;
 
 DECLARE_string(sentry_config);
@@ -40,16 +41,18 @@ DEFINE_string(authorization_policy_file, "", "HDFS path to the authorization pol
     "file. If set, authorization will be enabled and the authorization policy will be "
     "read from a file.");
 DEFINE_string(authorization_policy_provider_class,
-    "org.apache.sentry.provider.file.HadoopGroupResourceAuthorizationProvider",
+    "org.apache.sentry.provider.common.HadoopGroupResourceAuthorizationProvider",
     "Advanced: The authorization policy provider class name.");
 DEFINE_string(authorized_proxy_user_config, "",
     "Specifies the set of authorized proxy users (users who can delegate to other "
     "users during authorization) and whom they are allowed to delegate. "
     "Input is a semicolon-separated list of key=value pairs of authorized proxy "
-    "users to the user(s) they can delegate to. These users are specified as a comma "
-    "separated list of short usernames, or '*' to indicate all users. For example: "
-    "hue=user1,user2;admin=*");
-
+    "users to the user(s) they can delegate to. These users are specified as a list of "
+    "short usernames separated by a delimiter (which defaults to comma and may be "
+    "changed via --authorized_proxy_user_config_delimiter), or '*' to indicate all "
+    "users. For example: hue=user1,user2;admin=*");
+DEFINE_string(authorized_proxy_user_config_delimiter, ",",
+    "Specifies the delimiter used in authorized_proxy_user_config. ");
 Frontend::Frontend() {
   JniMethodDescriptor methods[] = {
     {"<init>", "(ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;"
@@ -60,7 +63,9 @@ Frontend::Frontend() {
     {"getAllHadoopConfigs", "()[B", &get_hadoop_configs_id_},
     {"checkConfiguration", "()Ljava/lang/String;", &check_config_id_},
     {"updateCatalogCache", "([B)[B", &update_catalog_cache_id_},
+    {"updateMembership", "([B)V", &update_membership_id_},
     {"getTableNames", "([B)[B", &get_table_names_id_},
+    {"describeDb", "([B)[B", &describe_db_id_},
     {"describeTable", "([B)[B", &describe_table_id_},
     {"showCreateTable", "([B)Ljava/lang/String;", &show_create_table_id_},
     {"getDbNames", "([B)[B", &get_db_names_id_},
@@ -72,7 +77,10 @@ Frontend::Frontend() {
     {"getRolePrivileges", "([B)[B", &get_role_privileges_id_},
     {"execHiveServer2MetadataOp", "([B)[B", &exec_hs2_metadata_op_id_},
     {"setCatalogInitialized", "()V", &set_catalog_initialized_id_},
-    {"loadTableData", "([B)[B", &load_table_data_id_}};
+    {"loadTableData", "([B)[B", &load_table_data_id_},
+    {"getTableFiles", "([B)[B", &get_table_files_id_},
+    {"showCreateFunction", "([B)Ljava/lang/String;", &show_create_function_id_},
+};
 
   JNIEnv* jni_env = getJNIEnv();
   // create instance of java class JniFrontend
@@ -105,13 +113,26 @@ Status Frontend::UpdateCatalogCache(const TUpdateCatalogCacheRequest& req,
   return JniUtil::CallJniMethod(fe_, update_catalog_cache_id_, req, resp);
 }
 
+Status Frontend::UpdateMembership(const TUpdateMembershipRequest& req) {
+  return JniUtil::CallJniMethod(fe_, update_membership_id_, req);
+}
+
+Status Frontend::DescribeDb(const TDescribeDbParams& params,
+    TDescribeResult* response) {
+  return JniUtil::CallJniMethod(fe_, describe_db_id_, params, response);
+}
+
 Status Frontend::DescribeTable(const TDescribeTableParams& params,
-    TDescribeTableResult* response) {
+    TDescribeResult* response) {
   return JniUtil::CallJniMethod(fe_, describe_table_id_, params, response);
 }
 
 Status Frontend::ShowCreateTable(const TTableName& table_name, string* response) {
   return JniUtil::CallJniMethod(fe_, show_create_table_id_, table_name, response);
+}
+
+Status Frontend::ShowCreateFunction(const TGetFunctionsParams& params, string* response) {
+  return JniUtil::CallJniMethod(fe_, show_create_function_id_, params, response);
 }
 
 Status Frontend::GetTableNames(const string& db, const string* pattern,
@@ -198,7 +219,7 @@ Status Frontend::ValidateSettings() {
   if (ss.str().size() > 0) {
     return Status(ss.str());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status Frontend::ExecHiveServer2MetadataOp(const TMetadataOpRequest& request,
@@ -220,7 +241,7 @@ Status Frontend::LoadData(const TLoadDataReq& request, TLoadDataResp* response) 
 }
 
 bool Frontend::IsAuthorizationError(const Status& status) {
-  return !status.ok() && status.GetErrorMsg().find("AuthorizationException") == 0;
+  return !status.ok() && status.GetDetail().find("AuthorizationException") == 0;
 }
 
 Status Frontend::SetCatalogInitialized() {
@@ -229,5 +250,9 @@ Status Frontend::SetCatalogInitialized() {
   RETURN_IF_ERROR(jni_frame.push(jni_env));
   jni_env->CallObjectMethod(fe_, set_catalog_initialized_id_);
   RETURN_ERROR_IF_EXC(jni_env);
-  return Status::OK;
+  return Status::OK();
+}
+
+Status Frontend::GetTableFiles(const TShowFilesParams& params, TResultSet* result) {
+  return JniUtil::CallJniMethod(fe_, get_table_files_id_, params, result);
 }

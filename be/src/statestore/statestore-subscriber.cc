@@ -32,9 +32,9 @@
 #include "util/time.h"
 #include "util/debug-util.h"
 
-using namespace std;
-using namespace boost;
-using namespace boost::posix_time;
+#include "common/names.h"
+
+using boost::posix_time::seconds;
 using namespace apache::thrift;
 using namespace strings;
 
@@ -44,6 +44,7 @@ DEFINE_int32(statestore_subscriber_cnxn_attempts, 10, "The number of times to re
     "RPC connection to the statestore. A setting of 0 means retry indefinitely");
 DEFINE_int32(statestore_subscriber_cnxn_retry_interval_ms, 3000, "The interval, in ms, "
     "to wait between attempts to make an RPC connection to the statestore.");
+DECLARE_string(ssl_client_ca_certificate);
 
 namespace impala {
 
@@ -78,13 +79,17 @@ class StatestoreSubscriberThriftIf : public StatestoreSubscriberIf {
     response.__set_skipped(response.skipped);
   }
 
+  virtual void Heartbeat(THeartbeatResponse& response, const THeartbeatRequest& request) {
+    subscriber_->Heartbeat(request.registration_id);
+  }
+
  private:
   StatestoreSubscriber* subscriber_;
 };
 
 StatestoreSubscriber::StatestoreSubscriber(const std::string& subscriber_id,
     const TNetworkAddress& heartbeat_address, const TNetworkAddress& statestore_address,
-    Metrics* metrics)
+    MetricGroup* metrics)
     : subscriber_id_(subscriber_id), heartbeat_address_(heartbeat_address),
       statestore_address_(statestore_address),
       thrift_iface_(new StatestoreSubscriberThriftIf(this)),
@@ -93,20 +98,25 @@ StatestoreSubscriber::StatestoreSubscriber(const std::string& subscriber_id,
           seconds(FLAGS_statestore_subscriber_timeout_seconds / 2))),
       is_registered_(false),
       client_cache_(new StatestoreClientCache(FLAGS_statestore_subscriber_cnxn_attempts,
-          FLAGS_statestore_subscriber_cnxn_retry_interval_ms)),
-      metrics_(metrics) {
+          FLAGS_statestore_subscriber_cnxn_retry_interval_ms, 0, 0, "",
+          !FLAGS_ssl_client_ca_certificate.empty())),
+      metrics_(metrics->GetChildGroup("statestore-subscriber")) {
   connected_to_statestore_metric_ =
-      metrics->CreateAndRegisterPrimitiveMetric("statestore-subscriber.connected", false);
-  last_recovery_duration_metric_ = metrics->CreateAndRegisterPrimitiveMetric(
+      metrics_->AddProperty("statestore-subscriber.connected", false);
+  last_recovery_duration_metric_ = metrics_->AddGauge(
       "statestore-subscriber.last-recovery-duration", 0.0);
-  last_recovery_time_metric_ = metrics->CreateAndRegisterPrimitiveMetric<string>(
+  last_recovery_time_metric_ = metrics_->AddProperty<string>(
       "statestore-subscriber.last-recovery-time", "N/A");
-  heartbeat_interval_metric_ = metrics->RegisterMetric(
-      new StatsMetric<double>("statestore-subscriber.heartbeat-interval-time"));
-  heartbeat_duration_metric_ = metrics->RegisterMetric(
-      new StatsMetric<double>("statestore-subscriber.heartbeat-duration"));
-  registration_id_metric_ = metrics->CreateAndRegisterPrimitiveMetric<string>(
-      "statestore-susbcriber.registration-id", "N/A");
+  topic_update_interval_metric_ = StatsMetric<double>::CreateAndRegister(metrics,
+      "statestore-subscriber.topic-update-interval-time");
+  topic_update_duration_metric_ = StatsMetric<double>::CreateAndRegister(metrics,
+      "statestore-subscriber.topic-update-duration");
+  heartbeat_interval_metric_ = StatsMetric<double>::CreateAndRegister(metrics,
+      "statestore-subscriber.heartbeat-interval-time");
+
+  registration_id_metric_ = metrics->AddProperty<string>(
+      "statestore-subscriber.registration-id", "N/A");
+
   client_cache_->InitMetrics(metrics, "statestore-subscriber.statestore");
 }
 
@@ -117,12 +127,11 @@ Status StatestoreSubscriber::AddTopic(const Statestore::TopicId& topic_id,
   Callbacks* cb = &(update_callbacks_[topic_id]);
   cb->callbacks.push_back(callback);
   if (cb->processing_time_metric == NULL) {
-    const string& metric_name = Substitute(CALLBACK_METRIC_PATTERN, topic_id);
-    cb->processing_time_metric =
-        metrics_->RegisterMetric(new StatsMetric<double>(metric_name));
+    cb->processing_time_metric = StatsMetric<double>::CreateAndRegister(metrics_,
+        CALLBACK_METRIC_PATTERN, topic_id);
   }
   topic_registrations_[topic_id] = is_transient;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status StatestoreSubscriber::Register() {
@@ -142,28 +151,20 @@ Status StatestoreSubscriber::Register() {
   request.subscriber_location = heartbeat_address_;
   request.subscriber_id = subscriber_id_;
   TRegisterSubscriberResponse response;
-  try {
-    client->RegisterSubscriber(response, request);
-  } catch (const TException& e) {
-    // Client may have been closed due to a failure
-    RETURN_IF_ERROR(client.Reopen());
-    try {
-      client->RegisterSubscriber(response, request);
-    } catch (const TException& e) {
-      return Status(e.what());
-    }
-  }
+  RETURN_IF_ERROR(
+      client.DoRpc(&StatestoreServiceClient::RegisterSubscriber, request, &response));
   Status status = Status(response.status);
-  if (status.ok()) connected_to_statestore_metric_->Update(true);
+  if (status.ok()) connected_to_statestore_metric_->set_value(true);
   if (response.__isset.registration_id) {
     lock_guard<mutex> l(registration_id_lock_);
     registration_id_ = response.registration_id;
     const string& registration_string = PrintId(registration_id_);
-    registration_id_metric_->Update(registration_string);
+    registration_id_metric_->set_value(registration_string);
     VLOG(1) << "Subscriber registration ID: " << registration_string;
   } else {
     VLOG(1) << "No subscriber registration ID received from statestore";
   }
+  topic_update_interval_timer_.Start();
   heartbeat_interval_timer_.Start();
   return status;
 }
@@ -171,9 +172,9 @@ Status StatestoreSubscriber::Register() {
 Status StatestoreSubscriber::Start() {
   Status status;
   {
-    // Take the lock to ensure that, if a heartbeat is received during registration
+    // Take the lock to ensure that, if a topic-update is received during registration
     // (perhaps because Register() has succeeded, but we haven't finished setting up state
-    // on the client side), UpdateState() will reject the heartbeat.
+    // on the client side), UpdateState() will reject the message.
     lock_guard<mutex> l(lock_);
     LOG(INFO) << "Starting statestore subscriber";
 
@@ -192,7 +193,7 @@ Status StatestoreSubscriber::Start() {
       is_registered_ = true;
       LOG(INFO) << "statestore registration successful";
     } else {
-      LOG(INFO) << "statestore registration unsuccessful: " << status.GetErrorMsg();
+      LOG(INFO) << "statestore registration unsuccessful: " << status.GetDetail();
     }
   }
 
@@ -214,13 +215,9 @@ void StatestoreSubscriber::RecoveryModeChecker() {
       // When entering recovery mode, the class-wide lock_ is taken to
       // ensure mutual exclusion with any operations in flight.
       lock_guard<mutex> l(lock_);
-      // Check again - we might have finished processing
-      if (failure_detector_->GetPeerState(STATESTORE_ID) != FailureDetector::FAILED) {
-        continue;
-      }
       MonotonicStopWatch recovery_timer;
       recovery_timer.Start();
-      connected_to_statestore_metric_->Update(false);
+      connected_to_statestore_metric_->set_value(false);
       LOG(INFO) << subscriber_id_
                 << ": Connection with statestore lost, entering recovery mode";
       uint32_t attempt_count = 1;
@@ -229,9 +226,8 @@ void StatestoreSubscriber::RecoveryModeChecker() {
                   << attempt_count++;
         Status status = Register();
         if (status.ok()) {
-          // Make sure to update failure detector so that we don't
-          // immediately fail on the next loop while we're waiting for
-          // heartbeats to resume.
+          // Make sure to update failure detector so that we don't immediately fail on the
+          // next loop while we're waiting for heartbeat messages to resume.
           failure_detector_->UpdateHeartbeat(STATESTORE_ID, true);
           LOG(INFO) << "Reconnected to statestore. Exiting recovery mode";
 
@@ -240,10 +236,10 @@ void StatestoreSubscriber::RecoveryModeChecker() {
         } else {
           // Don't exit recovery mode, continue
           LOG(WARNING) << "Failed to re-register with statestore: "
-                       << status.GetErrorMsg();
+                       << status.GetDetail();
           SleepForMs(SLEEP_INTERVAL_MS);
         }
-        last_recovery_duration_metric_->Update(
+        last_recovery_duration_metric_->set_value(
             recovery_timer.ElapsedTime() / (1000.0 * 1000.0 * 1000.0));
       }
       // When we're successful in re-registering, we don't do anything
@@ -251,12 +247,39 @@ void StatestoreSubscriber::RecoveryModeChecker() {
       // responsibility of individual clients to post missing updates
       // back to the statestore. This saves a lot of complexity where
       // we would otherwise have to cache updates here.
-      last_recovery_duration_metric_->Update(
+      last_recovery_duration_metric_->set_value(
           recovery_timer.ElapsedTime() / (1000.0 * 1000.0 * 1000.0));
-      last_recovery_time_metric_->Update(TimestampValue::local_time().DebugString());
+      last_recovery_time_metric_->set_value(TimestampValue::LocalTime().DebugString());
     }
 
     SleepForMs(SLEEP_INTERVAL_MS);
+  }
+}
+
+Status StatestoreSubscriber::CheckRegistrationId(const TUniqueId& registration_id) {
+  {
+    lock_guard<mutex> r(registration_id_lock_);
+    // If this subscriber has just started, the registration_id_ may not have been set
+    // despite the statestore starting to send updates. The 'unset' TUniqueId is 0:0, so
+    // we can differentiate between a) an early message from an eager statestore, and b)
+    // a message that's targeted to a previous registration.
+    if (registration_id_ != TUniqueId() && registration_id != registration_id_) {
+      return Status(Substitute("Unexpected registration ID: $0, was expecting $1",
+          PrintId(registration_id), PrintId(registration_id_)));
+    }
+  }
+
+  return Status::OK();
+}
+
+void StatestoreSubscriber::Heartbeat(const TUniqueId& registration_id) {
+  const Status& status = CheckRegistrationId(registration_id);
+  if (status.ok()) {
+    heartbeat_interval_metric_->Update(
+        heartbeat_interval_timer_.Reset() / (1000.0 * 1000.0 * 1000.0));
+    failure_detector_->UpdateHeartbeat(STATESTORE_ID, true);
+  } else {
+    VLOG_RPC << "Heartbeat: " << status.GetDetail();
   }
 }
 
@@ -264,43 +287,26 @@ Status StatestoreSubscriber::UpdateState(const TopicDeltaMap& incoming_topic_del
     const TUniqueId& registration_id, vector<TTopicDelta>* subscriber_topic_updates,
     bool* skipped) {
   // We don't want to block here because this is an RPC, and delaying the return causes
-  // the statestore to delay sending further heartbeats. The only time that lock_ might be
+  // the statestore to delay sending further messages. The only time that lock_ might be
   // taken concurrently is if:
   //
-  // a) another heartbeat is still being processed (i.e. is still in UpdateState()). This
+  // a) another update is still being processed (i.e. is still in UpdateState()). This
   // could happen only when the subscriber has re-registered, and the statestore is still
-  // sending a heartbeat for the previous registration. In this case, return OK but set
-  // *skipped = true to tell the statestore to retry this heartbeat in the future.
+  // sending an update for the previous registration. In this case, return OK but set
+  // *skipped = true to tell the statestore to retry this update in the future.
   //
   // b) the subscriber is recovering, and has the lock held during
   // RecoveryModeChecker(). Similarly, we set *skipped = true.
   // TODO: Consider returning an error in this case so that the statestore will eventually
-  // stop sending heartbeats even if re-registration fails.
-  //
-  // We only update the failure detector *after* a heartbeat has been processed so that
-  // the time taken to do so doesn't factor into subscriber-side timeouts. Since
-  // RecoveryModeChacker() waits to take lock_ before checking the failure detector, it
-  // will not detect a failure situation while the heartbeat is being processed.
+  // stop sending updates even if re-registration fails.
   try_mutex::scoped_try_lock l(lock_);
   if (l) {
     *skipped = false;
-    {
-      lock_guard<mutex> r(registration_id_lock_);
-      // If this subscriber has just started, the registration_id_ may not have been set
-      // despite the statestore starting to send updates. The 'unset' TUniqueId is 0:0,
-      // so we can differentiate between a) an early UpdateState() from an eager
-      // statestore, and b) an UpdateState() that's targeted to a previous registration.
-      if (registration_id_ != TUniqueId() && registration_id != registration_id_) {
-        stringstream ss;
-        ss << "Unexpected registration ID: " << PrintId(registration_id)
-           << ", was expecting: " << registration_id_;
-        return Status(ss.str());
-      }
-    }
+    RETURN_IF_ERROR(CheckRegistrationId(registration_id));
 
-    // Only record heartbeats received when not in recovery mode
-    heartbeat_interval_metric_->Update(
-        heartbeat_interval_timer_.Reset() / (1000.0 * 1000.0 * 1000.0));
+    // Only record updates received when not in recovery mode
+    topic_update_interval_metric_->Update(
+        topic_update_interval_timer_.Reset() / (1000.0 * 1000.0 * 1000.0));
     MonotonicStopWatch sw;
     sw.Start();
 
@@ -344,15 +350,11 @@ Status StatestoreSubscriber::UpdateState(const TopicDeltaMap& incoming_topic_del
       }
     }
     sw.Stop();
-    heartbeat_duration_metric_->Update(sw.ElapsedTime() / (1000.0 * 1000.0 * 1000.0));
-    // Do this while holding lock_ so that the double-check in RecoveryModeChecker will
-    // definitely see the most recent state.
-    failure_detector_->UpdateHeartbeat(STATESTORE_ID, true);
+    topic_update_duration_metric_->Update(sw.ElapsedTime() / (1000.0 * 1000.0 * 1000.0));
   } else {
-    failure_detector_->UpdateHeartbeat(STATESTORE_ID, true);
     *skipped = true;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 

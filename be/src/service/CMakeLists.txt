@@ -22,21 +22,25 @@ add_library(Service
   frontend.cc
   fe-support.cc
   fragment-exec-state.cc
+  fragment-mgr.cc
   hs2-util.cc
   impala-server.cc
   impala-server-callbacks.cc
   impala-hs2-server.cc
   impala-beeswax-server.cc
   query-exec-state.cc
+  query-options.cc
   child-query.cc
 )
+add_dependencies(Service thrift-deps)
 
 # this shared library provides Impala executor functionality to FE test.
 add_library(fesupport SHARED
   fe-support.cc
 )
+add_dependencies(fesupport thrift-deps)
 
-target_link_libraries(fesupport ${IMPALA_LINK_LIBS_NO_TCMALLOC})
+target_link_libraries(fesupport ${IMPALA_LINK_LIBS_DYNAMIC_TARGETS})
 
 add_executable(impalad
   impalad-main.cc
@@ -51,3 +55,4 @@ target_link_libraries(impalad
 )
 
 ADD_BE_TEST(session-expiry-test session-expiry-test.cc)
+ADD_BE_TEST(hs2-util-test hs2-util-test.cc)

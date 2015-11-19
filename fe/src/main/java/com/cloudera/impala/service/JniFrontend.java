@@ -18,6 +18,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.Collections;
@@ -57,9 +58,11 @@ import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.common.JniUtil;
 import com.cloudera.impala.thrift.TCatalogObject;
+import com.cloudera.impala.thrift.TDescribeDbParams;
+import com.cloudera.impala.thrift.TDescribeResult;
 import com.cloudera.impala.thrift.TDescribeTableParams;
-import com.cloudera.impala.thrift.TDescribeTableResult;
 import com.cloudera.impala.thrift.TExecRequest;
+import com.cloudera.impala.thrift.TFunctionCategory;
 import com.cloudera.impala.thrift.TGetAllHadoopConfigsResponse;
 import com.cloudera.impala.thrift.TGetDataSrcsParams;
 import com.cloudera.impala.thrift.TGetDataSrcsResult;
@@ -77,12 +80,14 @@ import com.cloudera.impala.thrift.TLogLevel;
 import com.cloudera.impala.thrift.TMetadataOpRequest;
 import com.cloudera.impala.thrift.TQueryCtx;
 import com.cloudera.impala.thrift.TResultSet;
+import com.cloudera.impala.thrift.TShowFilesParams;
 import com.cloudera.impala.thrift.TShowGrantRoleParams;
 import com.cloudera.impala.thrift.TShowRolesParams;
 import com.cloudera.impala.thrift.TShowRolesResult;
 import com.cloudera.impala.thrift.TShowStatsParams;
 import com.cloudera.impala.thrift.TTableName;
 import com.cloudera.impala.thrift.TUpdateCatalogCacheRequest;
+import com.cloudera.impala.thrift.TUpdateMembershipRequest;
 import com.cloudera.impala.util.GlogAppender;
 import com.cloudera.impala.util.TSessionStateUtil;
 import com.google.common.base.Preconditions;
@@ -99,6 +104,11 @@ public class JniFrontend {
   private final static TBinaryProtocol.Factory protocolFactory_ =
       new TBinaryProtocol.Factory();
   private final Frontend frontend_;
+
+  // Required minimum value (in milliseconds) for the HDFS config
+  // 'dfs.client.file-block-storage-locations.timeout.millis'
+  private static final long MIN_DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT_MS =
+      10 * 1000;
 
   /**
    * Create a new instance of the Jni Frontend.
@@ -121,6 +131,8 @@ public class JniFrontend {
     } else {
       LOG.info("Authorization is 'DISABLED'.");
     }
+    LOG.info(JniUtil.getJavaVersion());
+
     frontend_ = new Frontend(authConfig);
   }
 
@@ -155,6 +167,16 @@ public class JniFrontend {
     } catch (TException e) {
       throw new InternalException(e.getMessage());
     }
+  }
+
+  /**
+   * Jni wrapper for Frontend.updateMembership(). Accepts a serialized
+   * TUpdateMembershipRequest.
+   */
+  public void updateMembership(byte[] thriftMembershipUpdate) throws ImpalaException {
+    TUpdateMembershipRequest req = new TUpdateMembershipRequest();
+    JniUtil.deserializeThrift(protocolFactory_, req, thriftMembershipUpdate);
+    frontend_.updateMembership(req);
   }
 
   /**
@@ -218,6 +240,25 @@ public class JniFrontend {
   }
 
   /**
+   * Returns files info of a table or partition.
+   * The argument is a serialized TShowFilesParams object.
+   * The return type is a serialised TResultSet object.
+   * @see Frontend#getTableFiles
+   */
+  public byte[] getTableFiles(byte[] thriftShowFilesParams) throws ImpalaException {
+    TShowFilesParams params = new TShowFilesParams();
+    JniUtil.deserializeThrift(protocolFactory_, params, thriftShowFilesParams);
+    TResultSet result = frontend_.getTableFiles(params);
+
+    TSerializer serializer = new TSerializer(protocolFactory_);
+    try {
+      return serializer.serialize(result);
+    } catch (TException e) {
+      throw new InternalException(e.getMessage());
+    }
+  }
+
+  /**
    * Returns a list of table names matching an optional pattern.
    * The argument is a serialized TGetTablesParams object.
    * The return type is a serialised TGetTablesResult object.
@@ -261,7 +302,7 @@ public class JniFrontend {
     result.setApi_versions(Lists.<String>newArrayListWithCapacity(dataSources.size()));
     for (DataSource dataSource: dataSources) {
       result.addToData_src_names(dataSource.getName());
-      result.addToLocations(dataSource.getLocation().toUri().getPath());
+      result.addToLocations(dataSource.getLocation());
       result.addToClass_names(dataSource.getClassName());
       result.addToApi_versions(dataSource.getApiVersion());
     }
@@ -306,7 +347,8 @@ public class JniFrontend {
     TGetFunctionsResult result = new TGetFunctionsResult();
     List<String> signatures = Lists.newArrayList();
     List<String> retTypes = Lists.newArrayList();
-    List<Function> fns = frontend_.getFunctions(params.category, params.db, params.pattern);
+    List<Function> fns = frontend_.getFunctions(params.category, params.db,
+        params.pattern, false);
     for (Function fn: fns) {
       signatures.add(fn.signatureString());
       retTypes.add(fn.getReturnType().toString());
@@ -334,17 +376,39 @@ public class JniFrontend {
   }
 
   /**
+   * Returns a database's properties such as its location and comment.
+   * The argument is a serialized TDescribeDbParams object.
+   * The return type is a serialised TDescribeDbResult object.
+   * @see Frontend#describeDb
+   */
+  public byte[] describeDb(byte[] thriftDescribeDbParams) throws ImpalaException {
+    TDescribeDbParams params = new TDescribeDbParams();
+    JniUtil.deserializeThrift(protocolFactory_, params, thriftDescribeDbParams);
+
+    TDescribeResult result = frontend_.describeDb(
+        params.getDb(), params.getOutput_style());
+
+    TSerializer serializer = new TSerializer(protocolFactory_);
+    try {
+      return serializer.serialize(result);
+    } catch (TException e) {
+      throw new InternalException(e.getMessage());
+    }
+  }
+
+  /**
    * Returns a list of the columns making up a table.
-   * The argument is a serialized TDescribeTableParams object.
-   * The return type is a serialised TDescribeTableResult object.
+   * The argument is a serialized TDescribeParams object.
+   * The return type is a serialised TDescribeResult object.
    * @see Frontend#describeTable
    */
   public byte[] describeTable(byte[] thriftDescribeTableParams) throws ImpalaException {
     TDescribeTableParams params = new TDescribeTableParams();
     JniUtil.deserializeThrift(protocolFactory_, params, thriftDescribeTableParams);
 
-    TDescribeTableResult result = frontend_.describeTable(
-        params.getDb(), params.getTable_name(), params.getOutput_style());
+    TDescribeResult result = frontend_.describeTable(
+        params.getDb(), params.getTable_name(), params.getOutput_style(),
+        params.getResult_struct());
 
     TSerializer serializer = new TSerializer(protocolFactory_);
     try {
@@ -363,6 +427,19 @@ public class JniFrontend {
     JniUtil.deserializeThrift(protocolFactory_, params, thriftTableName);
     return ToSqlUtils.getCreateTableSql(frontend_.getCatalog().getTable(
         params.getDb_name(), params.getTable_name()));
+  }
+
+  /**
+   * Returns a SQL DDL string for creating the specified function.
+   */
+  public String showCreateFunction(byte[] thriftShowCreateFunctionParams)
+      throws ImpalaException {
+    TGetFunctionsParams params = new TGetFunctionsParams();
+    JniUtil.deserializeThrift(protocolFactory_, params, thriftShowCreateFunctionParams);
+    Preconditions.checkArgument(params.category == TFunctionCategory.SCALAR ||
+        params.category == TFunctionCategory.AGGREGATE);
+    return ToSqlUtils.getCreateFunctionSql(frontend_.getFunctions(
+        params.category, params.db, params.pattern, true));
   }
 
   /**
@@ -496,6 +573,7 @@ public class JniFrontend {
       }
     }
 
+    @Override
     public int compareTo(CdhVersion o) {
       return (this.major == o.major) ? (this.minor - o.minor) : (this.major - o.major);
     }
@@ -575,11 +653,9 @@ public class JniFrontend {
     }
 
     try {
-      String nnUrl = getCurrentNameNodeAddress();
-      if (nnUrl == null) {
-        return null;
-      }
-      URL nnWebUi = new URL("http://" + nnUrl + "/dfshealth.jsp");
+      URI nnUri = getCurrentNameNodeAddress();
+      if (nnUri == null) return null;
+      URL nnWebUi = new URL(nnUri.toURL(), "/dfshealth.jsp");
       URLConnection conn = nnWebUi.openConnection();
       BufferedReader in = new BufferedReader(
           new InputStreamReader(conn.getInputStream()));
@@ -603,12 +679,12 @@ public class JniFrontend {
   }
 
   /**
-   * Derive the namenode http address from the current file system,
+   * Derive the namenode http address from the current filesystem,
    * either default or as set by "-fs" in the generic options.
    *
    * @return Returns http address or null if failure.
    */
-  private String getCurrentNameNodeAddress() throws Exception {
+  private URI getCurrentNameNodeAddress() throws Exception {
     // get the filesystem object to verify it is an HDFS system
     FileSystem fs;
     fs = FileSystem.get(CONF);
@@ -616,7 +692,7 @@ public class JniFrontend {
       LOG.error("FileSystem is " + fs.getUri());
       return null;
     }
-    return DFSUtil.getInfoServer(HAUtil.getAddressOfActive(fs), CONF, false);
+    return DFSUtil.getInfoServer(HAUtil.getAddressOfActive(fs), CONF, "http");
   }
 
   /**
@@ -778,13 +854,15 @@ public class JniFrontend {
       errorCause.append(" is not enabled.\n");
     }
 
-    // dfs.client.file-block-storage-locations.timeout should be >= 500
-    // TODO: OPSAPS-12765 - it should be >= 3000, but use 500 for now until CM refresh
-    if (conf.getInt(DFSConfigKeys.DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT,
-        DFSConfigKeys.DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT_DEFAULT) < 500) {
+    // dfs.client.file-block-storage-locations.timeout.millis should be >= 10 seconds
+    int dfsClientFileBlockStorageLocationsTimeoutMs = conf.getInt(
+        DFSConfigKeys.DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT_MS,
+        DFSConfigKeys.DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT_MS_DEFAULT);
+    if (dfsClientFileBlockStorageLocationsTimeoutMs <
+        MIN_DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT_MS) {
       errorCause.append(prefix);
-      errorCause.append(DFSConfigKeys.DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT);
-      errorCause.append(" is too low. It should be at least 3000.\n");
+      errorCause.append(DFSConfigKeys.DFS_CLIENT_FILE_BLOCK_STORAGE_LOCATIONS_TIMEOUT_MS);
+      errorCause.append(" is too low. It should be at least 10 seconds.\n");
     }
 
     if (errorCause.length() > 0) {
@@ -796,19 +874,20 @@ public class JniFrontend {
   }
 
   /**
-   * Return an empty string if the FileSystem configured in CONF refers to a
-   * DistributedFileSystem (the only one supported by Impala) and Impala can list the root
-   * directory "/". Otherwise, return an error string describing the issues.
+   * Return an empty string if the default FileSystem configured in CONF refers to a
+   * DistributedFileSystem and Impala can list the root directory "/". Otherwise,
+   * return an error string describing the issues.
    */
   private String checkFileSystem(Configuration conf) {
     try {
       FileSystem fs = FileSystem.get(CONF);
       if (!(fs instanceof DistributedFileSystem)) {
-        return "Unsupported file system. Impala only supports DistributedFileSystem " +
-            "but the configured filesystem is: " + fs.getClass().getSimpleName() + "." +
+        return "Unsupported default filesystem. The default filesystem must be " +
+            "a DistributedFileSystem but the configured default filesystem is " +
+            fs.getClass().getSimpleName() + ". " +
             CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY +
-            "(" + CONF.get(CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY) + ")" +
-            " might be set incorrectly";
+            " (" + CONF.get(CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY) + ")" +
+            " might be set incorrectly.";
       }
     } catch (IOException e) {
       return "couldn't retrieve FileSystem:\n" + e.getMessage();

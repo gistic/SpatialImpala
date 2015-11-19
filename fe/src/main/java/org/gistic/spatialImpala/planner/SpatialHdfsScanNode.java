@@ -95,7 +95,7 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     // also add remaining unassigned conjuncts
     assignConjuncts(analyzer);
 
-    analyzer.enforceSlotEquivalences(tupleIds_.get(0), conjuncts_);
+    analyzer.createEquivConjuncts(tupleIds_.get(0), conjuncts_);
     Predicate predicate;
     for (int i = 0 ; i < conjuncts_.size(); i++) {
       predicate = (Predicate)conjuncts_.get(i);

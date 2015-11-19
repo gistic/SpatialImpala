@@ -24,6 +24,7 @@ set(LIBRARY_OUTPUT_PATH "${BUILD_OUTPUT_ROOT_DIRECTORY}/util")
 set(EXECUTABLE_OUTPUT_PATH "${BUILD_OUTPUT_ROOT_DIRECTORY}/util")
 
 add_library(Util
+  avro-util.cc
   benchmark.cc
   bitmap.cc
   cgroups-mgr.cc
@@ -40,6 +41,7 @@ add_library(Util
   filesystem-util.cc
   hdfs-util.cc
   hdfs-bulk-ops.cc
+  hdr-histogram.cc
   impalad-metrics.cc
   jni-util.cc
   llama-util.cc
@@ -57,8 +59,11 @@ add_library(Util
 # TODO: not supported on RHEL 5
 #  perf-counters.cc
   progress-updater.cc
+  process-state-info.cc
+  redactor.cc
   runtime-profile.cc
   simple-logger.cc
+  spinlock.cc
   symbols-util.cc
   static-asserts.cc
   summary-util.cc
@@ -69,6 +74,7 @@ add_library(Util
   url-parser.cc
   url-coding.cc
 )
+add_dependencies(Util thrift-deps)
 
 add_library(Webserver STATIC
   ${SQUEASEL_SRC_DIR}/squeasel.c
@@ -85,14 +91,15 @@ add_library(loggingsupport SHARED
   logging-support.cc
 )
 
-target_link_libraries(Webserver pthread dl Util ssl crypto)
+target_link_libraries(Webserver pthread dl Util ${OPENSSL_LIBS})
 
 add_executable(network-perf-benchmark network-perf-benchmark.cc)
 add_executable(parquet-reader parquet-reader.cc)
 
 target_link_libraries(network-perf-benchmark ${IMPALA_LINK_LIBS})
 target_link_libraries(parquet-reader ${IMPALA_LINK_LIBS})
-target_link_libraries(loggingsupport ${IMPALA_LINK_LIBS_NO_TCMALLOC})
+
+target_link_libraries(loggingsupport ${IMPALA_LINK_LIBS_DYNAMIC_TARGETS})
 
 ADD_BE_TEST(runtime-profile-test)
 ADD_BE_TEST(benchmark-test)
@@ -107,7 +114,19 @@ ADD_BE_TEST(dict-test)
 ADD_BE_TEST(thread-pool-test)
 ADD_BE_TEST(internal-queue-test)
 ADD_BE_TEST(string-parser-test)
+ADD_BE_TEST(parse-util-test)
 ADD_BE_TEST(promise-test)
 ADD_BE_TEST(symbols-util-test)
 #ADD_BE_TEST(perf-counters-test)
 ADD_BE_TEST(webserver-test)
+ADD_BE_TEST(pretty-printer-test)
+ADD_BE_TEST(redactor-config-parser-test)
+ADD_BE_TEST(redactor-test)
+ADD_BE_TEST(redactor-unconfigured-test)
+ADD_BE_TEST(error-util-test)
+target_link_libraries(error-util-test Util)
+ADD_BE_TEST(proc-info-test)
+ADD_BE_TEST(lru-cache-test)
+ADD_BE_TEST(filesystem-util-test)
+ADD_BE_TEST(bitmap-test)
+ADD_BE_TEST(fixed-size-hash-table-test)

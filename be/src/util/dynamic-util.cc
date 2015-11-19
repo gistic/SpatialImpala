@@ -19,19 +19,19 @@
 #include "runtime/exec-env.h"
 #include "util/test-info.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
-Status DynamicLookup(void* handle, const char* symbol, void** fn_ptr) {
+Status DynamicLookup(void* handle, const char* symbol, void** fn_ptr, bool quiet) {
   *(void **) (fn_ptr) = dlsym(handle, symbol);
   char* error = dlerror();
   if (error != NULL) {
     stringstream ss;
     ss << "Unable to find " << symbol << "\ndlerror: " << error;
-    return Status(ss.str());
+    return quiet ? Status::Expected(ss.str()) : Status(ss.str());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status DynamicOpen(const char* library, void** handle) {
@@ -52,7 +52,7 @@ Status DynamicOpen(const char* library, void** handle) {
     ss << "Unable to load " << library << "\ndlerror: " << dlerror();
     return Status(ss.str());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void DynamicClose(void* handle) {

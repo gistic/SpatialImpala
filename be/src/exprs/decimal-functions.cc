@@ -20,7 +20,7 @@
 #include <ctype.h>
 #include <math.h>
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -34,8 +34,8 @@ IntVal DecimalFunctions::Scale(FunctionContext* context, const DecimalVal& val) 
 
 DecimalVal DecimalFunctions::Abs(FunctionContext* context, const DecimalVal& val) {
   if (val.is_null) return DecimalVal::null();
-  ColumnType type = AnyValUtil::TypeDescToColumnType(*context->GetArgType(0));
-  switch (type.GetByteSize()) {
+  int type_byte_size = Expr::GetConstant<int>(*context, Expr::ARG_TYPE_SIZE, 0);
+  switch (type_byte_size) {
     case 4:
       return DecimalVal(abs(val.val4));
     case 8:
@@ -63,8 +63,8 @@ DecimalVal DecimalFunctions::Round(FunctionContext* context, const DecimalVal& v
 inline DecimalVal DecimalFunctions::RoundTo(
     FunctionContext* context, const DecimalVal& val, int scale,
     DecimalOperators::DecimalRoundOp op) {
-  ColumnType val_type = AnyValUtil::TypeDescToColumnType(*context->GetArgType(0));
-  ColumnType return_type = AnyValUtil::TypeDescToColumnType(context->GetReturnType());
+  const FunctionContext::TypeDesc& val_type = *context->GetArgType(0);
+  const FunctionContext::TypeDesc& return_type = context->GetReturnType();
   if (scale < 0) {
     return DecimalOperators::RoundDecimalNegativeScale(
         context, val, val_type, return_type, op, -scale);

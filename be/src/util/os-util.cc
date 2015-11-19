@@ -24,10 +24,13 @@
 #include "util/error-util.h"
 #include "util/string-parser.h"
 
+#include "common/names.h"
+
+using boost::filesystem::exists;
+using boost::algorithm::is_any_of;
+using boost::algorithm::token_compress_on;
+using boost::algorithm::split;
 using namespace impala;
-using namespace std;
-using namespace boost::filesystem;
-using namespace boost;
 using namespace strings;
 
 // Ensure that Impala compiles on earlier kernels. If the target kernel does not support
@@ -57,8 +60,8 @@ Status impala::GetThreadStats(int64_t tid, ThreadStats* stats) {
   ifstream proc_file(proc_path.str().c_str());
   if (!proc_file.is_open()) return Status("Could not open ifstream");
 
-  string buffer((istreambuf_iterator<char>(proc_file)),
-      istreambuf_iterator<char>());
+  string buffer((std::istreambuf_iterator<char>(proc_file)),
+      std::istreambuf_iterator<char>());
 
   vector<string> splits;
   split(splits, buffer, is_any_of(" "), token_compress_on);
@@ -83,7 +86,7 @@ Status impala::GetThreadStats(int64_t tid, ThreadStats* stats) {
     stats->iowait_ns = tmp * (1e9 / TICKS_PER_SEC);
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 bool impala::RunShellProcess(const string& cmd, string* msg) {
@@ -108,7 +111,10 @@ bool impala::RunShellProcess(const string& cmd, string* msg) {
     return true;
   }
 
-  *msg = Substitute("Shell cmd: '$0' exited with an error: '$1'. Output was: '$2'", cmd,
-      GetStrErrMsg(), output);
+  // pclose() doesn't set errno. We could redirect the cmd to get the stderr output as
+  // well, but that might interfere with correct executions that happen to produce output
+  // on stderr.
+  *msg = Substitute("Shell cmd: '$0' exited with error status: '$1'. Stdout was: '$2'",
+      cmd, WEXITSTATUS(status), output);
   return false;
 }

@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +18,8 @@
 # dependencies.
 
 import math
+import random
+import string
 
 def calculate_avg(values):
   return sum(values) / float(len(values))
@@ -41,7 +42,11 @@ def calculate_median(values):
 def calculate_geomean(values):
   """ Calculates the geometric mean of the given collection of numerics """
   if len(values) > 0:
-    return (reduce(lambda x, y: float(x) * float(y), values)) ** (1.0 / len(values))
+    product = 1.0
+    exponent = 1.0 / len(values)
+    for value in values:
+      product *= value ** exponent
+    return product
 
 def calculate_tval(avg, stddev, iters, ref_avg, ref_stddev, ref_iters):
   """
@@ -55,3 +60,7 @@ def calculate_tval(avg, stddev, iters, ref_avg, ref_stddev, ref_iters):
   # t = (X1 - X2) / SEM
   sem = math.sqrt((math.pow(stddev, 2) / iters) + (math.pow(ref_stddev, 2) / ref_iters))
   return (avg - ref_avg) / sem
+
+def get_random_id(length):
+  return ''.join(
+      random.choice(string.ascii_uppercase + string.digits) for _ in range(length))

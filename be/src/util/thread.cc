@@ -29,9 +29,11 @@
 #include "util/url-coding.h"
 #include "util/os-util.h"
 
-using namespace boost;
+#include "common/names.h"
+
+namespace this_thread = boost::this_thread;
+using boost::ptr_vector;
 using namespace rapidjson;
-using namespace std;
 
 namespace impala {
 
@@ -53,7 +55,7 @@ class ThreadMgr {
  public:
   ThreadMgr() : metrics_enabled_(false) { }
 
-  Status StartInstrumentation(Metrics* metrics, Webserver* webserver);
+  Status StartInstrumentation(MetricGroup* metrics, Webserver* webserver);
 
   // Registers a thread to the supplied category. The key is a boost::thread::id, used
   // instead of the system TID since boost::thread::id is always available, unlike
@@ -105,8 +107,8 @@ class ThreadMgr {
 
   // Metrics to track all-time total number of threads, and the
   // current number of running threads.
-  Metrics::IntMetric* total_threads_metric_;
-  Metrics::IntMetric* current_num_threads_metric_;
+  IntGauge* total_threads_metric_;
+  IntGauge* current_num_threads_metric_;
 
   // Webpage callbacks; print all threads by category
   // Example output:
@@ -150,14 +152,14 @@ class ThreadMgr {
   void ThreadOverviewUrlCallback(const Webserver::ArgumentMap& args, Document* document);
 };
 
-Status ThreadMgr::StartInstrumentation(Metrics* metrics, Webserver* webserver) {
+Status ThreadMgr::StartInstrumentation(MetricGroup* metrics, Webserver* webserver) {
   DCHECK(metrics != NULL);
   DCHECK(webserver != NULL);
   lock_guard<mutex> l(lock_);
   metrics_enabled_ = true;
-  total_threads_metric_ = metrics->CreateAndRegisterPrimitiveMetric<int64_t>(
+  total_threads_metric_ = metrics->AddGauge<int64_t>(
       "thread-manager.total-threads-created", 0L);
-  current_num_threads_metric_ = metrics->CreateAndRegisterPrimitiveMetric<int64_t>(
+  current_num_threads_metric_ = metrics->AddGauge<int64_t>(
       "thread-manager.running-threads", 0L);
 
   Webserver::UrlCallback template_callback =
@@ -170,7 +172,7 @@ Status ThreadMgr::StartInstrumentation(Metrics* metrics, Webserver* webserver) {
   webserver->RegisterUrlCallback("/thread-group", "thread-group.tmpl",
       overview_callback, false);
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void ThreadMgr::AddThread(const thread::id& thread, const string& name,
@@ -241,7 +243,7 @@ void ThreadMgr::ThreadGroupUrlCallback(const Webserver::ArgumentMap& args,
       Status status = GetThreadStats(thread.second.thread_id(), &stats);
       if (!status.ok()) {
         LOG_EVERY_N(INFO, 100) << "Could not get per-thread statistics: "
-                               << status.GetErrorMsg();
+                               << status.GetDetail();
       } else {
         val.AddMember("user_ns", static_cast<double>(stats.user_ns) / 1e9,
             document->GetAllocator());
@@ -261,7 +263,7 @@ void InitThreading() {
   thread_manager.reset(new ThreadMgr());
 }
 
-Status StartThreadInstrumentation(Metrics* metrics, Webserver* webserver) {
+Status StartThreadInstrumentation(MetricGroup* metrics, Webserver* webserver) {
   return thread_manager->StartInstrumentation(metrics, webserver);
 }
 
@@ -301,6 +303,7 @@ void Thread::SuperviseThread(const string& name, const string& category,
 
   // Use boost's get_id rather than the system thread ID as the unique key for this thread
   // since the latter is more prone to being recycled.
+
   thread_mgr_ref->AddThread(this_thread::get_id(), name_copy, category_copy, system_tid);
   thread_started->Set(system_tid);
 
@@ -318,7 +321,7 @@ Status ThreadGroup::AddThread(Thread* thread) {
     DCHECK(cgroups_mgr_ != NULL);
     RETURN_IF_ERROR(cgroups_mgr_->AssignThreadToCgroup(*thread, cgroup_path_));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void ThreadGroup::JoinAll() {
@@ -335,7 +338,7 @@ Status ThreadGroup::SetCgroup(const string& cgroup) {
        it != threads_.end(); ++it) {
     RETURN_IF_ERROR(cgroups_mgr_->AssignThreadToCgroup(*it, cgroup));
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 }

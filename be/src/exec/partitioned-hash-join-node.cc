@@ -31,33 +31,41 @@
 
 #include "gen-cpp/PlanNodes_types.h"
 
+#include "common/names.h"
+
 DEFINE_bool(enable_phj_probe_side_filtering, true,
     "Enables pushing PHJ build side filters to probe side");
 
-using namespace boost;
 using namespace impala;
 using namespace llvm;
-using namespace std;
 using namespace strings;
 
 PartitionedHashJoinNode::PartitionedHashJoinNode(
     ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs)
   : BlockingJoinNode("PartitionedHashJoinNode", tnode.hash_join_node.join_op,
         pool, tnode, descs),
-    state_(PARTITIONING_BUILD),
     block_mgr_client_(NULL),
-    process_build_batch_fn_(NULL),
-    process_build_batch_fn_level0_(NULL),
-    process_probe_batch_fn_(NULL),
-    process_probe_batch_fn_level0_(NULL),
+    partition_build_timer_(NULL),
+    null_aware_eval_timer_(NULL),
+    state_(PARTITIONING_BUILD),
+    partition_pool_(new ObjectPool()),
     input_partition_(NULL),
     null_aware_partition_(NULL),
     non_empty_build_(false),
     null_probe_rows_(NULL),
-    null_probe_output_idx_(-1) {
-  memset(hash_tbls_, 0, sizeof(hash_tbls_));
+    null_probe_output_idx_(-1),
+    process_build_batch_fn_(NULL),
+    process_build_batch_fn_level0_(NULL),
+    process_probe_batch_fn_(NULL),
+    process_probe_batch_fn_level0_(NULL) {
+  memset(hash_tbls_, 0, sizeof(HashTable*) * PARTITION_FANOUT);
   can_add_probe_filters_ = tnode.hash_join_node.add_probe_filters;
   can_add_probe_filters_ &= FLAGS_enable_phj_probe_side_filtering;
+}
+
+PartitionedHashJoinNode::~PartitionedHashJoinNode() {
+  // Check that we didn't leak any memory.
+  DCHECK(null_probe_rows_ == NULL);
 }
 
 Status PartitionedHashJoinNode::Init(const TPlanNode& tnode) {
@@ -76,10 +84,9 @@ Status PartitionedHashJoinNode::Init(const TPlanNode& tnode) {
       Expr::CreateExprTrees(pool_, tnode.hash_join_node.other_join_conjuncts,
                             &other_join_conjunct_ctxs_));
 
-  if (join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
-    DCHECK_EQ(eq_join_conjuncts.size(), 1);
-  }
-  return Status::OK;
+  DCHECK(join_op_ != TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN ||
+      eq_join_conjuncts.size() == 1);
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::Prepare(RuntimeState* state) {
@@ -93,32 +100,35 @@ Status PartitionedHashJoinNode::Prepare(RuntimeState* state) {
     RETURN_IF_ERROR(state->GetCodegen(&codegen));
   }
 
+  // Disable probe-side filters if we are inside a subplan because no node
+  // inside the subplan can use them.
+  if (IsInSubplan()) can_add_probe_filters_ = false;
+
   RETURN_IF_ERROR(BlockingJoinNode::Prepare(state));
+  runtime_state_ = state;
 
   // build and probe exprs are evaluated in the context of the rows produced by our
   // right and left children, respectively
-  RETURN_IF_ERROR(Expr::Prepare(build_expr_ctxs_, state, child(1)->row_desc()));
-  RETURN_IF_ERROR(Expr::Prepare(probe_expr_ctxs_, state, child(0)->row_desc()));
-  state->AddExprCtxsToFree(probe_expr_ctxs_);
-  // Don't add build_expr_ctxs_ to runtime state, since they will potentially be evaluated
-  // in separate build thread
+  RETURN_IF_ERROR(
+      Expr::Prepare(build_expr_ctxs_, state, child(1)->row_desc(), expr_mem_tracker()));
+  RETURN_IF_ERROR(
+      Expr::Prepare(probe_expr_ctxs_, state, child(0)->row_desc(), expr_mem_tracker()));
+  // Although ConstructBuildSide() maybe be run in a separate thread, it is safe to free
+  // local allocations in QueryMaintenance() since the build thread is not run
+  // concurrently with other expr evaluation in this join node.
+  AddExprCtxsToFree(probe_expr_ctxs_);
+  AddExprCtxsToFree(build_expr_ctxs_);
 
-  // other_join_conjunct_ctxs_ are evaluated in the context of the rows produced by this
-  // node
-  RETURN_IF_ERROR(Expr::Prepare(other_join_conjunct_ctxs_, state, row_descriptor_));
-  state->AddExprCtxsToFree(other_join_conjunct_ctxs_);
+  // other_join_conjunct_ctxs_ are evaluated in the context of rows assembled from all
+  // build and probe tuples; full_row_desc is not necessarily the same as the output row
+  // desc, e.g., because semi joins only return the build xor probe tuples
+  RowDescriptor full_row_desc(child(0)->row_desc(), child(1)->row_desc());
+  RETURN_IF_ERROR(
+      Expr::Prepare(other_join_conjunct_ctxs_, state, full_row_desc, expr_mem_tracker()));
+  AddExprCtxsToFree(other_join_conjunct_ctxs_);
 
-  // We need two output buffer per partition (one for build and one for probe) and
-  // and one additional buffer either for the input (while repartitioning).
-  // TODO: with more careful reasoning we can turn this to 1 per partition I think.
-  int num_reserved_buffers = PARTITION_FANOUT * 2 + 1;
-  if (join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
-    // We need to maintain three additional buffers in this case to store the build/probe
-    // on the null aware partition.
-    num_reserved_buffers += 3;
-  }
   RETURN_IF_ERROR(state->block_mgr()->RegisterClient(
-      num_reserved_buffers, mem_tracker(), state, &block_mgr_client_));
+      MinRequiredBuffers(), mem_tracker(), state, &block_mgr_client_));
 
   bool should_store_nulls = join_op_ == TJoinOp::RIGHT_OUTER_JOIN ||
       join_op_ == TJoinOp::RIGHT_ANTI_JOIN || join_op_ == TJoinOp::FULL_OUTER_JOIN;
@@ -127,34 +137,26 @@ Status PartitionedHashJoinNode::Prepare(RuntimeState* state) {
       child(1)->row_desc().tuple_descriptors().size()));
 
   if (join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
-    null_aware_partition_ = pool_->Add(new Partition(state, this, 0));
-    RETURN_IF_ERROR(null_aware_partition_->build_rows()->Init(runtime_profile(), false));
-    RETURN_IF_ERROR(null_aware_partition_->probe_rows()->Init(runtime_profile(), false));
-
-    null_probe_rows_ = state->obj_pool()->Add(new BufferedTupleStream(
-        state, child(0)->row_desc(), state->block_mgr(), block_mgr_client_,
-        false, true));
-    RETURN_IF_ERROR(null_probe_rows_->Init(runtime_profile(), false));
     null_aware_eval_timer_ = ADD_TIMER(runtime_profile(), "NullAwareAntiJoinEvalTime");
   }
 
   partition_build_timer_ = ADD_TIMER(runtime_profile(), "BuildPartitionTime");
   num_hash_buckets_ =
-      ADD_COUNTER(runtime_profile(), "HashBuckets", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile(), "HashBuckets", TUnit::UNIT);
   partitions_created_ =
-      ADD_COUNTER(runtime_profile(), "PartitionsCreated", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile(), "PartitionsCreated", TUnit::UNIT);
   max_partition_level_ = runtime_profile()->AddHighWaterMarkCounter(
-      "MaxPartitionLevel", TCounterType::UNIT);
+      "MaxPartitionLevel", TUnit::UNIT);
   num_build_rows_partitioned_ =
-      ADD_COUNTER(runtime_profile(), "BuildRowsPartitioned", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile(), "BuildRowsPartitioned", TUnit::UNIT);
   num_probe_rows_partitioned_ =
-      ADD_COUNTER(runtime_profile(), "ProbeRowsPartitioned", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile(), "ProbeRowsPartitioned", TUnit::UNIT);
   num_repartitions_ =
-      ADD_COUNTER(runtime_profile(), "NumRepartitions", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile(), "NumRepartitions", TUnit::UNIT);
   num_spilled_partitions_ =
-      ADD_COUNTER(runtime_profile(), "SpilledPartitions", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile(), "SpilledPartitions", TUnit::UNIT);
   largest_partition_percent_ = runtime_profile()->AddHighWaterMarkCounter(
-      "LargestPartitionPercent", TCounterType::UNIT);
+      "LargestPartitionPercent", TUnit::UNIT);
 
   if (state->codegen_enabled()) {
     // Codegen for hashing rows
@@ -171,24 +173,79 @@ Status PartitionedHashJoinNode::Prepare(RuntimeState* state) {
       }
     }
   }
+  return Status::OK();
+}
 
-  return Status::OK;
+Status PartitionedHashJoinNode::Open(RuntimeState* state) {
+  if (join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
+    null_aware_partition_ = partition_pool_->Add(new Partition(state, this, 0));
+    RETURN_IF_ERROR(
+        null_aware_partition_->build_rows()->Init(id(), runtime_profile(), false));
+    RETURN_IF_ERROR(
+        null_aware_partition_->probe_rows()->Init(id(), runtime_profile(), false));
+
+    null_probe_rows_ = new BufferedTupleStream(
+        state, child(0)->row_desc(), state->block_mgr(), block_mgr_client_,
+        true /* use small buffers */, false /* delete on read */ );
+    RETURN_IF_ERROR(null_probe_rows_->Init(id(), runtime_profile(), false));
+  }
+  RETURN_IF_ERROR(BlockingJoinNode::Open(state));
+  return Status::OK();
+}
+
+Status PartitionedHashJoinNode::Reset(RuntimeState* state) {
+  if (join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
+    non_empty_build_ = false;
+    null_probe_output_idx_ = -1;
+    matched_null_probe_.clear();
+    nulls_build_batch_.reset();
+  }
+  state_ = PARTITIONING_BUILD;
+  ht_ctx_->set_level(0);
+  ClosePartitions();
+  memset(hash_tbls_, 0, sizeof(HashTable*) * PARTITION_FANOUT);
+  CleanupProbeFilters();
+  return ExecNode::Reset(state);
+}
+
+void PartitionedHashJoinNode::ClosePartitions() {
+  for (int i = 0; i < hash_partitions_.size(); ++i) {
+    hash_partitions_[i]->Close(NULL);
+  }
+  hash_partitions_.clear();
+  for (list<Partition*>::iterator it = spilled_partitions_.begin();
+      it != spilled_partitions_.end(); ++it) {
+    (*it)->Close(NULL);
+  }
+  spilled_partitions_.clear();
+  for (list<Partition*>::iterator it = output_build_partitions_.begin();
+      it != output_build_partitions_.end(); ++it) {
+    (*it)->Close(NULL);
+  }
+  output_build_partitions_.clear();
+  if (input_partition_ != NULL) {
+    input_partition_->Close(NULL);
+    input_partition_ = NULL;
+  }
+  if (null_aware_partition_ != NULL) {
+    null_aware_partition_->Close(NULL);
+    null_aware_partition_ = NULL;
+  }
+  if (null_probe_rows_ != NULL) {
+    null_probe_rows_->Close();
+    delete null_probe_rows_;
+    null_probe_rows_ = NULL;
+  }
+  partition_pool_->Clear();
 }
 
 void PartitionedHashJoinNode::Close(RuntimeState* state) {
   if (is_closed()) return;
   if (ht_ctx_.get() != NULL) ht_ctx_->Close();
-  for (int i = 0; i < hash_partitions_.size(); ++i) {
-    hash_partitions_[i]->Close(NULL);
-  }
-  for (list<Partition*>::iterator it = spilled_partitions_.begin();
-      it != spilled_partitions_.end(); ++it) {
-    (*it)->Close(NULL);
-  }
-  if (input_partition_ != NULL) input_partition_->Close(NULL);
-  if (null_aware_partition_ != NULL) null_aware_partition_->Close(NULL);
-  if (null_probe_rows_ != NULL) null_probe_rows_->Close();
+
   nulls_build_batch_.reset();
+
+  ClosePartitions();
 
   if (block_mgr_client_ != NULL) {
     state->block_mgr()->ClearReservations(block_mgr_client_);
@@ -196,6 +253,7 @@ void PartitionedHashJoinNode::Close(RuntimeState* state) {
   Expr::Close(build_expr_ctxs_, state);
   Expr::Close(probe_expr_ctxs_, state);
   Expr::Close(other_join_conjunct_ctxs_, state);
+  CleanupProbeFilters();
   BlockingJoinNode::Close(state);
 }
 
@@ -204,14 +262,13 @@ PartitionedHashJoinNode::Partition::Partition(RuntimeState* state,
   : parent_(parent),
     is_closed_(false),
     is_spilled_(false),
-    level_(level),
-    build_rows_(state->obj_pool()->Add(new BufferedTupleStream(
-        state, parent_->child(1)->row_desc(), state->block_mgr(),
-        parent_->block_mgr_client_))),
-    probe_rows_(state->obj_pool()->Add(new BufferedTupleStream(
-        state, parent_->child(0)->row_desc(),
-        state->block_mgr(), parent_->block_mgr_client_,
-        true /* delete on read */))) {
+    level_(level) {
+  build_rows_ = new BufferedTupleStream(state, parent_->child(1)->row_desc(),
+      state->block_mgr(), parent_->block_mgr_client_);
+  DCHECK(build_rows_ != NULL);
+  probe_rows_ = new BufferedTupleStream(state, parent_->child(0)->row_desc(),
+      state->block_mgr(), parent_->block_mgr_client_);
+  DCHECK(probe_rows_ != NULL);
 }
 
 PartitionedHashJoinNode::Partition::~Partition() {
@@ -237,6 +294,7 @@ void PartitionedHashJoinNode::Partition::Close(RowBatch* batch) {
   if (build_rows_ != NULL) {
     if (batch == NULL) {
       build_rows_->Close();
+      delete build_rows_;
     } else {
       batch->AddTupleStream(build_rows_);
     }
@@ -245,6 +303,7 @@ void PartitionedHashJoinNode::Partition::Close(RowBatch* batch) {
   if (probe_rows_ != NULL) {
     if (batch == NULL) {
       probe_rows_->Close();
+      delete probe_rows_;
     } else {
       batch->AddTupleStream(probe_rows_);
     }
@@ -253,6 +312,38 @@ void PartitionedHashJoinNode::Partition::Close(RowBatch* batch) {
 }
 
 Status PartitionedHashJoinNode::Partition::Spill(bool unpin_all_build) {
+  DCHECK(!is_closed_);
+  // Spilling should occur before we start processing probe rows.
+  DCHECK(parent_->state_ != PROCESSING_PROBE &&
+         parent_->state_ != PROBING_SPILLED_PARTITION) << parent_->state_;
+  DCHECK((is_spilled_ && parent_->state_ == REPARTITIONING) ||
+         probe_rows_->num_rows() == 0);
+  // Close the hash table as soon as possible to release memory.
+  if (hash_tbl() != NULL) {
+    hash_tbl_->Close();
+    hash_tbl_.reset();
+  }
+
+  bool got_buffer = true;
+  if (build_rows_->using_small_buffers()) {
+    RETURN_IF_ERROR(build_rows_->SwitchToIoBuffers(&got_buffer));
+  }
+  // Unpin the stream as soon as possible to increase the chances that the
+  // SwitchToIoBuffers() call below will succeed.
+  RETURN_IF_ERROR(build_rows_->UnpinStream(unpin_all_build));
+
+  if (got_buffer && probe_rows_->using_small_buffers()) {
+    RETURN_IF_ERROR(probe_rows_->SwitchToIoBuffers(&got_buffer));
+  }
+  if (!got_buffer) {
+    // We'll try again to get the buffers when the stream fills up the small buffers.
+    VLOG_QUERY << "Not enough memory to switch to IO-sized buffer for partition "
+               << this << " of join=" << parent_->id_ << " build small buffers="
+               << build_rows_->using_small_buffers() << " probe small buffers="
+               << probe_rows_->using_small_buffers();
+    VLOG_FILE << GetStackTrace();
+  }
+
   if (!is_spilled_) {
     COUNTER_ADD(parent_->num_spilled_partitions_, 1);
     if (parent_->num_spilled_partitions_->value() == 1) {
@@ -260,11 +351,7 @@ Status PartitionedHashJoinNode::Partition::Spill(bool unpin_all_build) {
     }
   }
   is_spilled_ = true;
-  if (hash_tbl() != NULL) {
-    hash_tbl()->Close();
-    hash_tbl_.reset();
-  }
-  return build_rows()->UnpinStream(unpin_all_build);
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::Partition::BuildHashTable(RuntimeState* state,
@@ -287,60 +374,66 @@ Status PartitionedHashJoinNode::Partition::BuildHashTableInternal(
 
   // We got the buffers we think we will need, try to build the hash table.
   RETURN_IF_ERROR(build_rows_->PinStream(false, built));
-  if (!*built) return Status::OK;
+  if (!*built) return Status::OK();
   RETURN_IF_ERROR(build_rows_->PrepareForRead());
 
-  bool eos = false;
   RowBatch batch(parent_->child(1)->row_desc(), state->batch_size(),
       parent_->mem_tracker());
   HashTableCtx* ctx = parent_->ht_ctx_.get();
   // TODO: move the batch and indices as members to avoid reallocating.
   vector<BufferedTupleStream::RowIdx> indices;
+  uint32_t seed0 = ctx->seed(0);
+  bool eos = false;
 
-  // Allocate the partition-local hash table. Initialize the number of buckets
-  // based on the number of build rows (the number of rows is known at this point).
-  // This assumes there are no duplicates which can be wrong. However, the
-  // upside in the common case (few/no duplicates) is large and the downside
-  // when there are is low (a bit more memory; the bucket memory is small compared
-  // to the memory needed for all the build side allocations).
-  int64_t estimated_num_buckets =
-      HashTable::EstimatedNumBuckets(build_rows()->num_rows());
+  // Allocate the partition-local hash table. Initialize the number of buckets based on
+  // the number of build rows (the number of rows is known at this point). This assumes
+  // there are no duplicates which can be wrong. However, the upside in the common case
+  // (few/no duplicates) is large and the downside when there are is low (a bit more
+  // memory; the bucket memory is small compared to the memory needed for all the build
+  // side allocations).
+  // One corner case is if the stream contains tuples with zero footprint (no materialized
+  // slots). If the tuples occupy no space, this implies all rows will be duplicates, so
+  // create a small hash table, IMPALA-2256.
+  // We always start with small pages in the hash table.
+  int64_t estimated_num_buckets = build_rows()->has_tuple_footprint() ?
+      HashTable::EstimateNumBuckets(build_rows()->num_rows()) : state->batch_size() * 2;
   hash_tbl_.reset(new HashTable(state, parent_->block_mgr_client_,
       parent_->child(1)->row_desc().tuple_descriptors().size(), build_rows(),
-      estimated_num_buckets));
+      1 << (32 - NUM_PARTITIONING_BITS), estimated_num_buckets));
   if (!hash_tbl_->Init()) goto not_built;
 
-  while (!eos) {
+  if (AddProbeFilters) DCHECK_EQ(level_, 0) << "Should not add filters if repartitioning";
+  do {
     RETURN_IF_ERROR(build_rows_->GetNext(&batch, &eos, &indices));
     DCHECK_EQ(batch.num_rows(), indices.size());
+    int num_rows = batch.num_rows();
+    DCHECK_LE(num_rows, hash_tbl_->EmptyBuckets()) << build_rows()->has_tuple_footprint();
     SCOPED_TIMER(parent_->build_timer_);
-    for (int i = 0; i < batch.num_rows(); ++i) {
+    for (int i = 0; i < num_rows; ++i) {
       TupleRow* row = batch.GetRow(i);
       uint32_t hash = 0;
       if (!ctx->EvalAndHashBuild(row, &hash)) continue;
-      // TODO: If we are going to AddProbeFilters we should do it here.
       if (UNLIKELY(!hash_tbl_->Insert(ctx, indices[i], row, hash))) goto not_built;
+      if (AddProbeFilters) {
+        // Update the probe filters for this row.
+        for (int j = 0; j < parent_->probe_filters_.size(); ++j) {
+          if (parent_->probe_filters_[j].second == NULL) continue;
+          void* e = parent_->build_expr_ctxs_[j]->GetValue(row);
+          uint32_t h = RawValue::GetHashValue(e,
+              parent_->build_expr_ctxs_[j]->root()->type(), seed0);
+          parent_->probe_filters_[j].second->Set<true>(h, true);
+        }
+      }
     }
     batch.Reset();
-  }
+  } while (!eos);
 
-  // If we got here, the hash table fit in memory and is built.
+  // The hash table fits in memory and is built.
   DCHECK(*built);
-  DCHECK_NOTNULL(hash_tbl_.get());
+  DCHECK(hash_tbl_.get() != NULL);
   is_spilled_ = false;
   COUNTER_ADD(parent_->num_hash_buckets_, hash_tbl_->num_buckets());
-
-  // TODO: We build the filters after we constructed the hash table.  This is what the
-  // old (HashJoinNode) code was doing.  We can do better, because now we know a priori
-  // whether we are going to add probe filter or not. For example, we can be building
-  // the filters while we are streaming the rows from the batch, and not at the end after
-  // the HT has been built.
-  if (AddProbeFilters) {
-    DCHECK_EQ(level_, 0) << "Should not add filters if repartitioning";
-    hash_tbl_->UpdateProbeFilters(ctx, parent_->probe_filters_);
-  }
-
-  return Status::OK;
+  return Status::OK();
 
 not_built:
   *built = false;
@@ -348,16 +441,23 @@ not_built:
     hash_tbl_->Close();
     hash_tbl_.reset();
   }
-  return Status::OK;
+  if (parent_->can_add_probe_filters_) {
+    // Disabling probe filter push down because not all rows will be included in the
+    // probe filter due to a spilled partition.
+    parent_->can_add_probe_filters_ = false;
+    VLOG(2) << "Disabling probe filter push down because a partition will spill.";
+  }
+  return Status::OK();
 }
 
 bool PartitionedHashJoinNode::AllocateProbeFilters(RuntimeState* state) {
   if (!can_add_probe_filters_) return false;
-  DCHECK_NOTNULL(ht_ctx_.get());
+  DCHECK(ht_ctx_.get() != NULL);
   DCHECK_EQ(build_expr_ctxs_.size(), probe_expr_ctxs_.size());
   probe_filters_.resize(probe_expr_ctxs_.size());
   for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
     if (probe_expr_ctxs_[i]->root()->is_slotref()) {
+      // TODO: Enable probe filters not only for "naked" slotrefs.
       probe_filters_[i].first =
           reinterpret_cast<SlotRef*>(probe_expr_ctxs_[i]->root())->slot_id();
       probe_filters_[i].second = new Bitmap(state->slot_filter_bitmap_size());
@@ -371,6 +471,8 @@ bool PartitionedHashJoinNode::AllocateProbeFilters(RuntimeState* state) {
 bool PartitionedHashJoinNode::AttachProbeFilters(RuntimeState* state) {
   if (can_add_probe_filters_) {
     // Add all the bitmaps to the runtime state.
+    // TODO: DCHECK(!is_in_subplan());
+    AddRuntimeExecOption("Build-Side Filter Pushed Down");
     bool acquired_ownership = false;
     for (int i = 0; i < probe_filters_.size(); ++i) {
       if (probe_filters_[i].second == NULL) continue;
@@ -379,34 +481,71 @@ bool PartitionedHashJoinNode::AttachProbeFilters(RuntimeState* state) {
       VLOG(2) << "Bitmap filter added on slot: " << probe_filters_[i].first;
       if (!acquired_ownership) {
         delete probe_filters_[i].second;
-        probe_filters_[i].second = NULL;
       }
+      probe_filters_[i].second = NULL;
     }
     return true;
   } else {
     // Make sure there are no memory leaks.
-    for (int i = 0; i < probe_filters_.size(); ++i) {
-      if (probe_filters_[i].second != NULL) {
-        delete probe_filters_[i].second;
-        probe_filters_[i].second = NULL;
-      }
-    }
+    CleanupProbeFilters();
     return false;
   }
 }
 
-// TODO: can we do better with the spilling heuristic.
-Status PartitionedHashJoinNode::SpillPartition() {
+void PartitionedHashJoinNode::CleanupProbeFilters() {
+  for (int i = 0; i < probe_filters_.size(); ++i) {
+    if (probe_filters_[i].second == NULL) continue;
+    delete probe_filters_[i].second;
+    probe_filters_[i].second = NULL;
+  }
+}
+
+bool PartitionedHashJoinNode::AppendRowStreamFull(BufferedTupleStream* stream,
+    TupleRow* row, Status* status) {
+  // TODO: should this (and other AddRow() status checks below) try to continue if
+  // status->IsMemLimitExceeded()?
+
+  while (status->ok()) {
+    // Check if the stream is still using small buffers and try to switch to IO-buffers.
+    if (stream->using_small_buffers()) {
+      bool got_buffer;
+      *status = stream->SwitchToIoBuffers(&got_buffer);
+      if (!status->ok()) return false;
+      if (got_buffer) {
+        if (LIKELY(stream->AddRow(row, status))) return true;
+        if (!status->ok()) return false;
+      }
+    }
+    // We ran out of memory. Pick a partition to spill.
+    Partition* spilled_partition;
+    *status = SpillPartition(&spilled_partition);
+    if (!status->ok()) return false;
+    if (stream->AddRow(row, status)) return true;
+    // Spilling one partition does not guarantee we can append a row. Keep
+    // spilling until we can append this row.
+  }
+  return false;
+}
+
+// TODO: Can we do better with a different spilling heuristic?
+Status PartitionedHashJoinNode::SpillPartition(Partition** spilled_partition) {
   int64_t max_freed_mem = 0;
   int partition_idx = -1;
+  *spilled_partition = NULL;
 
   // Iterate over the partitions and pick the largest partition to spill.
   for (int i = 0; i < hash_partitions_.size(); ++i) {
-    if (hash_partitions_[i]->is_closed()) continue;
-    if (hash_partitions_[i]->is_spilled()) continue;
-    int64_t mem = hash_partitions_[i]->build_rows()->bytes_in_mem(false);
-    if (hash_partitions_[i]->hash_tbl() != NULL) {
-      mem += hash_partitions_[i]->hash_tbl()->byte_size();
+    Partition* candidate = hash_partitions_[i];
+    if (candidate->is_closed()) continue;
+    if (candidate->is_spilled()) continue;
+    int64_t mem = candidate->build_rows()->bytes_in_mem(false);
+    // TODO: What should we do here if probe_rows()->num_rows() > 0 ? We should be able
+    // to spill INNER JOINS, but not many of the other joins.
+    if (candidate->hash_tbl() != NULL) {
+      // IMPALA-1488: Do not spill partitions that already had matches, because we
+      // are going to lose information and return wrong results.
+      if (UNLIKELY(candidate->hash_tbl()->HasMatches())) continue;
+      mem += candidate->hash_tbl()->byte_size();
     }
     if (mem > max_freed_mem) {
       max_freed_mem = mem;
@@ -415,19 +554,16 @@ Status PartitionedHashJoinNode::SpillPartition() {
   }
 
   if (partition_idx == -1) {
-    // Could not find a partition to spill. This means the mem limit was just too
-    // low. e.g. mem_limit too small that we can't put a buffer in front of each
-    // partition.
-    Status status = Status::MEM_LIMIT_EXCEEDED;
-    status.AddErrorMsg("Mem limit is too low to perform partitioned join. We do not "
-        "have enough memory to maintain a buffer per partition.");
-    return status;
+    // Could not find a partition to spill. This means the mem limit was just too low.
+    return runtime_state_->block_mgr()->MemLimitTooLowError(block_mgr_client_, id());
   }
-  VLOG(2) << "Spilling partition: " << partition_idx << endl << DebugString();
+
+  VLOG(2) << "Spilling partition: " << partition_idx << endl << NodeDebugString();
   RETURN_IF_ERROR(hash_partitions_[partition_idx]->Spill(false));
   DCHECK(hash_partitions_[partition_idx]->probe_rows()->has_write_block());
   hash_tbls_[partition_idx] = NULL;
-  return Status::OK;
+  *spilled_partition = hash_partitions_[partition_idx];
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::ConstructBuildSide(RuntimeState* state) {
@@ -437,44 +573,44 @@ Status PartitionedHashJoinNode::ConstructBuildSide(RuntimeState* state) {
   AllocateProbeFilters(state);
 
   // Do a full scan of child(1) and partition the rows.
-  RETURN_IF_ERROR(child(1)->Open(state));
+  {
+    SCOPED_STOP_WATCH(&built_probe_overlap_stop_watch_);
+    RETURN_IF_ERROR(child(1)->Open(state));
+  }
   RETURN_IF_ERROR(ProcessBuildInput(state, 0));
 
   AttachProbeFilters(state);
   UpdateState(PROCESSING_PROBE);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::ProcessBuildInput(RuntimeState* state, int level) {
   if (level >= MAX_PARTITION_DEPTH) {
-    Status status = Status::MEM_LIMIT_EXCEEDED;
-    status.AddErrorMsg("Cannot perform hash aggregation. Partitioned input data too many"
-       " times. This could mean there is too much skew in the data or the memory"
-       " limit is set too low.");
-    state->SetMemLimitExceeded();
-    return status;
+    return state->SetMemLimitExceeded(ErrorMsg(
+        TErrorCode::PARTITIONED_HASH_JOIN_MAX_PARTITION_DEPTH, id_, MAX_PARTITION_DEPTH));
   }
 
   DCHECK(hash_partitions_.empty());
   if (input_partition_ != NULL) {
     DCHECK(input_partition_->build_rows() != NULL);
-    DCHECK_EQ(input_partition_->build_rows()->blocks_pinned(), 0) << DebugString();
-    DCHECK_EQ(input_partition_->build_rows()->blocks_pinned(), 0) << DebugString();
+    DCHECK_EQ(input_partition_->build_rows()->blocks_pinned(), 0) << NodeDebugString();
     RETURN_IF_ERROR(input_partition_->build_rows()->PrepareForRead());
   }
 
   for (int i = 0; i < PARTITION_FANOUT; ++i) {
-    hash_partitions_.push_back(pool_->Add(new Partition(state, this, level)));
-    RETURN_IF_ERROR(hash_partitions_[i]->build_rows()->Init(runtime_profile()));
+    Partition* new_partition = new Partition(state, this, level);
+    DCHECK(new_partition != NULL);
+    hash_partitions_.push_back(partition_pool_->Add(new_partition));
+    RETURN_IF_ERROR(new_partition->build_rows()->Init(id(), runtime_profile(), true));
 
-    // Initialize a buffer for the probe here to make sure why have it if we
-    // need it. While this is not strictly necessary (there are some cases where we
-    // won't need this buffer), the benefit is low. Not grabbing this buffer means
-    // there is an additional buffer that could be used for the build side. However
-    // since this is only one buffer, there is only a small range of build input
-    // sizes where this is beneficial (an IO buffer size). It makes the logic
-    // much more complex to enable this optimization.
-    RETURN_IF_ERROR(hash_partitions_[i]->probe_rows()->Init(runtime_profile(), false));
+    // Initialize a buffer for the probe here to make sure why have it if we need it.
+    // While this is not strictly necessary (there are some cases where we won't need this
+    // buffer), the benefit is low. Not grabbing this buffer means there is an additional
+    // buffer that could be used for the build side. However since this is only one
+    // buffer, there is only a small range of build input sizes where this is beneficial
+    // (an IO buffer size). It makes the logic much more complex to enable this
+    // optimization.
+    RETURN_IF_ERROR(new_partition->probe_rows()->Init(id(), runtime_profile(), false));
   }
   COUNTER_ADD(partitions_created_, PARTITION_FANOUT);
   COUNTER_SET(max_partition_level_, level);
@@ -484,11 +620,13 @@ Status PartitionedHashJoinNode::ProcessBuildInput(RuntimeState* state, int level
   int64_t total_build_rows = 0;
   while (!eos) {
     RETURN_IF_CANCELLED(state);
-    RETURN_IF_ERROR(state->QueryMaintenance());
-    ExprContext::FreeLocalAllocations(build_expr_ctxs_);
+    RETURN_IF_ERROR(QueryMaintenance(state));
     if (input_partition_ == NULL) {
       // If we are still consuming batches from the build side.
-      RETURN_IF_ERROR(child(1)->GetNext(state, &build_batch, &eos));
+      {
+        SCOPED_STOP_WATCH(&built_probe_overlap_stop_watch_);
+        RETURN_IF_ERROR(child(1)->GetNext(state, &build_batch, &eos));
+      }
       COUNTER_ADD(build_row_counter_, build_batch.num_rows());
     } else {
       // If we are consuming batches that have already been partitioned.
@@ -500,7 +638,7 @@ Status PartitionedHashJoinNode::ProcessBuildInput(RuntimeState* state, int level
     if (process_build_batch_fn_ == NULL || ht_ctx_->level() != 0) {
       RETURN_IF_ERROR(ProcessBuildBatch(&build_batch));
     } else {
-      DCHECK_NOTNULL(process_build_batch_fn_level0_);
+      DCHECK(process_build_batch_fn_level0_ != NULL);
       if (ht_ctx_->level() == 0) {
         RETURN_IF_ERROR(process_build_batch_fn_level0_(this, &build_batch));
       } else {
@@ -530,18 +668,18 @@ Status PartitionedHashJoinNode::ProcessBuildInput(RuntimeState* state, int level
        << "    #rows:" << partition->build_rows()->num_rows() << endl;
     COUNTER_SET(largest_partition_percent_, static_cast<int64_t>(percent));
   }
-  VLOG_QUERY << ss.str();
+  VLOG(2) << ss.str();
 
   COUNTER_ADD(num_build_rows_partitioned_, total_build_rows);
   non_empty_build_ |= (total_build_rows > 0);
   RETURN_IF_ERROR(BuildHashTables(state));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::InitGetNext(TupleRow* first_probe_row) {
   // TODO: Move this reset to blocking-join. Not yet though because of hash-join.
   ResetForProbe();
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::NextProbeRowBatch(
@@ -553,19 +691,19 @@ Status PartitionedHashJoinNode::NextProbeRowBatch(
     if (out_batch->AtCapacity()) {
       // This out batch is full. Need to return it before getting the next batch.
       probe_batch_pos_ = -1;
-      return Status::OK;
+      return Status::OK();
     }
     if (probe_side_eos_) {
       current_probe_row_ = NULL;
       probe_batch_pos_ = -1;
-      return Status::OK;
+      return Status::OK();
     }
     RETURN_IF_ERROR(child(0)->GetNext(state, probe_batch_.get(), &probe_side_eos_));
     COUNTER_ADD(probe_row_counter_, probe_batch_->num_rows());
   } while (probe_batch_->num_rows() == 0);
 
   ResetForProbe();
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::NextSpilledProbeRowBatch(
@@ -576,7 +714,7 @@ Status PartitionedHashJoinNode::NextSpilledProbeRowBatch(
     // The out_batch has resources associated with it that will be recycled on the
     // next call to GetNext() on the probe stream. Return this batch now.
     probe_batch_pos_ = -1;
-    return Status::OK;
+    return Status::OK();
   }
   BufferedTupleStream* probe_rows = input_partition_->probe_rows();
   if (LIKELY(probe_rows->rows_returned() < probe_rows->num_rows())) {
@@ -587,13 +725,18 @@ Status PartitionedHashJoinNode::NextSpilledProbeRowBatch(
     ResetForProbe();
   } else {
     // Done with this partition.
-    if (join_op_ == TJoinOp::RIGHT_OUTER_JOIN || join_op_ == TJoinOp::RIGHT_ANTI_JOIN ||
-        join_op_ == TJoinOp::FULL_OUTER_JOIN) {
+    if (!input_partition_->is_spilled() &&
+        (join_op_ == TJoinOp::RIGHT_OUTER_JOIN || join_op_ == TJoinOp::RIGHT_ANTI_JOIN ||
+         join_op_ == TJoinOp::FULL_OUTER_JOIN)) {
       // In case of right-outer, right-anti and full-outer joins, we move this partition
       // to the list of partitions that we need to output their unmatched build rows.
       DCHECK(output_build_partitions_.empty());
-      DCHECK(input_partition_->hash_tbl_.get() != NULL);
-      hash_tbl_iterator_ = input_partition_->hash_tbl_->FirstUnmatched(ht_ctx_.get());
+      DCHECK(input_partition_->hash_tbl_.get() != NULL) << " id: " << id_
+           << " Build: " << input_partition_->build_rows()->num_rows()
+           << " Probe: " << probe_rows->num_rows() << endl
+           << GetStackTrace();
+      hash_tbl_iterator_ =
+          input_partition_->hash_tbl_->FirstUnmatched(ht_ctx_.get());
       output_build_partitions_.push_back(input_partition_);
     } else {
       // In any other case, just close the input partition.
@@ -603,13 +746,13 @@ Status PartitionedHashJoinNode::NextSpilledProbeRowBatch(
     current_probe_row_ = NULL;
     probe_batch_pos_ = -1;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::PrepareNextPartition(RuntimeState* state) {
   DCHECK(input_partition_ == NULL);
-  if (spilled_partitions_.empty()) return Status::OK;
-  VLOG(2) << "PrepareNextPartition\n" << DebugString();
+  if (spilled_partitions_.empty()) return Status::OK();
+  VLOG(2) << "PrepareNextPartition\n" << NodeDebugString();
 
   input_partition_ = spilled_partitions_.front();
   spilled_partitions_.pop_front();
@@ -622,24 +765,45 @@ Status PartitionedHashJoinNode::PrepareNextPartition(RuntimeState* state) {
   int64_t mem_limit = mem_tracker()->SpareCapacity();
   // Try to build a hash table on top the spilled build rows.
   bool built = false;
-  if (input_partition_->EstimatedInMemSize() < mem_limit) {
+  int64_t estimated_memory = input_partition_->EstimatedInMemSize();
+  if (estimated_memory < mem_limit) {
     ht_ctx_->set_level(input_partition_->level_);
     // TODO: We disable filter on spilled partitions, but perhaps we can revisit
     // this, especially if the probe side is very big (e.g. has spilled as well).
     RETURN_IF_ERROR(input_partition_->BuildHashTable(state, &built, false));
+  } else {
+    LOG(INFO) << "In hash join id=" << id_ << " the estimated needed memory ("
+        << estimated_memory << ") for partition " << input_partition_ << " with "
+        << input_partition_->build_rows()->num_rows() << " build rows is larger "
+        << " than the mem_limit (" << mem_limit << ").";
   }
 
   if (!built) {
     // This build partition still does not fit in memory, repartition.
+    UpdateState(REPARTITIONING);
     DCHECK(input_partition_->is_spilled());
     input_partition_->Spill(false);
     ht_ctx_->set_level(input_partition_->level_ + 1);
+    int64_t num_input_rows = input_partition_->build_rows()->num_rows();
     RETURN_IF_ERROR(ProcessBuildInput(state, input_partition_->level_ + 1));
-    UpdateState(REPARTITIONING);
+
+    // Check if there was any reduction in the size of partitions after repartitioning.
+    int64_t largest_partition = LargestSpilledPartition();
+    DCHECK_GE(num_input_rows, largest_partition) << "Cannot have a partition with "
+        "more rows than the input";
+    if (num_input_rows == largest_partition) {
+      Status status = Status::MemLimitExceeded();
+      status.AddDetail(Substitute("Cannot perform hash join at node with id $0. "
+          "Repartitioning did not reduce the size of a spilled partition. "
+          "Repartitioning level $1. Number of rows $2.",
+          id_, input_partition_->level_ + 1, num_input_rows));
+      state->SetMemLimitExceeded();
+      return status;
+    }
   } else {
     DCHECK(hash_partitions_.empty());
     DCHECK(!input_partition_->is_spilled());
-    DCHECK_NOTNULL(input_partition_->hash_tbl());
+    DCHECK(input_partition_->hash_tbl() != NULL);
     // In this case, we did not have to partition the build again, we just built
     // a hash table. This means the probe does not have to be partitioned either.
     for (int i = 0; i < PARTITION_FANOUT; ++i) {
@@ -650,7 +814,20 @@ Status PartitionedHashJoinNode::PrepareNextPartition(RuntimeState* state) {
 
   COUNTER_ADD(num_repartitions_, 1);
   COUNTER_ADD(num_probe_rows_partitioned_, input_partition_->probe_rows()->num_rows());
-  return Status::OK;
+  return Status::OK();
+}
+
+int64_t PartitionedHashJoinNode::LargestSpilledPartition() const {
+  int64_t max_rows = 0;
+  for (int i = 0; i < hash_partitions_.size(); ++i) {
+    Partition* partition = hash_partitions_[i];
+    DCHECK(partition != NULL) << i << " " << hash_partitions_.size();
+    if (partition->is_closed() || !partition->is_spilled()) continue;
+    int64_t rows = partition->build_rows()->num_rows();
+    rows += partition->probe_rows()->num_rows();
+    if (rows > max_rows) max_rows = rows;
+  }
+  return max_rows;
 }
 
 Status PartitionedHashJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch,
@@ -661,15 +838,17 @@ Status PartitionedHashJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch
 
   if (ReachedLimit()) {
     *eos = true;
-    return Status::OK;
+    return Status::OK();
   } else {
     *eos = false;
   }
 
+  Status status = Status::OK();
   while (true) {
+    DCHECK(status.ok());
     DCHECK_NE(state_, PARTITIONING_BUILD) << "Should not be in GetNext()";
     RETURN_IF_CANCELLED(state);
-    RETURN_IF_ERROR(state->QueryMaintenance());
+    RETURN_IF_ERROR(QueryMaintenance(state));
 
     if ((join_op_ == TJoinOp::RIGHT_OUTER_JOIN || join_op_ == TJoinOp::RIGHT_ANTI_JOIN ||
          join_op_ == TJoinOp::FULL_OUTER_JOIN) &&
@@ -677,7 +856,7 @@ Status PartitionedHashJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch
       // In case of right-outer, right-anti and full-outer joins, flush the remaining
       // unmatched build rows of any partition we are done processing, before processing
       // the next batch.
-      RETURN_IF_ERROR(OutputUnmatchedBuild(out_batch));
+      OutputUnmatchedBuild(out_batch);
       if (!output_build_partitions_.empty()) break;
 
       // Finished to output unmatched build rows, move to next partition.
@@ -687,6 +866,7 @@ Status PartitionedHashJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch
         *eos = true;
         break;
       }
+      if (out_batch->AtCapacity()) break;
     }
 
     if (join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
@@ -698,37 +878,39 @@ Status PartitionedHashJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch
 
       if (null_probe_output_idx_ >= 0) {
         RETURN_IF_ERROR(OutputNullAwareNullProbe(state, out_batch));
-        if (out_batch->AtCapacity()) return Status::OK;
+        if (out_batch->AtCapacity()) break;
         continue;
       }
 
       if (nulls_build_batch_.get() != NULL) {
         RETURN_IF_ERROR(OutputNullAwareProbeRows(state, out_batch));
-        if (out_batch->AtCapacity()) return Status::OK;
+        if (out_batch->AtCapacity()) break;
         continue;
       }
     }
 
     // Finish up the current batch.
     {
-      // Putting SCOPED_TIMER in ProcessProbeBatch() causes weird exception handling IR in
-      // the xcompiled function, so call it here instead.
+      // Putting SCOPED_TIMER in ProcessProbeBatch() causes weird exception handling IR
+      // in the xcompiled function, so call it here instead.
       int rows_added = 0;
       SCOPED_TIMER(probe_timer_);
       if (process_probe_batch_fn_ == NULL || ht_ctx_->level() != 0) {
-        rows_added = ProcessProbeBatch(join_op_, out_batch, ht_ctx_.get());
+        rows_added = ProcessProbeBatch(join_op_, out_batch, ht_ctx_.get(), &status);
       } else {
-        DCHECK_NOTNULL(process_probe_batch_fn_level0_);
+        DCHECK(process_probe_batch_fn_level0_ != NULL);
         if (ht_ctx_->level() == 0) {
-          rows_added = process_probe_batch_fn_level0_(this, out_batch, ht_ctx_.get());
+          rows_added = process_probe_batch_fn_level0_(this, out_batch, ht_ctx_.get(),
+              &status);
         } else {
-          rows_added = process_probe_batch_fn_(this, out_batch, ht_ctx_.get());
+          rows_added = process_probe_batch_fn_(this, out_batch, ht_ctx_.get(), &status);
         }
       }
       if (UNLIKELY(rows_added < 0)) {
-        DCHECK(!status_.ok());
-        return status_;
+        DCHECK(!status.ok());
+        return status;
       }
+      DCHECK(status.ok());
       out_batch->CommitRows(rows_added);
       num_rows_returned_ += rows_added;
       COUNTER_SET(rows_returned_counter_, num_rows_returned_);
@@ -769,23 +951,26 @@ Status PartitionedHashJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch
       if (join_op_ == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
         RETURN_IF_ERROR(PrepareNullAwarePartition());
       }
-      *eos = null_aware_partition_ == NULL;
-      if (*eos) break;
+      if (null_aware_partition_ == NULL) {
+        *eos = true;
+        break;
+      } else {
+        *eos = false;
+      }
     }
   }
 
   if (ReachedLimit()) *eos = true;
-  return Status::OK;
+  return Status::OK();
 }
 
-Status PartitionedHashJoinNode::OutputUnmatchedBuild(RowBatch* out_batch) {
+void PartitionedHashJoinNode::OutputUnmatchedBuild(RowBatch* out_batch) {
   SCOPED_TIMER(probe_timer_);
   DCHECK(join_op_ == TJoinOp::RIGHT_OUTER_JOIN || join_op_ == TJoinOp::RIGHT_ANTI_JOIN ||
          join_op_ == TJoinOp::FULL_OUTER_JOIN);
   DCHECK(!output_build_partitions_.empty());
   ExprContext* const* conjunct_ctxs = &conjunct_ctxs_[0];
   const int num_conjuncts = conjunct_ctxs_.size();
-
   TupleRow* out_row = out_batch->GetRow(out_batch->AddRow());
   const int max_rows = out_batch->capacity() - out_batch->num_rows();
   int num_rows_added = 0;
@@ -793,23 +978,27 @@ Status PartitionedHashJoinNode::OutputUnmatchedBuild(RowBatch* out_batch) {
   while (!out_batch->AtCapacity() && !hash_tbl_iterator_.AtEnd() &&
          num_rows_added < max_rows) {
     // Output remaining unmatched build rows.
-    if (!hash_tbl_iterator_.matched()) {
-      hash_tbl_iterator_.set_matched(true);
+    if (!hash_tbl_iterator_.IsMatched()) {
       TupleRow* build_row = hash_tbl_iterator_.GetRow();
       DCHECK(build_row != NULL);
-      CreateOutputRow(out_row, NULL, build_row);
+      if (join_op_ == TJoinOp::RIGHT_ANTI_JOIN) {
+        out_batch->CopyRow(build_row, out_row);
+      } else {
+        CreateOutputRow(out_row, NULL, build_row);
+      }
       if (ExecNode::EvalConjuncts(conjunct_ctxs, num_conjuncts, out_row)) {
         ++num_rows_added;
         out_row = out_row->next_row(out_batch);
       }
+      hash_tbl_iterator_.SetMatched();
     }
-    // Move to the next unmatched entry
+    // Move to the next unmatched entry.
     hash_tbl_iterator_.NextUnmatched();
   }
 
   // If we reached the end of the hash table, then there are no other unmatched build
-  // rows for this partition. In that case we need to close the partition, and move to the
-  // next. If we have not reached the end of the hash table, it means that we reached
+  // rows for this partition. In that case we need to close the partition, and move to
+  // the next. If we have not reached the end of the hash table, it means that we reached
   // out_batch capacity and we need to continue to output unmatched build rows, without
   // closing the partition.
   if (hash_tbl_iterator_.AtEnd()) {
@@ -818,7 +1007,7 @@ Status PartitionedHashJoinNode::OutputUnmatchedBuild(RowBatch* out_batch) {
     // Move to the next partition to output unmatched rows.
     if (!output_build_partitions_.empty()) {
       hash_tbl_iterator_ =
-          output_build_partitions_.front()->hash_tbl_->FirstUnmatched(ht_ctx_.get());
+          output_build_partitions_.front()->hash_tbl()->FirstUnmatched(ht_ctx_.get());
     }
   }
 
@@ -826,7 +1015,6 @@ Status PartitionedHashJoinNode::OutputUnmatchedBuild(RowBatch* out_batch) {
   out_batch->CommitRows(num_rows_added);
   num_rows_returned_ += num_rows_added;
   COUNTER_SET(rows_returned_counter_, num_rows_returned_);
-  return Status::OK;
 }
 
 Status PartitionedHashJoinNode::PrepareNullAwareNullProbe() {
@@ -835,26 +1023,28 @@ Status PartitionedHashJoinNode::PrepareNullAwareNullProbe() {
   DCHECK_EQ(probe_batch_->num_rows(), 0);
   probe_batch_pos_ = 0;
   null_probe_output_idx_ = 0;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::OutputNullAwareNullProbe(RuntimeState* state,
     RowBatch* out_batch) {
-  DCHECK_NOTNULL(null_aware_partition_);
+  DCHECK(null_aware_partition_ != NULL);
   DCHECK(nulls_build_batch_.get() == NULL);
   DCHECK_NE(probe_batch_pos_, -1);
 
   if (probe_batch_pos_ == probe_batch_->num_rows()) {
     probe_batch_pos_ = 0;
     probe_batch_->TransferResourceOwnership(out_batch);
-    if (out_batch->AtCapacity()) return Status::OK;
+    if (out_batch->AtCapacity()) return Status::OK();
     bool eos;
     RETURN_IF_ERROR(null_probe_rows_->GetNext(probe_batch_.get(), &eos));
     if (probe_batch_->num_rows() == 0) {
       // All done.
-      null_aware_partition_->Close(NULL);
+      null_aware_partition_->Close(out_batch);
       null_aware_partition_ = NULL;
-      return Status::OK;
+      out_batch->AddTupleStream(null_probe_rows_);
+      null_probe_rows_ = NULL;
+      return Status::OK();
     }
   }
 
@@ -863,11 +1053,11 @@ Status PartitionedHashJoinNode::OutputNullAwareNullProbe(RuntimeState* state,
     if (out_batch->AtCapacity()) break;
     if (matched_null_probe_[null_probe_output_idx_]) continue;
     TupleRow* out_row = out_batch->GetRow(out_batch->AddRow());
-    CreateOutputRow(out_row, probe_batch_->GetRow(probe_batch_pos_), NULL);
+    out_batch->CopyRow(probe_batch_->GetRow(probe_batch_pos_), out_row);
     out_batch->CommitLastRow();
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 // In this case we had a lot of NULLs on either the build/probe side. While this is
@@ -881,7 +1071,7 @@ static Status NullAwareAntiJoinError(bool build) {
 }
 
 Status PartitionedHashJoinNode::PrepareNullAwarePartition() {
-  DCHECK_NOTNULL(null_aware_partition_);
+  DCHECK(null_aware_partition_ != NULL);
   DCHECK(nulls_build_batch_.get() == NULL);
   DCHECK_EQ(probe_batch_pos_, -1);
   DCHECK_EQ(probe_batch_->num_rows(), 0);
@@ -895,7 +1085,7 @@ Status PartitionedHashJoinNode::PrepareNullAwarePartition() {
     DCHECK_EQ(probe_stream->num_rows(), 0);
     nulls_build_batch_.reset();
     RETURN_IF_ERROR(PrepareNullAwareNullProbe());
-    return Status::OK;
+    return Status::OK();
   }
 
   // Bring the entire spilled build stream into memory and read into a single batch.
@@ -906,23 +1096,23 @@ Status PartitionedHashJoinNode::PrepareNullAwarePartition() {
   // Initialize the streams for read.
   RETURN_IF_ERROR(probe_stream->PrepareForRead());
   probe_batch_pos_ = 0;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::OutputNullAwareProbeRows(RuntimeState* state,
     RowBatch* out_batch) {
-  DCHECK_NOTNULL(null_aware_partition_);
+  DCHECK(null_aware_partition_ != NULL);
   DCHECK(nulls_build_batch_.get() != NULL);
 
   ExprContext* const* join_conjunct_ctxs = &other_join_conjunct_ctxs_[0];
   int num_join_conjuncts = other_join_conjunct_ctxs_.size();
-  DCHECK_NOTNULL(probe_batch_.get());
+  DCHECK(probe_batch_.get() != NULL);
 
   BufferedTupleStream* probe_stream = null_aware_partition_->probe_rows();
   if (probe_batch_pos_ == probe_batch_->num_rows()) {
     probe_batch_pos_ = 0;
     probe_batch_->TransferResourceOwnership(out_batch);
-    if (out_batch->AtCapacity()) return Status::OK;
+    if (out_batch->AtCapacity()) return Status::OK();
 
     // Get the next probe batch.
     bool eos;
@@ -932,7 +1122,7 @@ Status PartitionedHashJoinNode::OutputNullAwareProbeRows(RuntimeState* state,
       RETURN_IF_ERROR(EvaluateNullProbe(null_aware_partition_->build_rows()));
       nulls_build_batch_.reset();
       RETURN_IF_ERROR(PrepareNullAwareNullProbe());
-      return Status::OK;
+      return Status::OK();
     }
   }
 
@@ -940,24 +1130,25 @@ Status PartitionedHashJoinNode::OutputNullAwareProbeRows(RuntimeState* state,
   // that did not have any matches.
   for (; probe_batch_pos_ < probe_batch_->num_rows(); ++probe_batch_pos_) {
     if (out_batch->AtCapacity()) break;
-    TupleRow* out_row = out_batch->GetRow(out_batch->AddRow());
     TupleRow* probe_row = probe_batch_->GetRow(probe_batch_pos_);
 
     bool matched = false;
     for (int i = 0; i < nulls_build_batch_->num_rows(); ++i) {
-      CreateOutputRow(out_row, probe_row, nulls_build_batch_->GetRow(i));
-      if (ExecNode::EvalConjuncts(join_conjunct_ctxs, num_join_conjuncts, out_row)) {
+      CreateOutputRow(semi_join_staging_row_, probe_row, nulls_build_batch_->GetRow(i));
+      if (ExecNode::EvalConjuncts(
+          join_conjunct_ctxs, num_join_conjuncts, semi_join_staging_row_)) {
         matched = true;
         break;
       }
     }
 
     if (!matched) {
-      CreateOutputRow(out_row, probe_row, NULL);
+      TupleRow* out_row = out_batch->GetRow(out_batch->AddRow());
+      out_batch->CopyRow(probe_row, out_row);
       out_batch->CommitLastRow();
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 // When this function is called, we've finished processing the current build input
@@ -980,7 +1171,6 @@ Status PartitionedHashJoinNode::BuildHashTables(RuntimeState* state) {
 
   // Decide whether probe filters will be built.
   if (input_partition_ == NULL && can_add_probe_filters_) {
-    // TODO: Should we just give up in case we have any spilled partition?
     uint64_t num_build_rows = 0;
     BOOST_FOREACH(Partition* partition, hash_partitions_) {
       const uint64_t partition_num_rows = partition->build_rows()->num_rows();
@@ -989,10 +1179,8 @@ Status PartitionedHashJoinNode::BuildHashTables(RuntimeState* state) {
     // TODO: Using this simple heuristic where we compare the number of build rows
     // to the size of the slot filter bitmap. This is essentially not a Bloom filter
     // but a 1-1 filter, and probably it is missing oportunities. Should revisit.
-    can_add_probe_filters_ = (num_build_rows < state->slot_filter_bitmap_size());
-    if (can_add_probe_filters_) {
-      AddRuntimeExecOption("Build-Side Filter Pushed Down");
-    } else {
+    if (num_build_rows >= state->slot_filter_bitmap_size()) {
+      can_add_probe_filters_ = false;
       VLOG(2) << "Disabling probe filter push down because build side is too large: "
               << num_build_rows;
     }
@@ -1000,8 +1188,8 @@ Status PartitionedHashJoinNode::BuildHashTables(RuntimeState* state) {
     can_add_probe_filters_ = false;
   }
 
-  // First loop over the partitions and build hash tables for the partitions that
-  // didn't already spill.
+  // First loop over the partitions and build hash tables for the partitions that did
+  // not already spill.
   BOOST_FOREACH(Partition* partition, hash_partitions_) {
     if (partition->build_rows()->num_rows() == 0) {
       // This partition is empty, no need to do anything else.
@@ -1009,20 +1197,53 @@ Status PartitionedHashJoinNode::BuildHashTables(RuntimeState* state) {
       continue;
     }
 
-    bool built = false;
     if (!partition->is_spilled()) {
+      bool built = false;
       DCHECK(partition->build_rows()->is_pinned());
       RETURN_IF_ERROR(partition->BuildHashTable(state, &built, can_add_probe_filters_));
+      // If we did not have enough memory to build this hash table, we need to spill this
+      // partition (clean up the hash table, unpin build).
+      if (!built) RETURN_IF_ERROR(partition->Spill(true));
+    }
+  }
+
+  // Collect all the spilled partitions that don't have an IO buffer. We need to reserve
+  // an IO buffer for those partitions. Reserving an IO buffer can cause more partitions
+  // to spill so this process is recursive.
+  list<Partition*> spilled_partitions;
+  BOOST_FOREACH(Partition* partition, hash_partitions_) {
+    if (partition->is_closed()) continue;
+    if (partition->is_spilled() && partition->probe_rows()->using_small_buffers()) {
+      spilled_partitions.push_back(partition);
+    }
+  }
+  while (!spilled_partitions.empty()) {
+    Partition* partition = spilled_partitions.front();
+    spilled_partitions.pop_front();
+
+    while (true) {
+      bool got_buffer;
+      RETURN_IF_ERROR(partition->probe_rows()->SwitchToIoBuffers(&got_buffer));
+      if (got_buffer) break;
+      Partition* spilled_partition;
+      RETURN_IF_ERROR(SpillPartition(&spilled_partition));
+      DCHECK(spilled_partition->is_spilled());
+      if (spilled_partition->probe_rows()->using_small_buffers()) {
+        spilled_partitions.push_back(spilled_partition);
+      }
     }
 
-    if (built) {
-      // This partition's build is in memory and has a hash table, we won't be needing
-      // the probe stream anymore.
-      partition->probe_rows()->Close();
-    } else {
-      RETURN_IF_ERROR(partition->Spill(true));
-      DCHECK(partition->probe_rows()->has_write_block());
-    }
+    DCHECK(partition->probe_rows()->has_write_block());
+    DCHECK(!partition->probe_rows()->using_small_buffers());
+  }
+
+  // At this point, the partition is in one of these states:
+  // 1. closed. All done, no buffers in either the build or probe stream.
+  // 2. in_mem. The build side is pinned and has a hash table built.
+  // 3. spilled. The build side is fully unpinned and the probe side has an io
+  //    sized buffer.
+  BOOST_FOREACH(Partition* partition, hash_partitions_) {
+    if (partition->hash_tbl() != NULL) partition->probe_rows()->Close();
   }
 
   // TODO: at this point we could have freed enough memory to pin and build some
@@ -1040,13 +1261,12 @@ Status PartitionedHashJoinNode::BuildHashTables(RuntimeState* state) {
   for (int i = 0; i < PARTITION_FANOUT; ++i) {
     hash_tbls_[i] = hash_partitions_[i]->hash_tbl();
   }
-
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::EvaluateNullProbe(BufferedTupleStream* build) {
   if (null_probe_rows_ == NULL || null_probe_rows_->num_rows() == 0) {
-    return Status::OK;
+    return Status::OK();
   }
   DCHECK_EQ(null_probe_rows_->num_rows(), matched_null_probe_.size());
 
@@ -1062,31 +1282,30 @@ Status PartitionedHashJoinNode::EvaluateNullProbe(BufferedTupleStream* build) {
   ExprContext* const* join_conjunct_ctxs = &other_join_conjunct_ctxs_[0];
   int num_join_conjuncts = other_join_conjunct_ctxs_.size();
 
-  Tuple* buffer[row_desc().tuple_descriptors().size()];
-  TupleRow* row = reinterpret_cast<TupleRow*>(buffer);
-
   DCHECK_LE(probe_rows->num_rows(), matched_null_probe_.size());
   // For each row, iterate over all rows in the build table.
   SCOPED_TIMER(null_aware_eval_timer_);
   for (int i = 0; i < probe_rows->num_rows(); ++i) {
     if (matched_null_probe_[i]) continue;
     for (int j = 0; j < build_rows->num_rows(); ++j) {
-      CreateOutputRow(row, probe_rows->GetRow(i), build_rows->GetRow(j));
-      if (ExecNode::EvalConjuncts(join_conjunct_ctxs, num_join_conjuncts, row)) {
+      CreateOutputRow(semi_join_staging_row_, probe_rows->GetRow(i),
+          build_rows->GetRow(j));
+      if (ExecNode::EvalConjuncts(
+            join_conjunct_ctxs, num_join_conjuncts, semi_join_staging_row_)) {
         matched_null_probe_[i] = true;
         break;
       }
     }
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status PartitionedHashJoinNode::CleanUpHashPartitions(RowBatch* batch) {
   DCHECK_EQ(probe_batch_pos_, -1);
   // At this point all the rows have been read from the probe side for all partitions in
   // hash_partitions_.
-  VLOG(2) << "Probe Side Consumed\n" << DebugString();
+  VLOG(2) << "Probe Side Consumed\n" << NodeDebugString();
 
   // Walk the partitions that had hash tables built for the probe phase and close them.
   // In the case of right outer and full outer joins, instead of closing those partitions,
@@ -1097,7 +1316,7 @@ Status PartitionedHashJoinNode::CleanUpHashPartitions(RowBatch* batch) {
     Partition* partition = hash_partitions_[i];
     if (partition->is_closed()) continue;
     if (partition->is_spilled()) {
-      DCHECK(partition->hash_tbl() == NULL) << DebugString();
+      DCHECK(partition->hash_tbl() == NULL) << NodeDebugString();
       // Unpin the build and probe stream to free up more memory. We need to free all
       // memory so we can recurse the algorithm and create new hash partitions from
       // spilled partitions.
@@ -1111,8 +1330,7 @@ Status PartitionedHashJoinNode::CleanUpHashPartitions(RowBatch* batch) {
     } else {
       DCHECK_EQ(partition->probe_rows()->num_rows(), 0)
         << "No probe rows should have been spilled for this partition.";
-      if (join_op_ == TJoinOp::RIGHT_OUTER_JOIN ||
-          join_op_ == TJoinOp::RIGHT_ANTI_JOIN ||
+      if (join_op_ == TJoinOp::RIGHT_OUTER_JOIN || join_op_ == TJoinOp::RIGHT_ANTI_JOIN ||
           join_op_ == TJoinOp::FULL_OUTER_JOIN) {
         if (output_build_partitions_.empty()) {
           hash_tbl_iterator_ = partition->hash_tbl_->FirstUnmatched(ht_ctx_.get());
@@ -1136,7 +1354,7 @@ Status PartitionedHashJoinNode::CleanUpHashPartitions(RowBatch* batch) {
 
   hash_partitions_.clear();
   input_partition_ = NULL;
-  return Status::OK;
+  return Status::OK();
 }
 
 void PartitionedHashJoinNode::AddToDebugString(int indent, stringstream* out) const {
@@ -1148,9 +1366,9 @@ void PartitionedHashJoinNode::AddToDebugString(int indent, stringstream* out) co
   *out << ")";
 }
 
-void PartitionedHashJoinNode::UpdateState(State s) {
+void PartitionedHashJoinNode::UpdateState(HashJoinState s) {
   state_ = s;
-  VLOG(2) << "Transitioned State:" << endl << DebugString();
+  VLOG(2) << "Transitioned State:" << endl << NodeDebugString();
 }
 
 string PartitionedHashJoinNode::PrintState() const {
@@ -1158,13 +1376,13 @@ string PartitionedHashJoinNode::PrintState() const {
     case PARTITIONING_BUILD: return "PartitioningBuild";
     case PROCESSING_PROBE: return "ProcessingProbe";
     case PROBING_SPILLED_PARTITION: return "ProbingSpilledPartitions";
-    case REPARTITIONING: return "Repartioning";
+    case REPARTITIONING: return "Repartitioning";
     default: DCHECK(false);
   }
   return "";
 }
 
-string PartitionedHashJoinNode::DebugString() const {
+string PartitionedHashJoinNode::NodeDebugString() const {
   stringstream ss;
   ss << "PartitionedHashJoinNode (id=" << id() << " op=" << join_op_
      << " state=" << PrintState()
@@ -1173,24 +1391,28 @@ string PartitionedHashJoinNode::DebugString() const {
      << ")" << endl;
 
   for (int i = 0; i < hash_partitions_.size(); ++i) {
-    ss << i << ": ptr=" << hash_partitions_[i];
     Partition* partition = hash_partitions_[i];
+    ss << i << ": ptr=" << partition;
+    DCHECK(partition != NULL);
     if (partition->is_closed()) {
-      ss << " closed" << endl;
+      ss << " Closed" << endl;
       continue;
     }
+    if (partition->is_spilled()) {
+      ss << " Spilled" << endl;
+    }
+    DCHECK(partition->build_rows() != NULL);
+    DCHECK(partition->probe_rows() != NULL);
     ss << endl
-       << "   "
-       << (partition->is_spilled() ? "(Spilled)" : "")
-       << " Build Rows: " << partition->build_rows()->num_rows()
+       << "   Build Rows: " << partition->build_rows()->num_rows()
        << " (Blocks pinned: " << partition->build_rows()->blocks_pinned() << ")"
+       << endl;
+    ss << "   Probe Rows: " << partition->probe_rows()->num_rows()
+       << " (Blocks pinned: " << partition->probe_rows()->blocks_pinned() << ")"
        << endl;
     if (partition->hash_tbl() != NULL) {
       ss << "   Hash Table Rows: " << partition->hash_tbl()->size() << endl;
     }
-    ss << "   (Spilled) Probe Rows: " << partition->probe_rows()->num_rows()
-       << " (Blocks pinned: " << partition->probe_rows()->blocks_pinned() << ")"
-       << endl;
   }
 
   if (!spilled_partitions_.empty()) {
@@ -1199,12 +1421,25 @@ string PartitionedHashJoinNode::DebugString() const {
         it != spilled_partitions_.end(); ++it) {
       DCHECK((*it)->is_spilled());
       DCHECK((*it)->hash_tbl() == NULL);
+      DCHECK((*it)->build_rows() != NULL);
+      DCHECK((*it)->probe_rows() != NULL);
       ss << "  Partition=" << *it << endl
-        << "   Spilled Build Rows: "
-        << (*it)->build_rows()->num_rows() << endl
-        << "   Spilled Probe Rows: "
-        << (*it)->probe_rows()->num_rows() << endl;
+         << "   Spilled Build Rows: "
+         << (*it)->build_rows()->num_rows() << endl
+         << "   Spilled Probe Rows: "
+         << (*it)->probe_rows()->num_rows() << endl;
     }
+  }
+  if (input_partition_ != NULL) {
+    DCHECK(input_partition_->build_rows() != NULL);
+    DCHECK(input_partition_->probe_rows() != NULL);
+    ss << "InputPartition: " << input_partition_ << endl
+       << "   Spilled Build Rows: "
+       << input_partition_->build_rows()->num_rows() << endl
+       << "   Spilled Probe Rows: "
+       << input_partition_->probe_rows()->num_rows() << endl;
+  } else {
+    ss << "InputPartition: NULL" << endl;
   }
   return ss.str();
 }
@@ -1468,7 +1703,7 @@ bool PartitionedHashJoinNode::CodegenProcessProbeBatch(
   process_probe_batch_fn = codegen->ReplaceCallSites(process_probe_batch_fn, true,
       equals_fn, "Equals", &replaced);
   // Depends on join_op_
-  DCHECK(replaced == 2 || replaced == 3 || replaced == 4) << replaced;
+  DCHECK(replaced == 1 || replaced == 2 || replaced == 3 || replaced == 4) << replaced;
 
   // process_probe_batch_fn_level0 uses CRC hash if available,
   // process_probe_batch_fn uses murmur

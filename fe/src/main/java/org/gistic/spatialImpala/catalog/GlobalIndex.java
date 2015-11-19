@@ -14,6 +14,8 @@ import com.cloudera.impala.thrift.TCatalogObjectType;
 import com.cloudera.impala.thrift.TGlobalIndex;
 import com.cloudera.impala.thrift.TGlobalIndexRecord;
 
+import com.google.common.collect.Lists;
+
 import java.io.IOException;
 import java.util.Scanner;
 import java.util.ArrayList;
@@ -118,7 +120,7 @@ public class GlobalIndex implements CatalogObject {
 	private void fillIndexedOnCols (String indexes) {
 		List<String> columnNames = Arrays.asList(indexes.split("\\s*,\\s*"));
 		for (String name : columnNames) {
-			indexedOnCols.add(new SlotRef(null, name));
+			indexedOnCols.add(new SlotRef(Lists.newArrayList(name)));
 		}
 			
 	}

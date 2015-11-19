@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import com.cloudera.impala.analysis.ExprSubstitutionMap;
 import com.cloudera.impala.planner.PlanNode;
 import com.cloudera.impala.planner.Planner;
+import com.cloudera.impala.planner.PlannerContext;
 import com.cloudera.impala.analysis.Analyzer;
 import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.analysis.SlotDescriptor;
@@ -128,7 +129,7 @@ public class SpatialJoinNode extends PlanNode {
     
     ExprSubstitutionMap combinedChildSmap = getCombinedChildSmap();
     otherJoinConjuncts_ =
-            Expr.substituteList(otherJoinConjuncts_, combinedChildSmap, analyzer);
+            Expr.substituteList(otherJoinConjuncts_, combinedChildSmap, analyzer, false);
   }
 
   @Override
@@ -335,7 +336,7 @@ public class SpatialJoinNode extends PlanNode {
     }
     perHostMemCost_ =
         (long) Math.ceil(getChild(1).getCardinality() * getChild(1).getAvgRowSize()
-          * Planner.HASH_TBL_SPACE_OVERHEAD);
+          * PlannerContext.HASH_TBL_SPACE_OVERHEAD);
     if (distrMode_ == DistributionMode.PARTITIONED) perHostMemCost_ /= numNodes_;
   }
 }

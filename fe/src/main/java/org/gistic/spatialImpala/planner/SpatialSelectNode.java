@@ -2,11 +2,14 @@
 
 package org.gistic.spatialImpala.planner;
 
+import java.util.ArrayList;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.cloudera.impala.planner.*;
 import com.cloudera.impala.analysis.Analyzer;
+import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.analysis.SlotRef;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TPlanNode;
@@ -27,7 +30,7 @@ public class SpatialSelectNode extends SelectNode {
   SlotRef Y_;
 
   public SpatialSelectNode(PlanNodeId id, PlanNode child, Rectangle rect, SlotRef X, SlotRef Y) {
-    super(id, child);
+    super(id, child, new ArrayList<Expr>());
     this.rect_ = rect;
     this.displayName_ = "SPATIAL_SELECT";
     X_ = X;

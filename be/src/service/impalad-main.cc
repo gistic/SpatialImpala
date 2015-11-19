@@ -40,8 +40,9 @@
 #include "util/impalad-metrics.h"
 #include "util/thread.h"
 
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 DECLARE_string(classpath);
 DECLARE_bool(use_statestore);
@@ -77,7 +78,7 @@ int main(int argc, char** argv) {
   Status status = exec_env.StartServices();
   if (!status.ok()) {
     LOG(ERROR) << "Impalad services did not start correctly, exiting.  Error: "
-               << status.GetErrorMsg();
+               << status.GetDetail();
     ShutdownLogging();
     exit(1);
   }
@@ -85,7 +86,7 @@ int main(int argc, char** argv) {
   // this blocks until the beeswax and hs2 servers terminate
   EXIT_IF_ERROR(beeswax_server->Start());
   EXIT_IF_ERROR(hs2_server->Start());
-  ImpaladMetrics::IMPALA_SERVER_READY->Update(true);
+  ImpaladMetrics::IMPALA_SERVER_READY->set_value(true);
   LOG(INFO) << "Impala has started.";
   beeswax_server->Join();
   hs2_server->Join();

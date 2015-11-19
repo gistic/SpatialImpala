@@ -17,7 +17,6 @@
 
 # If -format is passed, format the mini-dfs cluster.
 
-HDFS_FORMAT_CLUSTER=""
 if [ "$1" == "-format" ]; then
   echo "Formatting cluster"
   HDFS_FORMAT_CLUSTER="-format"
@@ -34,18 +33,40 @@ echo "Killing running services..."
 $IMPALA_HOME/testdata/bin/kill-all.sh &>${IMPALA_TEST_CLUSTER_LOG_DIR}/kill-all.log
 
 set -e
+set -o pipefail
 
 # Starts up a mini-cluster which includes:
 # - HDFS with 3 DNs
 # - One Yarn ResourceManager
 # - Multiple Yarn NodeManagers, exactly one per HDFS DN
-echo "Starting all cluster services..."
-echo " --> Starting mini-DFS cluster"
-$IMPALA_HOME/testdata/bin/run-mini-dfs.sh ${HDFS_FORMAT_CLUSTER}
+if [[ ${DEFAULT_FS} == "hdfs://localhost:20500" ]]; then
+  echo "Starting all cluster services..."
+  echo " --> Starting mini-DFS cluster"
+  $IMPALA_HOME/testdata/bin/run-mini-dfs.sh ${HDFS_FORMAT_CLUSTER-} 2>&1 | \
+      tee ${IMPALA_TEST_CLUSTER_LOG_DIR}/run-mini-dfs.log
 
-echo " --> Starting HBase"
-$IMPALA_HOME/testdata/bin/run-hbase.sh &>${IMPALA_TEST_CLUSTER_LOG_DIR}/run-hbase.log
+  echo " --> Starting HBase"
+  $IMPALA_HOME/testdata/bin/run-hbase.sh 2>&1 | \
+      tee ${IMPALA_TEST_CLUSTER_LOG_DIR}/run-hbase.log
 
-echo " --> Starting Hive Server and Metastore Service"
-$IMPALA_HOME/testdata/bin/run-hive-server.sh\
-    &>${IMPALA_TEST_CLUSTER_LOG_DIR}/run-hive-server.log
+  echo " --> Starting Hive Server and Metastore Service"
+  $IMPALA_HOME/testdata/bin/run-hive-server.sh 2>&1 | \
+      tee ${IMPALA_TEST_CLUSTER_LOG_DIR}/run-hive-server.log
+else
+  # With Isilon, we only start the Hive metastore.
+  #   - HDFS is not started becuase Isilon is used as the defaultFs in core-site
+  #   - HBase is irrelevent for Impala testing with Isilon.
+  #   - We don't yet have a good way to start YARN using a different defaultFS. Moreoever,
+  #     we currently don't run hive queries against Isilon for testing.
+  #   - LLAMA is avoided because we cannot start YARN.
+  #   - KMS is used for encryption testing, which is not available on Isilon.
+  #   - Hive needs YARN, and we don't run Hive queries.
+  # TODO: Figure out how to start YARN, LLAMA and Hive with a different defaultFs.
+  echo " --> Starting Hive Metastore Service"
+  $IMPALA_HOME/testdata/bin/run-hive-server.sh -only_metastore 2>&1 | \
+      tee ${IMPALA_TEST_CLUSTER_LOG_DIR}/run-hive-server.log
+fi
+
+  echo " --> Starting the Sentry Policy Server"
+  $IMPALA_HOME/testdata/bin/run-sentry-service.sh > \
+      ${IMPALA_TEST_CLUSTER_LOG_DIR}/run-sentry-service.log 2>&1

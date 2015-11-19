@@ -12,7 +12,13 @@ DATALOC=$IMPALA_HOME/testdata/target
 
 # regenerate the test data generator
 cd $IMPALA_HOME/testdata
-mvn clean package
+mvn clean
+# on jenkins runs, resolve dependencies quietly to avoid log spew
+if [ "${USER}" == "jenkins" ]; then
+  echo "Quietly resolving testdata dependencies."
+  mvn -q dependency:resolve
+fi
+mvn package
 
 # find jars
 CP=""
@@ -28,6 +34,6 @@ done
 # run test data generator
 echo $DATALOC
 mkdir -p $DATALOC
-java -cp $CP com.cloudera.impala.datagenerator.TestDataGenerator $DATALOC
-java -cp $CP com.cloudera.impala.datagenerator.CsvToHBaseConverter
+"$JAVA" -cp $CP com.cloudera.impala.datagenerator.TestDataGenerator $DATALOC
+"$JAVA" -cp $CP com.cloudera.impala.datagenerator.CsvToHBaseConverter
 echo "SUCCESS, data generated into $DATALOC"

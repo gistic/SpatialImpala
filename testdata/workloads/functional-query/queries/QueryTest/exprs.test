@@ -352,62 +352,67 @@ select count(*) from alltypesagg where double_col >= 20.2 and cast(double_col as
 bigint
 ====
 ---- QUERY
-# TODO: figure out why the last col has a diff
-# result: 111428999.9997675
-# +
-#select
-#SUM(tinyint_col) + SUM(smallint_col),
-#SUM(tinyint_col + smallint_col),
-#SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col),
-#SUM(tinyint_col + smallint_col + int_col),
-#SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col) + SUM(bigint_col),
-#SUM(tinyint_col + smallint_col + int_col + bigint_col),
-#SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col) + SUM(bigint_col) + SUM(float_col),
-#SUM(tinyint_col + smallint_col + int_col + bigint_col + float_col),
-#SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col) + SUM(bigint_col) + SUM(float_col) + SUM(double_col),
-#SUM(tinyint_col + smallint_col + int_col + bigint_col + float_col + double_col)
-#from alltypesaggnonulls
-#---- TYPES
-#bigint, bigint, bigint, bigint, bigint, bigint, double, double, double, double
-#---- RESULTS
-#540000,540000,5535000,5535000,55485000,55485000,60979499.99976754,60979499.99976754,111428999.9997675,111428999.9997676
-#====
-## -
-#select
-#-1 * SUM(tinyint_col) - SUM(smallint_col),
-#SUM(-1 * tinyint_col - smallint_col),
-#-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col),
-#SUM(-1 * tinyint_col - smallint_col - int_col),
-#-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col) - SUM(bigint_col),
-#SUM(-1 * tinyint_col - smallint_col - int_col - bigint_col),
-#-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col) - SUM(bigint_col) - SUM(float_col),
-#SUM(-1 * tinyint_col - smallint_col - int_col - bigint_col - float_col),
-#-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col) - SUM(bigint_col) - SUM(float_col) - SUM(double_col),
-#SUM(-1 * tinyint_col - smallint_col - int_col - bigint_col - float_col - double_col)
-#from alltypesaggnonulls
-#---- TYPES
-#bigint, bigint, bigint, bigint, bigint, bigint, double, double, double, double
-#---- RESULTS
-#-540000,-540000,-5535000,-5535000,-55485000,-55485000,-60979499.99976754,-60979499.99976754,-111428999.9997675,-111428999.9997676
-#====
-# *
-#select
-#MAX(tinyint_col) * MAX(smallint_col),
-#MAX(tinyint_col * smallint_col),
-#MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col),
-#MAX(tinyint_col * smallint_col * int_col),
-#MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col) * MAX(bigint_col),
-#MAX(tinyint_col * smallint_col * int_col * bigint_col),
-#MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col) * MAX(bigint_col) * MAX(float_col),
-#MAX(tinyint_col * smallint_col * int_col * bigint_col * float_col),
-#MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col) * MAX(bigint_col) * MAX(float_col) * MAX(double_col),
-#MAX(tinyint_col * smallint_col * int_col * bigint_col * float_col * double_col)
-#from alltypesaggnonulls
-#---- TYPES
-#bigint, bigint, bigint, bigint, bigint, bigint, double, double, double, double
-#---- RESULTS
-#891,891,890109,890109,8892188910,8892188910,9771626610293.455,9771626610293.455,9.859473533519994e+16,9.859473533519994e+16
-#====
+select
+SUM(tinyint_col) + SUM(smallint_col),
+SUM(tinyint_col + smallint_col),
+SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col),
+SUM(tinyint_col + smallint_col + int_col),
+SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col) + SUM(bigint_col),
+SUM(tinyint_col + smallint_col + int_col + bigint_col),
+ROUND(SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col) + SUM(bigint_col) +
+    SUM(float_col), 4),
+ROUND(SUM(tinyint_col + smallint_col + int_col + bigint_col + float_col), 4),
+ROUND(SUM(tinyint_col) + SUM(smallint_col) + SUM(int_col) + SUM(bigint_col) +
+    SUM(float_col) + SUM(double_col), 4),
+ROUND(SUM(tinyint_col + smallint_col + int_col + bigint_col + float_col + double_col), 4)
+from alltypesaggnonulls
+---- TYPES
+bigint, bigint, bigint, bigint, bigint, bigint, double, double, double, double
+---- RESULTS
+540000,540000,5535000,5535000,55485000,55485000,60979499.9998,60979499.9998,111428999.9998,111428999.9998
+====
+---- QUERY
+select
+-1 * SUM(tinyint_col) - SUM(smallint_col),
+SUM(-1 * tinyint_col - smallint_col),
+-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col),
+SUM(-1 * tinyint_col - smallint_col - int_col),
+-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col) - SUM(bigint_col),
+SUM(-1 * tinyint_col - smallint_col - int_col - bigint_col),
+ROUND(-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col) -
+    SUM(bigint_col) - SUM(float_col), 4),
+ROUND(SUM(-1 * tinyint_col - smallint_col - int_col - bigint_col - float_col), 4),
+ROUND(-1 * SUM(tinyint_col) - SUM(smallint_col) - SUM(int_col) -
+    SUM(bigint_col) - SUM(float_col) - SUM(double_col), 4),
+ROUND(SUM(-1 * tinyint_col - smallint_col - int_col -
+    bigint_col - float_col - double_col), 4)
+from alltypesaggnonulls
+---- TYPES
+bigint, bigint, bigint, bigint, bigint, bigint, double, double, double, double
+---- RESULTS
+-540000,-540000,-5535000,-5535000,-55485000,-55485000,-60979499.9998,-60979499.9998,-111428999.9998,-111428999.9998
+====
+---- QUERY
+select
+MAX(tinyint_col) * MAX(smallint_col),
+MAX(tinyint_col * smallint_col),
+MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col),
+MAX(tinyint_col * smallint_col * int_col),
+MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col) * MAX(bigint_col),
+MAX(tinyint_col * smallint_col * int_col * bigint_col),
+ROUND(MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col) *
+    MAX(bigint_col) * MAX(float_col), 4),
+ROUND(MAX(tinyint_col * smallint_col * int_col * bigint_col * float_col), 4),
+ROUND(MAX(tinyint_col) * MAX(smallint_col) * MAX(int_col) *
+    MAX(bigint_col) * MAX(float_col) * MAX(double_col), 4),
+ROUND(MAX(tinyint_col * smallint_col * int_col * bigint_col * float_col * double_col), 4)
+from alltypesaggnonulls
+---- TYPES
+int, int, bigint, bigint, bigint, bigint, double, double, double, double
+---- RESULTS
+891,891,890109,890109,8892188910,8892188910,9771626610293.455,9771626610293.455,9.859473533519994e+16,9.859473533519994e+16
+====
+---- QUERY
 # LIKE exprs w/ the like/regex pattern coming from a column
 select * from LikeTbl
 ---- RESULTS
@@ -876,6 +881,55 @@ where cast('2010-01-01 00:00:00' as timestamp) not in (timestamp_col)
 10998
 ---- TYPES
 bigint
+====
+---- QUERY
+# Regression test for IMPALA-1810
+SELECT tinyint_col, id FROM alltypestiny t1 WHERE t1.tinyint_col IN (154.58, t1.id)
+---- RESULTS
+0,0
+1,1
+---- TYPES
+tinyint,int
+====
+---- QUERY
+# Regression test for IMPALA-1810
+SELECT month, t1.tinyint_col FROM alltypestiny t1
+WHERE t1.month NOT IN (355.8, t1.tinyint_col)
+---- RESULTS
+2,0
+2,1
+3,0
+3,1
+1,0
+4,0
+4,1
+---- TYPES
+int,tinyint
+====
+---- QUERY
+select month, tinyint_col, int_col, float_col FROM alltypestiny
+WHERE month IN (cast(tinyint_col as decimal(34,0)), int_col + 1, 12345, float_col)
+---- RESULTS
+2,1,1,1.1
+1,0,0,0
+1,1,1,1.1
+---- TYPES
+int,tinyint,int,float
+====
+---- QUERY
+# Regression test for IMPALA-1949
+select bool_col = (tinyint_col in (1,2)) from alltypestiny
+---- RESULTS
+false
+false
+false
+false
+false
+false
+false
+false
+---- TYPES
+boolean
 ====
 ---- QUERY
 # CASE expr - Basic functionality
@@ -1578,7 +1632,7 @@ select cast("2012-02-29 00:00:00" as timestamp) + interval 1 year,
        cast("2012-01-01 00:00:00" as timestamp) + interval 365 days,
        cast("2013-01-01 00:00:00" as timestamp) - interval 366 days
 ---- RESULTS
-2013-02-28 00:00:00,2012-02-29 00:00:00,2012-12-31 00:00:00,2012-01-01 00:00:00
+2013-02-28 00:00:00,2012-02-28 00:00:00,2012-12-31 00:00:00,2012-01-01 00:00:00
 ---- TYPES
 timestamp,timestamp,timestamp,timestamp
 ====
@@ -1587,7 +1641,7 @@ timestamp,timestamp,timestamp,timestamp
 select cast("2012-01-01 00:00:00" as timestamp) + interval 2147483647 years,
        cast("2012-01-01 00:00:00" as timestamp) - interval 2147483647 years
 ---- RESULTS
-2011-01-01 00:00:00,2013-01-01 00:00:00
+NULL,NULL
 ---- TYPES
 timestamp,timestamp
 ====
@@ -1631,9 +1685,9 @@ select round(float_col, 3), round(float_col, 4) from functional.alltypestiny lim
 ---- TYPES
 double,double
 ====
+---- QUERY
 # Test that round outputs correct number of decimal places despite floating-point
 # imprecisions
----- QUERY
 select round(cast(1.1 as float), 2), round(cast(1.2 as float), 4),
        round(cast(1.111 as double), 2);
 ---- RESULTS
@@ -1661,7 +1715,6 @@ BIGINT
 ====
 ---- QUERY
 # Test a fix of codegen/non-codegen for floating-point modulo(IMPALA-391)
-# TODO: Remove this test when IMPALA-498 is resolved.
 select float_col, double_col, float_col % double_col,
 double_col % NULL, NULL % double_col from alltypessmall limit 10
 ---- RESULTS
@@ -1688,7 +1741,7 @@ select unix_timestamp(tmp.val, tmp.fmt) from (values
 34304461
 68439783
 ---- TYPES
-int
+bigint
 ====
 ---- QUERY
 select from_unixtime(tmp.val, tmp.fmt) from (values
@@ -1699,6 +1752,42 @@ select from_unixtime(tmp.val, tmp.fmt) from (values
 '1970-01-01 00:00:00'
 '01:01:01 02/1971/02'
 '1972||Mar||03||030303'
+---- TYPES
+string
+====
+---- QUERY
+select to_timestamp(tmp.val) from (values
+(0 as val),
+(34304461),
+(68439783)) as tmp
+---- RESULTS
+1970-01-01 00:00:00
+1971-02-02 01:01:01
+1972-03-03 03:03:03
+---- TYPES
+TIMESTAMP
+====
+---- QUERY
+select to_timestamp(tmp.val, tmp.fmt) from (values
+('1970-01-01 00:00:00' as val, 'yyyy-MM-dd HH:mm:ss' as fmt),
+('01:01:01 02/1971/02', 'HH:mm:ss dd/yyyy/MM'),
+('1972||Mar||03||030303', 'yyyy||MMM||dd||HHmmss')) as tmp
+---- RESULTS
+1970-01-01 00:00:00
+1971-02-02 01:01:01
+1972-03-03 03:03:03
+---- TYPES
+TIMESTAMP
+====
+---- QUERY
+select from_timestamp(tmp.val, tmp.fmt) from (values
+('1970-01-01 00:00:00' as val, 'yyyy-MM-dd HH:mm:ss' as fmt),
+('1971-02-02 01:01:01', 'yyyy-MM-dd HH:mm:ss'),
+('1972-03-03 03:03:03', 'yyyy-MM-dd HH:mm:ss')) as tmp
+---- RESULTS
+'1970-01-01 00:00:00'
+'1971-02-02 01:01:01'
+'1972-03-03 03:03:03'
 ---- TYPES
 string
 ====
@@ -1747,3 +1836,505 @@ Infinity,NaN,-0,-Infinity,Nan
 ---- TYPES
 double,double,double,double,double
 ====
+---- QUERY
+# Test that abs() retains the type of the paramter IMPALA-1424
+select abs(cast(1 as int)), abs(cast(1 as smallint)),
+  abs(cast(1 as tinyint)), abs(cast(8589934592 as bigint)),
+  abs(cast(-1.3 as double)), abs(cast(-1.3 as float)),
+  abs(cast(-1.32223 as decimal(8,3)))
+---- RESULTS
+1,1,1,8589934592,1.3,1.299999952316284,1.322
+---- TYPES
+int, smallint, tinyint, bigint, double, float, decimal
+====
+---- QUERY
+# Regression test for IMPALA-1508
+select timestamp_col FROM alltypesagg
+ORDER BY timestamp_col + INTERVAL bigint_col YEAR ASC limit 1
+---- RESULTS
+2010-01-01 00:01:00
+---- TYPES
+TIMESTAMP
+====
+---- QUERY
+# Test Expr::GetConstant()
+select int_col, bigint_col from functional_avro_snap.alltypestiny
+where abs(cast(int_col as decimal(8,0))) >
+      negative(abs(cast(bigint_col as decimal(20, 0))))
+---- RESULTS
+1,10
+1,10
+1,10
+1,10
+---- TYPES
+INT,BIGINT
+====
+---- QUERY
+# Test for IMPALA-1756 (Builtin)
+select int_col from functional.alltypes where regexp_replace('abc', '*', 'cde') = 'cde'
+limit 10
+---- TYPES
+INT
+---- RESULTS
+---- CATCH
+AnalysisException: Error evaluating "regexp_replace('abc', '*', 'cde') = 'cde'"
+CAUSED BY: InternalException: Could not compile regexp pattern: *
+Error: no argument for repetition operator: *
+====
+---- QUERY
+# Test for IMPALA-1756 (UDF)
+select int_col from functional.alltypes where
+madlib_vector_get(0, madlib_vector(1.0, 2.0, NULL)) = 1.0 limit 10
+---- TYPES
+INT
+---- RESULTS
+---- CATCH
+AnalysisException: Error evaluating "madlib_vector_get(0, madlib_vector(1.0, 2.0, NULL)) = 1.0"
+CAUSED BY: InternalException: madlib vector entry 2 is NULL
+====
+---- QUERY
+select * from (select 'abc' as x, '*' as y, 'def' as z from functional.alltypestiny) v
+where regexp_replace(x, y, z) = 'cde'
+---- RESULTS
+---- CATCH
+AnalysisException: Error evaluating "regexp_replace('abc', '*', 'def') = 'cde'"
+CAUSED BY: InternalException: Could not compile regexp pattern: *
+Error: no argument for repetition operator: *
+====
+---- QUERY
+# Test for factorial operator
+select distinct int_col, int_col! from functional.alltypes order by 1
+---- RESULTS
+0,1
+1,1
+2,2
+3,6
+4,24
+5,120
+6,720
+7,5040
+8,40320
+9,362880
+---- TYPES
+INT,BIGINT
+====
+---- QUERY
+# Test for IMPALA-2141: Tests for propogation of error for a UDF with constant parameters
+# in the select list.
+select madlib_vector(1.0, 2.0, NULL);
+---- RESULTS
+---- CATCH
+madlib vector entry 2 is NULL
+====
+---- QUERY
+# Test countset
+select tinyint_col, countset(tinyint_col), countset(tinyint_col, 0),
+       smallint_col, countset(smallint_col), countset(smallint_col, 0),
+       int_col, countset(int_col), countset(int_col, 0),
+       bigint_col, countset(bigint_col), countset(bigint_col, 0)
+from alltypestiny
+where id <= 1
+order by id
+---- RESULTS
+0,0,8,0,0,16,0,0,32,0,0,64
+1,1,7,1,1,15,1,1,31,10,2,62
+---- TYPES
+TINYINT,INT,INT,SMALLINT,INT,INT,INT,INT,INT,BIGINT,INT,INT
+====
+---- QUERY
+# Test basic bitwise ops
+select bitand(tinyint_col, int_col),
+       bitor(smallint_col, bigint_col),
+       bitxor(tinyint_col, smallint_col),
+       bitxor(int_col, bigint_col),
+       bitxor(int_col, bitnot(int_col)),
+       bitnot(tinyint_col)
+from alltypes
+where id <= 3
+order by id
+---- RESULTS
+0,0,0,0,-1,-1
+1,11,0,11,-1,-2
+2,22,0,22,-1,-3
+3,31,0,29,-1,-4
+---- TYPES
+INT,BIGINT,SMALLINT,BIGINT,INT,TINYINT
+====
+---- QUERY
+# Test getbit and setbit
+select bigint_col,
+       getbit(bigint_col,0),
+       getbit(bigint_col,1),
+       getbit(bigint_col,int_col),
+       setbit(bigint_col,0),
+       setbit(bigint_col,1,0)
+from alltypes
+where id <= 3
+order by id
+---- RESULTS
+0,0,0,0,1,0
+10,0,1,1,11,8
+20,0,0,1,21,20
+30,0,1,1,31,28
+---- TYPES
+BIGINT,TINYINT,TINYINT,TINYINT,BIGINT,BIGINT
+====
+---- QUERY
+# Test shifts and rotates
+select int_col,
+    shiftright(int_col,1),
+    shiftleft(int_col,2),
+    rotateleft(int_col,30),
+    rotateright(int_col,2)
+from alltypes
+where id <= 3
+order by id
+---- RESULTS
+0,0,0,0,0
+1,0,4,1073741824,1073741824
+2,1,8,-2147483648,-2147483648
+3,1,12,-1073741824,-1073741824
+---- TYPES
+INT,INT,INT,INT,INT
+====
+---- QUERY
+select str_col, match_regex_col from LikeTbl
+where REGEXP_LIKE(str_col, match_regex_col)
+---- RESULTS
+'beginning of line','^begin.*'
+'eight','.*eight.*'
+'end of line','.*line$'
+'five','.*five.*'
+'four','.*four.*'
+'middle of line','^.*of.*$'
+'nine','.*nine.*'
+'one','.*one.*'
+'seven','.*seven.*'
+'six','.*six.*'
+'ten','.*ten.*'
+'three','.*three.*'
+'two','.*two.*'
+'','.*'
+---- TYPES
+string, string
+====
+---- QUERY
+select str_col, no_match_regex_col from LikeTbl
+where REGEXP_LIKE(str_col, no_match_regex_col)
+---- RESULTS
+---- TYPES
+string, string
+====
+---- QUERY
+select str_col, match_regex_col from LikeTbl
+where NOT REGEXP_LIKE(str_col, match_regex_col)
+---- RESULTS
+---- TYPES
+string, string
+====
+---- QUERY
+select translate(tmp.str, '\n', '@'), match_like_col
+from (values('one\ntwo' as str), ('\n')) as tmp, LikeTbl
+where tmp.str LIKE match_like_col
+---- RESULTS
+'one@two','%one%'
+'one@two','%two%'
+'one@two','%'
+'one@two','%'
+'@','%'
+'@','%'
+---- TYPES
+string, string
+====
+---- QUERY
+select str_col, no_match_regex_col from LikeTbl
+where NOT REGEXP_LIKE(str_col, no_match_regex_col)
+---- RESULTS
+'beginning of line','^not begin.*'
+'eight','n.*eight.*'
+'end of line','.*line end$'
+'five','n.*five.*'
+'four','n.*four.*'
+'middle of line','.*of$'
+'nine','n.*nine.*'
+'one','n.*one.*'
+'seven','n.*seven.*'
+'six','n.*six.*'
+'ten','n.*ten.*'
+'three','n.*three.*'
+'two','n.*two.*'
+'','X'
+---- TYPES
+string, string
+====
+---- QUERY
+select str_col, match_regex_col from LikeTbl
+where REGEXP_LIKE(upper(str_col), lower(match_regex_col), 'i')
+---- RESULTS
+'beginning of line','^begin.*'
+'eight','.*eight.*'
+'end of line','.*line$'
+'five','.*five.*'
+'four','.*four.*'
+'middle of line','^.*of.*$'
+'nine','.*nine.*'
+'one','.*one.*'
+'seven','.*seven.*'
+'six','.*six.*'
+'ten','.*ten.*'
+'three','.*three.*'
+'two','.*two.*'
+'','.*'
+---- TYPES
+string, string
+====
+---- QUERY
+select str_col, match_regex_col from LikeTbl
+where REGEXP_LIKE(str_col, match_regex_col, 'c')
+---- RESULTS
+'beginning of line','^begin.*'
+'eight','.*eight.*'
+'end of line','.*line$'
+'five','.*five.*'
+'four','.*four.*'
+'middle of line','^.*of.*$'
+'nine','.*nine.*'
+'one','.*one.*'
+'seven','.*seven.*'
+'six','.*six.*'
+'ten','.*ten.*'
+'three','.*three.*'
+'two','.*two.*'
+'','.*'
+---- TYPES
+string, string
+====
+---- QUERY
+select str_col, match_regex_col from LikeTbl
+where REGEXP_LIKE(upper(str_col), lower(match_regex_col), 'c')
+---- RESULTS
+'','.*'
+---- TYPES
+string, string
+====
+---- QUERY
+select tmp.str from (values
+('testfield' as str),
+('multi\nfield'),
+('multi\nfield\ntwo')) as tmp
+where regexp_like(tmp.str, '^multi.*$')
+---- RESULTS
+----TYPES
+string
+====
+---- QUERY
+select translate(tmp.str, '\n', '@') from (values
+('testfield' as str),
+('multi\nfield'),
+('multi\nfield\ntwo')) as tmp
+where regexp_like(tmp.str, '^multi.*$', 'n')
+---- RESULTS
+'multi@field'
+'multi@field@two'
+---- TYPES
+string
+====
+---- QUERY
+select translate(tmp.str, '\n', '@') from (values
+('testfield' as str),
+('multi\nfield'),
+('multi\nfield\ntwo')) as tmp
+where regexp_like(tmp.str, '^fiel.*$', 'n')
+---- RESULTS
+---- TYPES
+string
+====
+---- QUERY
+select translate(tmp.str, '\n', '@') from (values
+('testfield' as str),
+('multi\nfield'),
+('multi\nfield\ntwo')) as tmp
+where regexp_like(tmp.str, '^fiel.*$', 'm')
+---- RESULTS
+'multi@field'
+'multi@field@two'
+---- TYPES
+string
+====
+---- QUERY
+select translate(tmp.str, '\n', '@') from (values
+('testfield' as str),
+('multi\nfield'),
+('multi\nfield\ntwo')) as tmp
+where regexp_like(tmp.str, '^fiel.*$', 'mn')
+---- RESULTS
+'multi@field'
+'multi@field@two'
+---- TYPES
+string
+====
+---- QUERY
+select translate(tmp.str, '\n', '@') from (values
+('testfield' as str),
+('multi\nfield'),
+('multi\nfield\ntwo')) as tmp
+where regexp_like('', '', '')
+---- RESULTS
+'testfield'
+'multi@field'
+'multi@field@two'
+---- TYPES
+string
+====
+---- QUERY
+select translate(tmp.str, '\n', '@') from (values
+('testfield' as str),
+('multi\nfield'),
+('multi\nfield\ntwo')) as tmp
+where regexp_like('', '')
+---- RESULTS
+'testfield'
+'multi@field'
+'multi@field@two'
+---- TYPES
+string
+====
+---- QUERY
+select split_part(tmp.str, tmp.delim, pos) from (values
+('abc@@def@@ghi' as str, '@@' as delim, 1 as pos),
+('@@123@@456', '@@', 1),
+('@@123@@456', '@@', 2),
+('@@', '@@', 1),
+('abc~!~def~!~!~ghi', '~!~', 3),
+('abc', '@@', 1),
+('xyz!!qwe', '!!', 500),
+(NULL, NULL, 1),
+('abc', NULL, 2),
+(NULL, '@@', 1),
+(NULL, '!!', 1)
+) as tmp
+---- RESULTS
+'abc'
+''
+'123'
+''
+'!~ghi'
+'abc'
+''
+'NULL'
+'NULL'
+'NULL'
+'NULL'
+---- TYPES
+string
+====
+---- QUERY
+# Regression test for IMPALA-2290: non-constant args to btrim in parallel context
+# (i.e. predicates evaluated by scans)
+select count(*) from tpch_parquet.lineitem where btrim(l_comment, l_comment) != ""
+---- RESULTS
+0
+---- TYPES
+BIGINT
+====
+---- QUERY
+# Test for IMPALA-1746: QueryExecState doesn't check for query cancellation or errors
+select dayofyear(trunc('2014-11-11', string_col)) from functional.alltypestiny limit 1;
+---- CATCH
+Invalid Truncate Unit: 0
+====
+---- QUERY
+select regexp_match_count(tmp.str, tmp.pattern) from (values
+('aaa' as str, 'a' as pattern),
+('aaa', 'aa'),
+('aaaa', 'aa'),
+('', ''),
+('', '.*'),
+('abxcy1234a', 'a.x'),
+('abxcy1234a', 'a.x.*a'),
+('abxcy1234a', 'a.x.*k'),
+('aaa123a', 'a*'),
+('aaa123a', 'a?'),
+('a.x.y.*a', 'a\.x\.y\.\*a'),
+('0123456789', '.*'),
+('0123456789', '.+'),
+('0123456789', '.?'),
+('abcab', '(a|ab|abc)'),
+('abc123efg', '[\\d]'),
+('abc123efg', '[\\d]+'),
+('abc123efg', '[\^\\d]'),
+('a1b2c3d4e5!!!', '[\\w\\d]'),
+('a1b2c3d4e5!!!', '\\w\\d')) as tmp
+---- RESULTS
+3
+1
+2
+1
+1
+1
+1
+0
+6
+8
+1
+2
+1
+11
+2
+3
+1
+6
+10
+5
+---- TYPES
+int
+====
+---- QUERY
+select regexp_match_count(tmp.str, tmp.pattern, tmp.start_pos, tmp.params) from (values
+('aaa' as str, 'A' as pattern, 1 as start_pos, 'i' as params),
+('aaa', 'A', 1, 'c'),
+('this\nis\nnewline', '.*', 1, ''),
+('this\nis\nnewline', '.*', 1, 'n'),
+('IPhone\nIPad\nIPod', '^I.*$', 1, ''),
+('IPhone\nIPad\nIPod', '^I.*$', 1, 'n'),
+('IPhone\nIPad\nIPod', '^I.*$', 1, 'm'),
+('iPhone\niPad\niPod', '^I.*$', 1, 'in'),
+('iPhone\niPad\niPod', '^I.*$', 1, 'cin'),
+('iPhone\niPad\niPod', '^I.*$', 1, 'im'),
+('iPhone\niPad\niPod', '^I.*$', 1, 'imn'),
+('aaa', 'a', 3, ''),
+('aaa', 'a', 4, ''),
+('aaa', 'a*', 4, '')) as tmp
+---- RESULTS
+3
+0
+6
+2
+0
+1
+3
+1
+1
+3
+1
+1
+0
+1
+---- TYPES
+int
+====
+---- QUERY
+select regexp_match_count(tmp.str, tmp.pattern, tmp.start_pos, tmp.params) from (values
+('a' as str, 'a' as pattern, -1 as start_pos, '' as params),
+('foobar', 'foobar', 1, 'i'),
+('iPhone\niPad\niPod', '^I.*$', 1, 'imn')) as tmp
+---- CATCH
+Illegal starting position -1
+====
+---- QUERY
+select regexp_match_count(tmp.str, tmp.pattern, tmp.start_pos, tmp.params) from (values
+('a' as str, 'a' as pattern, 1 as start_pos, 'xyz' as params),
+('foobar', 'foobar', 1, 'i'),
+('iPhone\niPad\niPod', '^I.*$', 1, 'imn')) as tmp
+---- CATCH
+Illegal match parameter x

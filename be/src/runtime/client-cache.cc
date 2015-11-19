@@ -29,8 +29,7 @@
 #include "rpc/thrift-util.h"
 #include "gen-cpp/ImpalaInternalService.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
 using namespace apache::thrift;
 using namespace apache::thrift::server;
 using namespace apache::thrift::transport;
@@ -43,7 +42,7 @@ Status ClientCacheHelper::GetClient(const TNetworkAddress& address,
   shared_ptr<PerHostCache> host_cache;
   {
     lock_guard<mutex> lock(cache_lock_);
-    VLOG_RPC << "GetClient(" << address << ")";
+    VLOG(2) << "GetClient(" << address << ")";
     shared_ptr<PerHostCache>* ptr = &per_host_caches_[address];
     if (ptr->get() == NULL) ptr->reset(new PerHostCache());
     host_cache = *ptr;
@@ -53,17 +52,17 @@ Status ClientCacheHelper::GetClient(const TNetworkAddress& address,
     lock_guard<mutex> lock(host_cache->lock);
     if (!host_cache->clients.empty()) {
       *client_key = host_cache->clients.front();
-      VLOG_RPC << "GetClient(): returning cached client for " << address;
+      VLOG(2) << "GetClient(): returning cached client for " << address;
       host_cache->clients.pop_front();
       if (metrics_enabled_) clients_in_use_metric_->Increment(1);
-      return Status::OK;
+      return Status::OK();
     }
   }
 
   // Only get here if host_cache->clients.empty(). No need for the lock.
   RETURN_IF_ERROR(CreateClient(address, factory_method, client_key));
   if (metrics_enabled_) clients_in_use_metric_->Increment(1);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ClientCacheHelper::ReopenClient(ClientFactory factory_method,
@@ -78,6 +77,7 @@ Status ClientCacheHelper::ReopenClient(ClientFactory factory_method,
     DCHECK(client != client_map_.end());
     client_impl = client->second;
   }
+  VLOG(1) << "ReopenClient(): re-creating client for " << client_impl->address();
 
   client_impl->Close();
 
@@ -104,7 +104,7 @@ Status ClientCacheHelper::ReopenClient(ClientFactory factory_method,
 Status ClientCacheHelper::CreateClient(const TNetworkAddress& address,
     ClientFactory factory_method, ClientKey* client_key) {
   shared_ptr<ThriftClientImpl> client_impl(factory_method(address, client_key));
-  VLOG_CONNECTION << "CreateClient(): creating new client for " << client_impl->address();
+  VLOG(2) << "CreateClient(): creating new client for " << client_impl->address();
   Status status = client_impl->OpenWithRetry(num_tries_, wait_ms_);
   if (!status.ok()) {
     *client_key = NULL;
@@ -121,7 +121,7 @@ Status ClientCacheHelper::CreateClient(const TNetworkAddress& address,
   }
 
   if (metrics_enabled_) total_clients_metric_->Increment(1);
-  return Status::OK;
+  return Status::OK();
 }
 
 void ClientCacheHelper::ReleaseClient(ClientKey* client_key) {
@@ -133,7 +133,7 @@ void ClientCacheHelper::ReleaseClient(ClientKey* client_key) {
     DCHECK(client != client_map_.end());
     client_impl = client->second;
   }
-  VLOG_RPC << "Releasing client for " << client_impl->address() << " back to cache";
+  VLOG(2) << "Releasing client for " << client_impl->address() << " back to cache";
   {
     lock_guard<mutex> lock(cache_lock_);
     PerHostCacheMap::iterator cache = per_host_caches_.find(client_impl->address());
@@ -155,8 +155,8 @@ void ClientCacheHelper::CloseConnections(const TNetworkAddress& address) {
   }
 
   {
-    VLOG_RPC << "Invalidating all " << cache->clients.size() << " clients for: "
-             << address;
+    VLOG(2) << "Invalidating all " << cache->clients.size() << " clients for: "
+            << address;
     lock_guard<mutex> entry_lock(cache->lock);
     lock_guard<mutex> map_lock(client_map_lock_);
     BOOST_FOREACH(ClientKey client_key, cache->clients) {
@@ -196,19 +196,18 @@ void ClientCacheHelper::TestShutdown() {
   }
 }
 
-void ClientCacheHelper::InitMetrics(Metrics* metrics, const string& key_prefix) {
+void ClientCacheHelper::InitMetrics(MetricGroup* metrics, const string& key_prefix) {
   DCHECK(metrics != NULL);
   // Not strictly needed if InitMetrics is called before any cache usage, but ensures that
   // metrics_enabled_ is published.
   lock_guard<mutex> lock(cache_lock_);
   stringstream count_ss;
   count_ss << key_prefix << ".client-cache.clients-in-use";
-  clients_in_use_metric_ =
-      metrics->CreateAndRegisterPrimitiveMetric(count_ss.str(), 0L);
+  clients_in_use_metric_ = metrics->AddGauge(count_ss.str(), 0L);
 
   stringstream max_ss;
   max_ss << key_prefix << ".client-cache.total-clients";
-  total_clients_metric_ = metrics->CreateAndRegisterPrimitiveMetric(max_ss.str(), 0L);
+  total_clients_metric_ = metrics->AddGauge(max_ss.str(), 0L);
   metrics_enabled_ = true;
 }
 

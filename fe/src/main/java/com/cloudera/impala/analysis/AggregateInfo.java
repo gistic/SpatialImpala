@@ -61,6 +61,7 @@ import com.google.common.collect.Lists;
  * aggInfo.mergeAggInfo == aggInfo.mergeAggInfo.mergeAggInfo.
  *
  * TODO: move the merge construction logic from SelectStmt into AggregateInfo
+ * TODO: Add query tests for aggregation with intermediate tuples with num_nodes=1.
  */
 public class AggregateInfo extends AggregateInfoBase {
   private final static Logger LOG = LoggerFactory.getLogger(AggregateInfo.class);
@@ -93,7 +94,7 @@ public class AggregateInfo extends AggregateInfoBase {
 
   // Map from slots of outputTupleSmap_ to the corresponding slot in
   // intermediateTupleSmap_.
-  protected final ExprSubstitutionMap outputToIntermediateTupleSmap_ =
+  protected ExprSubstitutionMap outputToIntermediateTupleSmap_ =
       new ExprSubstitutionMap();
 
   // if set, a subset of groupingExprs_; set and used during planning
@@ -104,6 +105,29 @@ public class AggregateInfo extends AggregateInfoBase {
       ArrayList<FunctionCallExpr> aggExprs, AggPhase aggPhase)  {
     super(groupingExprs, aggExprs);
     aggPhase_ = aggPhase;
+  }
+
+  /**
+   * C'tor for cloning.
+   */
+  private AggregateInfo(AggregateInfo other) {
+    super(other);
+    if (other.mergeAggInfo_ != null) {
+      mergeAggInfo_ = other.mergeAggInfo_.clone();
+    }
+    if (other.secondPhaseDistinctAggInfo_ != null) {
+      secondPhaseDistinctAggInfo_ = other.secondPhaseDistinctAggInfo_.clone();
+    }
+    aggPhase_ = other.aggPhase_;
+    outputTupleSmap_ = other.outputTupleSmap_.clone();
+    if (other.requiresIntermediateTuple()) {
+      intermediateTupleSmap_ = other.intermediateTupleSmap_.clone();
+    } else {
+      Preconditions.checkState(other.intermediateTupleDesc_ == other.outputTupleDesc_);
+      intermediateTupleSmap_ = outputTupleSmap_;
+    }
+    partitionExprs_ =
+        (other.partitionExprs_ != null) ? Expr.cloneList(other.partitionExprs_) : null;
   }
 
   public List<Expr> getPartitionExprs() { return partitionExprs_; }
@@ -121,7 +145,7 @@ public class AggregateInfo extends AggregateInfoBase {
   static public AggregateInfo create(
       ArrayList<Expr> groupingExprs, ArrayList<FunctionCallExpr> aggExprs,
       TupleDescriptor tupleDesc, Analyzer analyzer)
-          throws AnalysisException, InternalException {
+          throws AnalysisException {
     Preconditions.checkState(
         (groupingExprs != null && !groupingExprs.isEmpty())
         || (aggExprs != null && !aggExprs.isEmpty()));
@@ -187,19 +211,34 @@ public class AggregateInfo extends AggregateInfoBase {
   private void createDistinctAggInfo(
       ArrayList<Expr> origGroupingExprs,
       ArrayList<FunctionCallExpr> distinctAggExprs, Analyzer analyzer)
-          throws AnalysisException, InternalException {
+          throws AnalysisException {
     Preconditions.checkState(!distinctAggExprs.isEmpty());
     // make sure that all DISTINCT params are the same;
     // ignore top-level implicit casts in the comparison, we might have inserted
     // those during analysis
     ArrayList<Expr> expr0Children = Lists.newArrayList();
-    for (Expr expr: distinctAggExprs.get(0).getChildren()) {
-      expr0Children.add(expr.ignoreImplicitCast());
+
+    if (distinctAggExprs.get(0).getFnName().getFunction().equalsIgnoreCase(
+        "group_concat")) {
+      // Ignore separator parameter, otherwise the same would have to be present for all
+      // other distinct aggregates as well.
+      // TODO: Deal with constant exprs more generally, instead of special-casing
+      // group_concat().
+      expr0Children.add(distinctAggExprs.get(0).getChild(0).ignoreImplicitCast());
+    } else {
+      for (Expr expr : distinctAggExprs.get(0).getChildren()) {
+        expr0Children.add(expr.ignoreImplicitCast());
+      }
     }
     for (int i = 1; i < distinctAggExprs.size(); ++i) {
       ArrayList<Expr> exprIChildren = Lists.newArrayList();
-      for (Expr expr: distinctAggExprs.get(i).getChildren()) {
-        exprIChildren.add(expr.ignoreImplicitCast());
+      if (distinctAggExprs.get(i).getFnName().getFunction().equalsIgnoreCase(
+          "group_concat")) {
+        exprIChildren.add(distinctAggExprs.get(i).getChild(0).ignoreImplicitCast());
+      } else {
+        for (Expr expr : distinctAggExprs.get(i).getChildren()) {
+          exprIChildren.add(expr.ignoreImplicitCast());
+        }
       }
       if (!Expr.equalLists(expr0Children, exprIChildren)) {
         throw new AnalysisException(
@@ -232,6 +271,12 @@ public class AggregateInfo extends AggregateInfoBase {
   public ExprSubstitutionMap getOutputSmap() { return outputTupleSmap_; }
   public ExprSubstitutionMap getOutputToIntermediateSmap() {
     return outputToIntermediateTupleSmap_;
+  }
+
+  public boolean hasAggregateExprs() {
+    return !aggregateExprs_.isEmpty() ||
+        (secondPhaseDistinctAggInfo_ != null &&
+         !secondPhaseDistinctAggInfo_.getAggregateExprs().isEmpty());
   }
 
   /**
@@ -287,12 +332,13 @@ public class AggregateInfo extends AggregateInfoBase {
    */
   public void substitute(ExprSubstitutionMap smap, Analyzer analyzer)
       throws InternalException {
-    groupingExprs_ = Expr.substituteList(groupingExprs_, smap, analyzer);
+    groupingExprs_ = Expr.substituteList(groupingExprs_, smap, analyzer, false);
     LOG.trace("AggInfo: grouping_exprs=" + Expr.debugString(groupingExprs_));
 
     // The smap in this case should not substitute the aggs themselves, only
     // their subexpressions.
-    List<Expr> substitutedAggs = Expr.substituteList(aggregateExprs_, smap, analyzer);
+    List<Expr> substitutedAggs =
+        Expr.substituteList(aggregateExprs_, smap, analyzer, false);
     aggregateExprs_.clear();
     for (Expr substitutedAgg: substitutedAggs) {
       aggregateExprs_.add((FunctionCallExpr) substitutedAgg);
@@ -317,7 +363,7 @@ public class AggregateInfo extends AggregateInfoBase {
    * The returned AggregateInfo shares its descriptor and smap with the input info;
    * createAggTupleDesc() must not be called on it.
    */
-  private void createMergeAggInfo(Analyzer analyzer) throws InternalException {
+  private void createMergeAggInfo(Analyzer analyzer) {
     Preconditions.checkState(mergeAggInfo_ == null);
     TupleDescriptor inputDesc = intermediateTupleDesc_;
     // construct grouping exprs
@@ -336,13 +382,7 @@ public class AggregateInfo extends AggregateInfoBase {
           new SlotRef(inputDesc.getSlots().get(i + getGroupingExprs().size()));
       FunctionCallExpr aggExpr = FunctionCallExpr.createMergeAggCall(
           inputExpr, Lists.newArrayList(aggExprParam));
-      try {
-        aggExpr.analyze(analyzer);
-      } catch (Exception e) {
-        // we shouldn't see this
-        throw new InternalException(
-            "error constructing merge aggregation node: " + e.getMessage());
-      }
+      aggExpr.analyzeNoThrow(analyzer);
       aggExprs.add(aggExpr);
     }
 
@@ -353,7 +393,6 @@ public class AggregateInfo extends AggregateInfoBase {
     mergeAggInfo_.outputTupleDesc_ = outputTupleDesc_;
     mergeAggInfo_.intermediateTupleSmap_ = intermediateTupleSmap_;
     mergeAggInfo_.outputTupleSmap_ = outputTupleSmap_;
-    mergeAggInfo_.mergeAggInfo_ = mergeAggInfo_;
     mergeAggInfo_.materializedSlots_ = materializedSlots_;
   }
 
@@ -386,7 +425,7 @@ public class AggregateInfo extends AggregateInfoBase {
   }
 
   /**
-   * Create the info for an aggregation node that computes the second phase of of
+   * Create the info for an aggregation node that computes the second phase of
    * DISTINCT aggregate functions.
    * (Refer to createDistinctAggInfo() for an explanation of the phases.)
    * - 'this' is the phase 1 aggregation
@@ -402,7 +441,7 @@ public class AggregateInfo extends AggregateInfoBase {
   private void createSecondPhaseAggInfo(
       ArrayList<Expr> origGroupingExprs,
       ArrayList<FunctionCallExpr> distinctAggExprs, Analyzer analyzer)
-      throws AnalysisException, InternalException {
+      throws AnalysisException {
     Preconditions.checkState(secondPhaseDistinctAggInfo_ == null);
     Preconditions.checkState(!distinctAggExprs.isEmpty());
     // The output of the 1st phase agg is the 1st phase intermediate.
@@ -424,13 +463,17 @@ public class AggregateInfo extends AggregateInfoBase {
             origGroupingExprs.size() + inputExpr.getChildren().size() - 1,
             inputDesc.getSlots());
         Preconditions.checkNotNull(ifExpr);
-        try {
-          ifExpr.analyze(analyzer);
-        } catch (Exception e) {
-          throw new InternalException("Failed to analyze 'IF' function " +
-              "in second phase count distinct aggregation.", e);
-        }
+        ifExpr.analyzeNoThrow(analyzer);
         aggExpr = new FunctionCallExpr("count", Lists.newArrayList(ifExpr));
+      } else if (inputExpr.getFnName().getFunction().equals("group_concat")) {
+        // Syntax: GROUP_CONCAT([DISTINCT] expression [, separator])
+        ArrayList<Expr> exprList = Lists.newArrayList();
+        // Add "expression" parameter. Need to get it from the inputDesc's slots so the
+        // tuple reference is correct.
+        exprList.add(new SlotRef(inputDesc.getSlots().get(origGroupingExprs.size())));
+        // Check if user provided a custom separator
+        if (inputExpr.getChildren().size() == 2) exprList.add(inputExpr.getChild(1));
+        aggExpr = new FunctionCallExpr(inputExpr.getFnName(), exprList);
       } else {
         // SUM(DISTINCT <expr>) -> SUM(<last grouping slot>);
         // (MIN(DISTINCT ...) and MAX(DISTINCT ...) have their DISTINCT turned
@@ -458,18 +501,12 @@ public class AggregateInfo extends AggregateInfoBase {
         secondPhaseAggExprs.size() == aggregateExprs_.size() + distinctAggExprs.size());
 
     for (FunctionCallExpr aggExpr: secondPhaseAggExprs) {
-      try {
-        aggExpr.analyze(analyzer);
-        Preconditions.checkState(aggExpr.isAggregateFunction());
-      } catch (Exception e) {
-        // we shouldn't see this
-        throw new InternalException(
-            "error constructing merge aggregation node", e);
-      }
+      aggExpr.analyzeNoThrow(analyzer);
+      Preconditions.checkState(aggExpr.isAggregateFunction());
     }
 
     ArrayList<Expr> substGroupingExprs =
-        Expr.substituteList(origGroupingExprs, intermediateTupleSmap_, analyzer);
+        Expr.substituteList(origGroupingExprs, intermediateTupleSmap_, analyzer, false);
     secondPhaseDistinctAggInfo_ =
         new AggregateInfo(substGroupingExprs, secondPhaseAggExprs, AggPhase.SECOND);
     secondPhaseDistinctAggInfo_.createTupleDescs(analyzer);
@@ -488,6 +525,13 @@ public class AggregateInfo extends AggregateInfoBase {
     ArrayList<SlotDescriptor> slotDescs = outputTupleDesc_.getSlots();
 
     int numDistinctParams = distinctAggExprs.get(0).getChildren().size();
+    // If we are counting distinct params of group_concat, we cannot include the custom
+    // separator since it is not a distinct param.
+    if (distinctAggExprs.get(0).getFnName().getFunction().equalsIgnoreCase(
+        "group_concat")
+        && numDistinctParams == 2) {
+      --numDistinctParams;
+    }
     int numOrigGroupingExprs =
         inputAggInfo.getGroupingExprs().size() - numDistinctParams;
     Preconditions.checkState(slotDescs.size() ==
@@ -587,7 +631,7 @@ public class AggregateInfo extends AggregateInfoBase {
       exprs.add(aggregateExprs_.get(i));
       materializedSlots_.add(i);
     }
-    List<Expr> resolvedExprs = Expr.substituteList(exprs, smap, analyzer);
+    List<Expr> resolvedExprs = Expr.substituteList(exprs, smap, analyzer, false);
     analyzer.materializeSlots(resolvedExprs);
 
     if (isDistinctAgg()) {
@@ -658,7 +702,7 @@ public class AggregateInfo extends AggregateInfoBase {
         .add("intermediate_smap", intermediateTupleSmap_.debugString())
         .add("output_smap", outputTupleSmap_.debugString())
         .toString());
-    if (mergeAggInfo_ != this) {
+    if (mergeAggInfo_ != this && mergeAggInfo_ != null) {
       out.append("\nmergeAggInfo:\n" + mergeAggInfo_.debugString());
     }
     if (secondPhaseDistinctAggInfo_ != null) {
@@ -668,5 +712,9 @@ public class AggregateInfo extends AggregateInfoBase {
     return out.toString();
   }
 
+  @Override
   protected String tupleDebugName() { return "agg-tuple"; }
+
+  @Override
+  public AggregateInfo clone() { return new AggregateInfo(this); }
 }

@@ -25,8 +25,6 @@ import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.analysis.ExprSubstitutionMap;
 import com.cloudera.impala.analysis.OrderByElement;
 import com.cloudera.impala.analysis.TupleDescriptor;
-import com.cloudera.impala.analysis.TupleId;
-import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.thrift.TAnalyticNode;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TPlanNode;
@@ -43,11 +41,6 @@ import com.google.common.collect.Lists;
 public class AnalyticEvalNode extends PlanNode {
   private final static Logger LOG = LoggerFactory.getLogger(AnalyticEvalNode.class);
 
-  // List of tuple ids materialized by the originating SelectStmt (i.e., what is returned
-  // by SelectStmt.getMaterializedTupleIds()).
-  // Needed for getting unassigned conjuncts from the analyzer.
-  private final List<TupleId> stmtTupleIds_;
-
   private List<Expr> analyticFnCalls_;
 
   // Partitioning exprs from the AnalyticInfo
@@ -57,9 +50,6 @@ public class AnalyticEvalNode extends PlanNode {
   private List<Expr> substitutedPartitionExprs_;
   private List<OrderByElement> orderByElements_;
   private final AnalyticWindow analyticWindow_;
-
-  // Logical output tuple for the analytic exprs of the originating stmt.
-  private final TupleDescriptor logicalTupleDesc_;
 
   // Physical tuples used/produced by this analytic node.
   private final TupleDescriptor intermediateTupleDesc_;
@@ -76,22 +66,19 @@ public class AnalyticEvalNode extends PlanNode {
   private final TupleDescriptor bufferedTupleDesc_;
 
   public AnalyticEvalNode(
-      PlanNodeId id, PlanNode input, List<TupleId> stmtTupleIds,
-      List<Expr> analyticFnCalls, List<Expr> partitionExprs,
-      List<OrderByElement> orderByElements, AnalyticWindow analyticWindow,
-      TupleDescriptor logicalTupleDesc, TupleDescriptor intermediateTupleDesc,
+      PlanNodeId id, PlanNode input, List<Expr> analyticFnCalls,
+      List<Expr> partitionExprs, List<OrderByElement> orderByElements,
+      AnalyticWindow analyticWindow, TupleDescriptor intermediateTupleDesc,
       TupleDescriptor outputTupleDesc, ExprSubstitutionMap logicalToPhysicalSmap,
       Expr partitionByEq, Expr orderByEq, TupleDescriptor bufferedTupleDesc) {
     super(id, input.getTupleIds(), "ANALYTIC");
     Preconditions.checkState(!tupleIds_.contains(outputTupleDesc.getId()));
     // we're materializing the input row augmented with the analytic output tuple
     tupleIds_.add(outputTupleDesc.getId());
-    stmtTupleIds_ = stmtTupleIds;
     analyticFnCalls_ = analyticFnCalls;
     partitionExprs_ = partitionExprs;
     orderByElements_ = orderByElements;
     analyticWindow_ = analyticWindow;
-    logicalTupleDesc_ = logicalTupleDesc;
     intermediateTupleDesc_ = intermediateTupleDesc;
     outputTupleDesc_ = outputTupleDesc;
     logicalToPhysicalSmap_ = logicalToPhysicalSmap;
@@ -108,7 +95,7 @@ public class AnalyticEvalNode extends PlanNode {
   public List<OrderByElement> getOrderByElements() { return orderByElements_; }
 
   @Override
-  public void init(Analyzer analyzer) throws InternalException {
+  public void init(Analyzer analyzer) {
     computeMemLayout(analyzer);
     intermediateTupleDesc_.computeMemLayout();
 
@@ -127,9 +114,9 @@ public class AnalyticEvalNode extends PlanNode {
 
     // point fn calls, partition and ordering exprs at our input
     ExprSubstitutionMap childSmap = getCombinedChildSmap();
-    analyticFnCalls_ = Expr.substituteList(analyticFnCalls_, childSmap, analyzer);
+    analyticFnCalls_ = Expr.substituteList(analyticFnCalls_, childSmap, analyzer, false);
     substitutedPartitionExprs_ = Expr.substituteList(partitionExprs_, childSmap,
-        analyzer);
+        analyzer, false);
     orderByElements_ = OrderByElement.substitute(orderByElements_, childSmap, analyzer);
     LOG.trace("evalnode: " + debugString());
   }

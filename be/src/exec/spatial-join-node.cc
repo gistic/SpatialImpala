@@ -54,7 +54,7 @@ Status SpatialJoinNode::Init(const TPlanNode& tnode) {
   RETURN_IF_ERROR(
       Expr::CreateExprTrees(pool_, tnode.spatial_join_node.other_join_conjuncts,
                             &other_join_conjunct_ctxs_));
-  return Status::OK;
+  return Status::OK();
 }
 
 
@@ -64,19 +64,19 @@ Status SpatialJoinNode::Prepare(RuntimeState* state) {
 
   // build and probe exprs are evaluated in the context of the rows produced by our
   // right and left children, respectively
-  RETURN_IF_ERROR(build_expr_ctx_->Prepare(state, child(1)->row_desc()));
-  RETURN_IF_ERROR(probe_expr_ctx_->Prepare(state, child(0)->row_desc()));
+  RETURN_IF_ERROR(build_expr_ctx_->Prepare(state, child(1)->row_desc(), expr_mem_tracker()));
+  RETURN_IF_ERROR(probe_expr_ctx_->Prepare(state, child(0)->row_desc(), expr_mem_tracker()));
 
   // TODO: Use Spatial Join Conjuncts to apply the joining instead of the default OverlapJoin.
   // spatial_join_conjunct_ctx_ are evaluated in the context of the rows produced by this
   // node
-  RETURN_IF_ERROR(spatial_join_conjunct_ctx_->Prepare(state, row_descriptor_));
+  RETURN_IF_ERROR(spatial_join_conjunct_ctx_->Prepare(state, row_descriptor_, expr_mem_tracker()));
 
   // other_join_conjunct_ctxs_ are evaluated in the context of the rows produced by this
   // node
-  RETURN_IF_ERROR(Expr::Prepare(other_join_conjunct_ctxs_, state, row_descriptor_));
+  RETURN_IF_ERROR(Expr::Prepare(other_join_conjunct_ctxs_, state, row_descriptor_, expr_mem_tracker()));
 
-  return Status::OK;
+  return Status::OK();
 }
 
 
@@ -114,7 +114,7 @@ Status SpatialJoinNode::ConstructBuildSide(RuntimeState* state) {
     RowBatch* batch = build_batch_pool->Add(
         new RowBatch(child(1)->row_desc(), state->batch_size(), mem_tracker()));
     RETURN_IF_CANCELLED(state);
-    RETURN_IF_ERROR(state->QueryMaintenance());
+    RETURN_IF_ERROR(QueryMaintenance(state));
     bool eos;
     RETURN_IF_ERROR(child(1)->GetNext(state, batch, &eos));
     SCOPED_TIMER(build_timer_);
@@ -125,13 +125,13 @@ Status SpatialJoinNode::ConstructBuildSide(RuntimeState* state) {
   }
 
   ProcessBuildBatch(&build_batches);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SpatialJoinNode::InitGetNext(TupleRow* first_probe_row) {
   // TODO: Handle the initialization of RTree state.
   matched_probe_ = false;
-  return Status::OK;
+  return Status::OK();
 }
 
 
@@ -139,11 +139,11 @@ Status SpatialJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch, bool* 
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
+  RETURN_IF_ERROR(QueryMaintenance(state));
   
   if (ReachedLimit()) {
     *eos = true;
-    return Status::OK;
+    return Status::OK();
   }
 
   ScopedTimer<MonotonicStopWatch> probe_timer(probe_timer_);
@@ -185,7 +185,7 @@ Status SpatialJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch, bool* 
     *eos = true;
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void SpatialJoinNode::AddToDebugString(int indentation_level, stringstream* out) const {

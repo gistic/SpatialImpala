@@ -29,7 +29,7 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
 
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
-    return Status::OK;
+    return Status::OK();
   }
 
   DCHECK_EQ(GetNumChildren(), 2);
@@ -109,7 +109,7 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
 
   ir_compute_fn_ = *fn;
 
-  return Status::OK;
+  return Status::OK();
 }
 
 

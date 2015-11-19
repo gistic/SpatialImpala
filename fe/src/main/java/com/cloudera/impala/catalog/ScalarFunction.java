@@ -17,7 +17,6 @@ package com.cloudera.impala.catalog;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.cloudera.impala.analysis.FunctionArgs;
 import com.cloudera.impala.analysis.FunctionName;
 import com.cloudera.impala.analysis.HdfsUri;
 import com.cloudera.impala.common.AnalysisException;
@@ -38,8 +37,9 @@ public class ScalarFunction extends Function {
   private String prepareFnSymbol_;
   private String closeFnSymbol_;
 
-  public ScalarFunction(FunctionName fnName, FunctionArgs args, Type retType) {
-    super(fnName, args.argTypes, retType, args.hasVarArgs);
+  public ScalarFunction(FunctionName fnName, ArrayList<Type> argTypes, Type retType,
+      boolean hasVarArgs) {
+    super(fnName, argTypes, retType, hasVarArgs);
   }
 
   public ScalarFunction(FunctionName fnName, List<Type> argTypes,
@@ -58,24 +58,38 @@ public class ScalarFunction extends Function {
    */
   public static ScalarFunction createBuiltin(String name, ArrayList<Type> argTypes,
       boolean hasVarArgs, Type retType, String symbol,
-      String prepareFnSymbol, String closeFnSymbol, boolean isOperator) {
+      String prepareFnSymbol, String closeFnSymbol, boolean userVisible) {
     Preconditions.checkNotNull(symbol);
-    FunctionArgs fnArgs = new FunctionArgs(argTypes, hasVarArgs);
-    ScalarFunction fn =
-        new ScalarFunction(new FunctionName(Catalog.BUILTINS_DB, name), fnArgs, retType);
+    ScalarFunction fn = new ScalarFunction(
+        new FunctionName(Catalog.BUILTINS_DB, name), argTypes, retType, hasVarArgs);
     fn.setBinaryType(TFunctionBinaryType.BUILTIN);
-    fn.setUserVisible(!isOperator);
+    fn.setUserVisible(userVisible);
     try {
       fn.symbolName_ = fn.lookupSymbol(symbol, TSymbolType.UDF_EVALUATE, null,
           fn.hasVarArgs(), fn.getArgs());
     } catch (AnalysisException e) {
       // This should never happen
-      Preconditions.checkState(false, "Builtin symbol '" + symbol + "'" + argTypes
-          + " not found!" + e.getStackTrace());
-      throw new RuntimeException("Builtin symbol not found!", e);
+      throw new RuntimeException("Builtin symbol '" + symbol + "'" + argTypes
+          + " not found!", e);
     }
-    fn.prepareFnSymbol_ = prepareFnSymbol;
-    fn.closeFnSymbol_ = closeFnSymbol;
+    if (prepareFnSymbol != null) {
+      try {
+        fn.prepareFnSymbol_ = fn.lookupSymbol(prepareFnSymbol, TSymbolType.UDF_PREPARE);
+      } catch (AnalysisException e) {
+        // This should never happen
+        throw new RuntimeException(
+            "Builtin symbol '" + prepareFnSymbol + "' not found!", e);
+      }
+    }
+    if (closeFnSymbol != null) {
+      try {
+        fn.closeFnSymbol_ = fn.lookupSymbol(closeFnSymbol, TSymbolType.UDF_CLOSE);
+      } catch (AnalysisException e) {
+        // This should never happen
+        throw new RuntimeException(
+            "Builtin symbol '" + closeFnSymbol + "' not found!", e);
+      }
+    }
     return fn;
   }
 
@@ -146,9 +160,8 @@ public class ScalarFunction extends Function {
   public static ScalarFunction createBuiltin(String name, String symbol,
       ArrayList<Type> argTypes, boolean hasVarArgs, Type retType,
       boolean userVisible) {
-    FunctionArgs fnArgs = new FunctionArgs(argTypes, hasVarArgs);
-    ScalarFunction fn =
-        new ScalarFunction(new FunctionName(Catalog.BUILTINS_DB, name), fnArgs, retType);
+    ScalarFunction fn = new ScalarFunction(
+        new FunctionName(Catalog.BUILTINS_DB, name), argTypes, retType, hasVarArgs);
     fn.setBinaryType(TFunctionBinaryType.BUILTIN);
     fn.setUserVisible(userVisible);
     try {
@@ -169,11 +182,10 @@ public class ScalarFunction extends Function {
    */
   public static ScalarFunction createBuiltinSearchDesc(String name, Type[] argTypes,
       boolean hasVarArgs) {
-    FunctionArgs fnArgs = new FunctionArgs(
-        argTypes == null ? new ArrayList<Type>() : Lists.newArrayList(argTypes),
-        hasVarArgs);
+    ArrayList<Type> fnArgs =
+        (argTypes == null) ? new ArrayList<Type>() : Lists.newArrayList(argTypes);
     ScalarFunction fn = new ScalarFunction(
-        new FunctionName(Catalog.BUILTINS_DB, name), fnArgs, Type.INVALID);
+        new FunctionName(Catalog.BUILTINS_DB, name), fnArgs, Type.INVALID, hasVarArgs);
     fn.setBinaryType(TFunctionBinaryType.BUILTIN);
     return fn;
   }
@@ -185,6 +197,17 @@ public class ScalarFunction extends Function {
   public String getSymbolName() { return symbolName_; }
   public String getPrepareFnSymbol() { return prepareFnSymbol_; }
   public String getCloseFnSymbol() { return closeFnSymbol_; }
+
+  @Override
+  public String toSql(boolean ifNotExists) {
+    StringBuilder sb = new StringBuilder("CREATE FUNCTION ");
+    if (ifNotExists) sb.append("IF NOT EXISTS ");
+    sb.append(dbName() + "." + signatureString() + "\n")
+      .append(" RETURNS " + getReturnType() + "\n")
+      .append(" LOCATION '" + getLocation() + "'\n")
+      .append(" SYMBOL='" + getSymbolName() + "'\n");
+    return sb.toString();
+  }
 
   @Override
   public TFunction toThrift() {

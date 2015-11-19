@@ -31,10 +31,10 @@ import com.google.common.base.Preconditions;
  */
 public class AlterTableChangeColStmt extends AlterTableStmt {
   private final String colName_;
-  private final ColumnDesc newColDef_;
+  private final ColumnDef newColDef_;
 
   public AlterTableChangeColStmt(TableName tableName, String colName,
-      ColumnDesc newColDef) {
+      ColumnDef newColDef) {
     super(tableName);
     Preconditions.checkNotNull(newColDef);
     Preconditions.checkState(colName != null && !colName.isEmpty());
@@ -43,7 +43,7 @@ public class AlterTableChangeColStmt extends AlterTableStmt {
   }
 
   public String getColName() { return colName_; }
-  public ColumnDesc getNewColDef() { return newColDef_; }
+  public ColumnDef getNewColDef() { return newColDef_; }
 
   @Override
   public TAlterTableParams toThrift() {
@@ -88,7 +88,6 @@ public class AlterTableChangeColStmt extends AlterTableStmt {
 
     // Check that the new column def's name is valid.
     newColDef_.analyze();
-    analyzer.warnIfUnsupportedType(newColDef_.getType());
     // Verify that if the column name is being changed, the new name doesn't conflict
     // with an existing column.
     if (!colName_.toLowerCase().equals(newColDef_.getColName().toLowerCase()) &&

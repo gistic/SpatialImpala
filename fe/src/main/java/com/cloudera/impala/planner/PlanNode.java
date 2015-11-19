@@ -28,7 +28,7 @@ import com.cloudera.impala.analysis.ExprSubstitutionMap;
 import com.cloudera.impala.analysis.SlotId;
 import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.TupleId;
-import com.cloudera.impala.common.InternalException;
+import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.PrintUtils;
 import com.cloudera.impala.common.TreeNode;
 import com.cloudera.impala.thrift.TExecStats;
@@ -96,6 +96,7 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   // to avoid having to pass assigned conjuncts back and forth
   // (the planner uses this to save and reset the global state in between join tree
   // alternatives)
+  // TODO for 2.3: Save this state in the PlannerContext instead.
   protected Set<ExprId> assignedConjuncts_;
 
   // estimate of the output cardinality of this node; set in computeStats();
@@ -357,6 +358,9 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
     msg.setLabel_detail(getDisplayLabelDetail());
     msg.setEstimated_stats(estimatedStats);
 
+    Preconditions.checkState(tupleIds_.size() > 0);
+    msg.setRow_tuples(Lists.<Integer>newArrayListWithCapacity(tupleIds_.size()));
+    msg.setNullable_tuples(Lists.<Boolean>newArrayListWithCapacity(tupleIds_.size()));
     for (TupleId tid: tupleIds_) {
       msg.addToRow_tuples(tid.asInt());
       msg.addToNullable_tuples(nullableTupleIds_.contains(tid));
@@ -364,7 +368,6 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
     for (Expr e: conjuncts_) {
       msg.addToConjuncts(e.treeToThrift());
     }
-    msg.compact_data = false;
     toThrift(msg);
     container.addToNodes(msg);
     // For the purpose of the BE consider ExchangeNodes to have no children.
@@ -385,10 +388,10 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
    * and computes the mem layout of all materialized tuples (with the assumption that
    * slots that are needed by ancestor PlanNodes have already been marked).
    * Also performs final expr substitution with childrens' smaps and computes internal
-   * state required for toThrift().
-   * This is called directly after construction.
+   * state required for toThrift(). This is called directly after construction.
+   * Throws if an expr substitution or evaluation fails.
    */
-  public void init(Analyzer analyzer) throws InternalException {
+  public void init(Analyzer analyzer) throws ImpalaException {
     assignConjuncts(analyzer);
     computeStats(analyzer);
     createDefaultSmap(analyzer);
@@ -421,11 +424,11 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
    * Sets outputSmap_ to compose(existing smap, combined child smap). Also
    * substitutes conjuncts_ using the combined child smap.
    */
-  protected void createDefaultSmap(Analyzer analyzer) throws InternalException {
+  protected void createDefaultSmap(Analyzer analyzer) {
     ExprSubstitutionMap combinedChildSmap = getCombinedChildSmap();
     outputSmap_ =
         ExprSubstitutionMap.compose(outputSmap_, combinedChildSmap, analyzer);
-    conjuncts_ = Expr.substituteList(conjuncts_, outputSmap_, analyzer);
+    conjuncts_ = Expr.substituteList(conjuncts_, outputSmap_, analyzer, false);
   }
 
   /**
@@ -560,5 +563,19 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
    */
   public void computeCosts(TQueryOptions queryOptions) {
     perHostMemCost_ = 0;
+  }
+
+  /**
+   * The input cardinality is the sum of output cardinalities of its children.
+   * For scan nodes the input cardinality is the expected number of rows scanned.
+   */
+  public long getInputCardinality() {
+    long sum = 0;
+    for(PlanNode p : children_) {
+      long tmp = p.getCardinality();
+      if (tmp == -1) return -1;
+      sum = addCardinalities(sum, tmp);
+    }
+    return sum;
   }
 }

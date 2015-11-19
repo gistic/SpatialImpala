@@ -38,18 +38,19 @@ class Scheduler;
 class StatestoreSubscriber;
 class TestExecEnv;
 class Webserver;
-class Metrics;
+class MetricGroup;
 class MemTracker;
 class ThreadResourceMgr;
 class CgroupsManager;
 class ImpalaServer;
 class RequestPoolService;
 class Frontend;
+class TmpFileMgr;
 
-// Execution environment for queries/plan fragments.
-// Contains all required global structures, and handles to
-// singleton services. Clients must call StartServices exactly
-// once to properly initialise service state.
+/// Execution environment for queries/plan fragments.
+/// Contains all required global structures, and handles to
+/// singleton services. Clients must call StartServices exactly
+/// once to properly initialise service state.
 class ExecEnv {
  public:
   ExecEnv();
@@ -57,13 +58,13 @@ class ExecEnv {
   ExecEnv(const std::string& hostname, int backend_port, int subscriber_port,
           int webserver_port, const std::string& statestore_host, int statestore_port);
 
-  // Returns the first created exec env instance. In a normal impalad, this is
-  // the only instance. In test setups with multiple ExecEnv's per process,
-  // we return the first instance.
+  /// Returns the first created exec env instance. In a normal impalad, this is
+  /// the only instance. In test setups with multiple ExecEnv's per process,
+  /// we return the first instance.
   static ExecEnv* GetInstance() { return exec_env_; }
 
-  // Empty destructor because the compiler-generated one requires full
-  // declarations for classes in scoped_ptrs.
+  /// Empty destructor because the compiler-generated one requires full
+  /// declarations for classes in scoped_ptrs.
   virtual ~ExecEnv();
 
   void SetImpalaServer(ImpalaServer* server) { impala_server_ = server; }
@@ -82,11 +83,12 @@ class ExecEnv {
   HBaseTableFactory* htable_factory() { return htable_factory_.get(); }
   DiskIoMgr* disk_io_mgr() { return disk_io_mgr_.get(); }
   Webserver* webserver() { return webserver_.get(); }
-  Metrics* metrics() { return metrics_.get(); }
+  MetricGroup* metrics() { return metrics_.get(); }
   MemTracker* process_mem_tracker() { return mem_tracker_.get(); }
   ThreadResourceMgr* thread_mgr() { return thread_mgr_.get(); }
   CgroupsMgr* cgroups_mgr() { return cgroups_mgr_.get(); }
   HdfsOpThreadPool* hdfs_op_thread_pool() { return hdfs_op_thread_pool_.get(); }
+  TmpFileMgr* tmp_file_mgr() { return tmp_file_mgr_.get(); }
   ImpalaServer* impala_server() { return impala_server_; }
   Frontend* frontend() { return frontend_.get(); };
 
@@ -98,24 +100,24 @@ class ExecEnv {
 
   const TNetworkAddress& backend_address() const { return backend_address_; }
 
-  // Starts any dependent services in their correct order
+  /// Starts any dependent services in their correct order
   virtual Status StartServices();
 
-  // Initializes the exec env for running FE tests.
+  /// Initializes the exec env for running FE tests.
   Status InitForFeTests();
 
-  // Returns true if this environment was created from the FE tests. This makes the
-  // environment special since the JVM is started first and libraries are loaded
-  // differently.
+  /// Returns true if this environment was created from the FE tests. This makes the
+  /// environment special since the JVM is started first and libraries are loaded
+  /// differently.
   bool is_fe_tests() { return is_fe_tests_; }
 
-  // Returns true if the Llama in use is pseudo-distributed, used for development
-  // purposes. The pseudo-distributed version has special requirements for specifying
-  // resource locations.
+  /// Returns true if the Llama in use is pseudo-distributed, used for development
+  /// purposes. The pseudo-distributed version has special requirements for specifying
+  /// resource locations.
   bool is_pseudo_distributed_llama() { return is_pseudo_distributed_llama_; }
 
  protected:
-  // Leave protected so that subclasses can override
+  /// Leave protected so that subclasses can override
   boost::scoped_ptr<DataStreamMgr> stream_mgr_;
   boost::scoped_ptr<ResourceBroker> resource_broker_;
   boost::scoped_ptr<Scheduler> scheduler_;
@@ -125,15 +127,16 @@ class ExecEnv {
   boost::scoped_ptr<HBaseTableFactory> htable_factory_;
   boost::scoped_ptr<DiskIoMgr> disk_io_mgr_;
   boost::scoped_ptr<Webserver> webserver_;
-  boost::scoped_ptr<Metrics> metrics_;
+  boost::scoped_ptr<MetricGroup> metrics_;
   boost::scoped_ptr<MemTracker> mem_tracker_;
   boost::scoped_ptr<ThreadResourceMgr> thread_mgr_;
   boost::scoped_ptr<CgroupsMgr> cgroups_mgr_;
   boost::scoped_ptr<HdfsOpThreadPool> hdfs_op_thread_pool_;
+  boost::scoped_ptr<TmpFileMgr> tmp_file_mgr_;
   boost::scoped_ptr<RequestPoolService> request_pool_service_;
   boost::scoped_ptr<Frontend> frontend_;
 
-  // Not owned by this class
+  /// Not owned by this class
   ImpalaServer* impala_server_;
 
   bool enable_webserver_;
@@ -143,15 +146,15 @@ class ExecEnv {
   TimezoneDatabase tz_database_;
   bool is_fe_tests_;
 
-  // Address of the Impala backend server instance
+  /// Address of the Impala backend server instance
   TNetworkAddress backend_address_;
 
-  // True if the cluster has set 'yarn.scheduler.include-port-in-node-name' to true,
-  // indicating that this cluster is pseudo-distributed. Should not be true in real
-  // deployments.
+  /// True if the cluster has set 'yarn.scheduler.include-port-in-node-name' to true,
+  /// indicating that this cluster is pseudo-distributed. Should not be true in real
+  /// deployments.
   bool is_pseudo_distributed_llama_;
 
-  // Initialise cgroups manager, detect test RM environment and init resource broker.
+  /// Initialise cgroups manager, detect test RM environment and init resource broker.
   void InitRm();
 };
 

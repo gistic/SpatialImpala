@@ -16,15 +16,16 @@
 
 #include <sstream>
 
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 string Bitmap::DebugString(bool print_bits) {
-  int64_t words = BitUtil::RoundUp(size_, 64) / 64;
+  int64_t words = BitUtil::RoundUp(num_bits_, 64) / 64;
   stringstream ss;
-  ss << "Size (" << size_ << ") words (" << words << ") ";
+  ss << "Size (" << num_bits_ << ") words (" << words << ") ";
   if (print_bits) {
-    for (int i = 0; i < size(); ++i) {
+    for (int i = 0; i < num_bits(); ++i) {
       if (Get<false>(i)) {
         ss << "1";
       } else {

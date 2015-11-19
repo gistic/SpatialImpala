@@ -23,6 +23,7 @@
 #include "runtime/runtime-state.h"
 #include "service/impala-server.h"
 #include "service/frontend.h"
+#include "service/query-options.h"
 #include "util/debug-util.h"
 #include "util/impalad-metrics.h"
 #include "util/time.h"
@@ -32,13 +33,13 @@
 
 #include <thrift/Thrift.h>
 
-using namespace std;
-using namespace boost;
-using namespace boost::uuids;
+#include "common/names.h"
+
+using boost::algorithm::join;
+using namespace apache::hive::service::cli::thrift;
+using namespace apache::thrift;
 using namespace beeswax;
 using namespace strings;
-using namespace apache::thrift;
-using namespace apache::hive::service::cli::thrift;
 
 DECLARE_int32(catalog_service_port);
 DECLARE_string(catalog_service_host);
@@ -52,6 +53,7 @@ namespace impala {
 static const string PER_HOST_MEM_KEY = "Estimated Per-Host Mem";
 static const string PER_HOST_VCORES_KEY = "Estimated Per-Host VCores";
 static const string TABLES_MISSING_STATS_KEY = "Tables Missing Stats";
+static const string TABLES_WITH_CORRUPT_STATS_KEY = "Tables With Corrupt Table Stats";
 
 ImpalaServer::QueryExecState::QueryExecState(
     const TQueryCtx& query_ctx, ExecEnv* exec_env, Frontend* frontend,
@@ -72,9 +74,10 @@ ImpalaServer::QueryExecState::QueryExecState(
     current_batch_(NULL),
     current_batch_row_(0),
     num_rows_fetched_(0),
+    fetched_rows_(false),
     frontend_(frontend),
     parent_server_(server),
-    start_time_(TimestampValue::local_time_micros()) {
+    start_time_(TimestampValue::LocalTime()) {
   row_materialization_timer_ = ADD_TIMER(&server_profile_, "RowMaterializationTimer");
   client_wait_timer_ = ADD_TIMER(&server_profile_, "ClientFetchWaitTimer");
   query_events_ = summary_profile_.AddEventSequence("Query Timeline");
@@ -120,7 +123,7 @@ Status ImpalaServer::QueryExecState::SetResultCache(QueryResultSet* cache,
             max_size, FLAGS_max_result_cache_size));
   }
   result_cache_max_size_ = max_size;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpalaServer::QueryExecState::Exec(TExecRequest* exec_request) {
@@ -139,7 +142,7 @@ Status ImpalaServer::QueryExecState::Exec(TExecRequest* exec_request) {
     case TStmtType::EXPLAIN: {
       request_result_set_.reset(new vector<TResultRow>(
           exec_request_.explain_result.results));
-      return Status::OK;
+      return Status::OK();
     }
     case TStmtType::DDL: {
       DCHECK(exec_request_.__isset.catalog_op_request);
@@ -162,12 +165,12 @@ Status ImpalaServer::QueryExecState::Exec(TExecRequest* exec_request) {
       reset_req.reset_metadata_params.__set_table_name(
           exec_request_.load_data_request.table_name);
       catalog_op_executor_.reset(
-          new CatalogOpExecutor(exec_env_, frontend_));
+          new CatalogOpExecutor(exec_env_, frontend_, &server_profile_));
       RETURN_IF_ERROR(catalog_op_executor_->Exec(reset_req));
       RETURN_IF_ERROR(parent_server_->ProcessCatalogUpdateResult(
           *catalog_op_executor_->update_catalog_result(),
           exec_request_.query_options.sync_ddl));
-      return Status::OK;
+      return Status::OK();
     }
     case TStmtType::SET: {
       DCHECK(exec_request_.__isset.set_query_option_request);
@@ -175,14 +178,14 @@ Status ImpalaServer::QueryExecState::Exec(TExecRequest* exec_request) {
       if (exec_request_.set_query_option_request.__isset.key) {
         // "SET key=value" updates the session query options.
         DCHECK(exec_request_.set_query_option_request.__isset.value);
-        RETURN_IF_ERROR(parent_server_->SetQueryOptions(
+        RETURN_IF_ERROR(SetQueryOption(
             exec_request_.set_query_option_request.key,
             exec_request_.set_query_option_request.value,
             &session_->default_query_options));
       } else {
         // "SET" returns a table of all query options.
         map<string, string> config;
-        parent_server_->TQueryOptionsToMap(
+        TQueryOptionsToMap(
             session_->default_query_options, &config);
         vector<string> keys, values;
         map<string, string>::const_iterator itr = config.begin();
@@ -192,7 +195,7 @@ Status ImpalaServer::QueryExecState::Exec(TExecRequest* exec_request) {
         }
         SetResultSet(keys, values);
       }
-      return Status::OK;
+      return Status::OK();
     }
     default:
       stringstream errmsg;
@@ -207,7 +210,7 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
     case TCatalogOpType::USE: {
       lock_guard<mutex> l(session_->lock);
       session_->database = exec_request_.catalog_op_request.use_db_params.db;
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_TABLES: {
       const TShowTablesParams* params = &catalog_op.show_tables_params;
@@ -220,7 +223,7 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
       RETURN_IF_ERROR(frontend_->GetTableNames(params->db, table_name,
           &query_ctx_.session, &table_names));
       SetResultSet(table_names.tables);
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_DBS: {
       const TShowDbsParams* params = &catalog_op.show_dbs_params;
@@ -230,7 +233,7 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
       RETURN_IF_ERROR(
           frontend_->GetDbNames(db_pattern, &query_ctx_.session, &db_names));
       SetResultSet(db_names.dbs);
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_DATA_SRCS: {
       const TShowDataSrcsParams* params = &catalog_op.show_data_srcs_params;
@@ -241,7 +244,7 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
           frontend_->GetDataSrcMetadata(pattern, &result));
       SetResultSet(result.data_src_names, result.locations, result.class_names,
           result.api_versions);
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_STATS: {
       const TShowStatsParams& params = catalog_op.show_stats_params;
@@ -250,7 +253,7 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
       // Set the result set and its schema from the response.
       request_result_set_.reset(new vector<TResultRow>(response.rows));
       result_metadata_ = response.schema;
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_FUNCTIONS: {
       const TShowFunctionsParams* params = &catalog_op.show_fns_params;
@@ -260,14 +263,15 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
       RETURN_IF_ERROR(frontend_->GetFunctions(
           params->category, params->db, fn_pattern, &query_ctx_.session, &functions));
       SetResultSet(functions.fn_ret_types, functions.fn_signatures);
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_ROLES: {
       const TShowRolesParams& params = catalog_op.show_roles_params;
       if (params.is_admin_op) {
-        // Verify the user has privileges to perform this operation by checking against the
-        // Sentry Service (via the Catalog Server).
-        catalog_op_executor_.reset(new CatalogOpExecutor(exec_env_, frontend_));
+        // Verify the user has privileges to perform this operation by checking against
+        // the Sentry Service (via the Catalog Server).
+        catalog_op_executor_.reset(new CatalogOpExecutor(exec_env_, frontend_,
+            &server_profile_));
 
         TSentryAdminCheckRequest req;
         req.__set_header(TCatalogServiceRequestHeader());
@@ -280,14 +284,15 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
       TShowRolesResult result;
       RETURN_IF_ERROR(frontend_->ShowRoles(params, &result));
       SetResultSet(result.role_names);
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_GRANT_ROLE: {
       const TShowGrantRoleParams& params = catalog_op.show_grant_role_params;
       if (params.is_admin_op) {
-        // Verify the user has privileges to perform this operation by checking against the
-        // Sentry Service (via the Catalog Server).
-        catalog_op_executor_.reset(new CatalogOpExecutor(exec_env_, frontend_));
+        // Verify the user has privileges to perform this operation by checking against
+        // the Sentry Service (via the Catalog Server).
+        catalog_op_executor_.reset(new CatalogOpExecutor(exec_env_, frontend_,
+            &server_profile_));
 
         TSentryAdminCheckRequest req;
         req.__set_header(TCatalogServiceRequestHeader());
@@ -300,22 +305,45 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
       // Set the result set and its schema from the response.
       request_result_set_.reset(new vector<TResultRow>(response.rows));
       result_metadata_ = response.schema;
-      return Status::OK;
+      return Status::OK();
     }
-    case TCatalogOpType::DESCRIBE: {
-      TDescribeTableResult response;
+    case TCatalogOpType::DESCRIBE_DB: {
+      TDescribeResult response;
+      RETURN_IF_ERROR(frontend_->DescribeDb(catalog_op.describe_db_params,
+          &response));
+      // Set the result set
+      request_result_set_.reset(new vector<TResultRow>(response.results));
+      return Status::OK();
+    }
+    case TCatalogOpType::DESCRIBE_TABLE: {
+      TDescribeResult response;
       RETURN_IF_ERROR(frontend_->DescribeTable(catalog_op.describe_table_params,
           &response));
       // Set the result set
       request_result_set_.reset(new vector<TResultRow>(response.results));
-      return Status::OK;
+      return Status::OK();
     }
     case TCatalogOpType::SHOW_CREATE_TABLE: {
       string response;
       RETURN_IF_ERROR(frontend_->ShowCreateTable(catalog_op.show_create_table_params,
           &response));
       SetResultSet(vector<string>(1, response));
-      return Status::OK;
+      return Status::OK();
+    }
+    case TCatalogOpType::SHOW_CREATE_FUNCTION: {
+      string response;
+      RETURN_IF_ERROR(frontend_->ShowCreateFunction(catalog_op.show_create_function_params,
+          &response));
+      SetResultSet(vector<string>(1, response));
+      return Status::OK();
+    }
+    case TCatalogOpType::SHOW_FILES: {
+      TResultSet response;
+      RETURN_IF_ERROR(frontend_->GetTableFiles(catalog_op.show_files_params, &response));
+      // Set the result set and its schema from the response.
+      request_result_set_.reset(new vector<TResultRow>(response.rows));
+      result_metadata_ = response.schema;
+      return Status::OK();
     }
     default: {
       stringstream ss;
@@ -350,7 +378,8 @@ Status ImpalaServer::QueryExecState::ExecQueryOrDmlRequest(
     ss << query_exec_request.per_host_vcores;
     summary_profile_.AddInfoString(PER_HOST_VCORES_KEY, ss.str());
   }
-  if (query_exec_request.query_ctx.__isset.tables_missing_stats &&
+  if (!query_exec_request.query_ctx.__isset.parent_query_id &&
+      query_exec_request.query_ctx.__isset.tables_missing_stats &&
       !query_exec_request.query_ctx.tables_missing_stats.empty()) {
     stringstream ss;
     const vector<TTableName>& tbls = query_exec_request.query_ctx.tables_missing_stats;
@@ -359,6 +388,19 @@ Status ImpalaServer::QueryExecState::ExecQueryOrDmlRequest(
       ss << tbls[i].db_name << "." << tbls[i].table_name;
     }
     summary_profile_.AddInfoString(TABLES_MISSING_STATS_KEY, ss.str());
+  }
+
+  if (!query_exec_request.query_ctx.__isset.parent_query_id &&
+      query_exec_request.query_ctx.__isset.tables_with_corrupt_stats &&
+      !query_exec_request.query_ctx.tables_with_corrupt_stats.empty()) {
+    stringstream ss;
+    const vector<TTableName>& tbls =
+        query_exec_request.query_ctx.tables_with_corrupt_stats;
+    for (int i = 0; i < tbls.size(); ++i) {
+      if (i != 0) ss << ",";
+      ss << tbls[i].db_name << "." << tbls[i].table_name;
+    }
+    summary_profile_.AddInfoString(TABLES_WITH_CORRUPT_STATS_KEY, ss.str());
   }
 
   // If desc_tbl is not set, query has SELECT with no FROM. In that
@@ -405,7 +447,7 @@ Status ImpalaServer::QueryExecState::ExecQueryOrDmlRequest(
   }
 
   profile_.AddChild(coord_->query_profile());
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpalaServer::QueryExecState::ExecDdlRequest() {
@@ -424,17 +466,20 @@ Status ImpalaServer::QueryExecState::ExecDdlRequest() {
     TComputeStatsParams& compute_stats_params =
         exec_request_.catalog_op_request.ddl_params.compute_stats_params;
     // Add child queries for computing table and column stats.
-    child_queries_.push_back(
-        ChildQuery(compute_stats_params.tbl_stats_query, this, parent_server_));
+    if (compute_stats_params.__isset.tbl_stats_query) {
+      child_queries_.push_back(
+          ChildQuery(compute_stats_params.tbl_stats_query, this, parent_server_));
+    }
     if (compute_stats_params.__isset.col_stats_query) {
       child_queries_.push_back(
           ChildQuery(compute_stats_params.col_stats_query, this, parent_server_));
     }
-    ExecChildQueriesAsync();
-    return Status::OK;
+    if (child_queries_.size() > 0) ExecChildQueriesAsync();
+    return Status::OK();
   }
 
-  catalog_op_executor_.reset(new CatalogOpExecutor(exec_env_, frontend_));
+  catalog_op_executor_.reset(new CatalogOpExecutor(exec_env_, frontend_,
+      &server_profile_));
   Status status = catalog_op_executor_->Exec(exec_request_.catalog_op_request);
   {
     lock_guard<mutex> l(lock_);
@@ -446,26 +491,28 @@ Status ImpalaServer::QueryExecState::ExecDdlRequest() {
   // The exception is if the user specified IF NOT EXISTS and the table already
   // existed, in which case we do not execute the INSERT.
   if (catalog_op_type() == TCatalogOpType::DDL &&
-      ddl_type() == TDdlType::CREATE_TABLE_AS_SELECT) {
-    if (catalog_op_executor_->ddl_exec_response()->new_table_created) {
-      // At this point, the remainder of the CTAS request executes
-      // like a normal DML request. As with other DML requests, it will
-      // wait for another catalog update if any partitions were altered as a result
-      // of the operation.
-      DCHECK(exec_request_.__isset.query_exec_request);
-      RETURN_IF_ERROR(ExecQueryOrDmlRequest(exec_request_.query_exec_request));
-    } else {
-      DCHECK(exec_request_.catalog_op_request.
-          ddl_params.create_table_params.if_not_exists);
-    }
-  } else {
-    // CREATE TABLE AS SELECT performs its catalog update once the DML
-    // portion of the operation has completed.
-    RETURN_IF_ERROR(parent_server_->ProcessCatalogUpdateResult(
-        *catalog_op_executor_->update_catalog_result(),
-        exec_request_.query_options.sync_ddl));
+      ddl_type() == TDdlType::CREATE_TABLE_AS_SELECT &&
+      !catalog_op_executor_->ddl_exec_response()->new_table_created) {
+    DCHECK(exec_request_.catalog_op_request.
+        ddl_params.create_table_params.if_not_exists);
+    return Status::OK();
   }
-  return Status::OK;
+
+  // Add newly created table to catalog cache.
+  RETURN_IF_ERROR(parent_server_->ProcessCatalogUpdateResult(
+      *catalog_op_executor_->update_catalog_result(),
+      exec_request_.query_options.sync_ddl));
+
+  if (catalog_op_type() == TCatalogOpType::DDL &&
+      ddl_type() == TDdlType::CREATE_TABLE_AS_SELECT) {
+    // At this point, the remainder of the CTAS request executes
+    // like a normal DML request. As with other DML requests, it will
+    // wait for another catalog update if any partitions were altered as a result
+    // of the operation.
+    DCHECK(exec_request_.__isset.query_exec_request);
+    RETURN_IF_ERROR(ExecQueryOrDmlRequest(exec_request_.query_exec_request));
+  }
+  return Status::OK();
 }
 
 void ImpalaServer::QueryExecState::Done() {
@@ -474,7 +521,7 @@ void ImpalaServer::QueryExecState::Done() {
   // is destroyed).
   BlockOnWait();
   unique_lock<mutex> l(lock_);
-  end_time_ = TimestampValue::local_time_micros();
+  end_time_ = TimestampValue::LocalTime();
   summary_profile_.AddInfoString("End Time", end_time().DebugString());
   summary_profile_.AddInfoString("Query State", PrintQueryState(query_state_));
   query_events_->MarkEvent("Unregister query");
@@ -485,7 +532,7 @@ void ImpalaServer::QueryExecState::Done() {
     Status status = exec_env_->scheduler()->Release(schedule_.get());
     if (!status.ok()) {
       LOG(WARNING) << "Failed to release resources of query " << schedule_->query_id()
-            << " because of error: " << status.GetErrorMsg();
+            << " because of error: " << status.GetDetail();
     }
   }
 
@@ -502,7 +549,7 @@ Status ImpalaServer::QueryExecState::Exec(const TMetadataOpRequest& exec_request
       &metadata_op_result));
   result_metadata_ = metadata_op_result.schema;
   request_result_set_.reset(new vector<TResultRow>(metadata_op_result.rows));
-  return Status::OK;
+  return Status::OK();
 }
 
 void ImpalaServer::QueryExecState::WaitAsync() {
@@ -538,7 +585,7 @@ Status ImpalaServer::QueryExecState::WaitInternal() {
   // Explain requests have already populated the result set. Nothing to do here.
   if (exec_request_.stmt_type == TStmtType::EXPLAIN) {
     MarkInactive();
-    return Status::OK;
+    return Status::OK();
   }
 
   RETURN_IF_ERROR(WaitForChildQueries());
@@ -548,7 +595,8 @@ Status ImpalaServer::QueryExecState::WaitInternal() {
     RETURN_IF_ERROR(UpdateCatalog());
   }
 
-  if (ddl_type() == TDdlType::COMPUTE_STATS) {
+  if (catalog_op_type() == TCatalogOpType::DDL &&
+      ddl_type() == TDdlType::COMPUTE_STATS && child_queries_.size() > 0) {
     RETURN_IF_ERROR(UpdateTableAndColumnStats());
   }
 
@@ -556,16 +604,15 @@ Status ImpalaServer::QueryExecState::WaitInternal() {
     // Queries that do not return a result are finished at this point. This includes
     // DML operations and a subset of the DDL operations.
     eos_ = true;
-  } else {
-    if (ddl_type() == TDdlType::CREATE_TABLE_AS_SELECT) {
-      SetCreateTableAsSelectResultSet();
-    }
+  } else if (catalog_op_type() == TCatalogOpType::DDL &&
+      ddl_type() == TDdlType::CREATE_TABLE_AS_SELECT) {
+    SetCreateTableAsSelectResultSet();
   }
   // Rows are available now (for SELECT statement), so start the 'wait' timer that tracks
   // how long Impala waits for the client to fetch rows. For other statements, track the
   // time until a Close() is received.
   MarkInactive();
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpalaServer::QueryExecState::FetchRows(const int32_t max_rows,
@@ -583,20 +630,20 @@ Status ImpalaServer::QueryExecState::FetchRows(const int32_t max_rows,
 Status ImpalaServer::QueryExecState::RestartFetch() {
   // No result caching for this query. Restart is invalid.
   if (result_cache_max_size_ <= 0) {
-    return Status(TStatusCode::RECOVERABLE_ERROR,
-        "Restarting of fetch requires enabling of query result caching.");
+    return Status(ErrorMsg(TErrorCode::RECOVERABLE_ERROR,
+        "Restarting of fetch requires enabling of query result caching."));
   }
   // The cache overflowed on a previous fetch.
   if (result_cache_.get() == NULL) {
     stringstream ss;
     ss << "The query result cache exceeded its limit of " << result_cache_max_size_
        << " rows. Restarting the fetch is not possible.";
-    return Status(TStatusCode::RECOVERABLE_ERROR, ss.str());
+    return Status(ErrorMsg(TErrorCode::RECOVERABLE_ERROR, ss.str()));
   }
   // Reset fetch state to start over.
   eos_ = false;
   num_rows_fetched_ = 0;
-  return Status::OK;
+  return Status::OK();
 }
 
 void ImpalaServer::QueryExecState::UpdateQueryState(QueryState::type query_state) {
@@ -609,7 +656,7 @@ Status ImpalaServer::QueryExecState::UpdateQueryStatus(const Status& status) {
   if (!status.ok() && query_status_.ok()) {
     query_state_ = QueryState::EXCEPTION;
     query_status_ = status;
-    summary_profile_.AddInfoString("Query Status", query_status_.GetErrorMsg());
+    summary_profile_.AddInfoString("Query Status", query_status_.GetDetail());
   }
 
   return status;
@@ -619,7 +666,7 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
     QueryResultSet* fetched_rows) {
   DCHECK(query_state_ != QueryState::EXCEPTION);
 
-  if (eos_) return Status::OK;
+  if (eos_) return Status::OK();
 
   if (request_result_set_ != NULL) {
     query_state_ = QueryState::FINISHED;
@@ -633,7 +680,7 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
       ++num_rows;
     }
     eos_ = (num_rows_fetched_ == all_rows.size());
-    return Status::OK;
+    return Status::OK();
   }
 
   int32_t num_rows_fetched_from_cache = 0;
@@ -643,7 +690,7 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
     num_rows_fetched_from_cache =
         fetched_rows->AddRows(result_cache_.get(), num_rows_fetched_, cache_fetch_size);
     num_rows_fetched_ += num_rows_fetched_from_cache;
-    if (num_rows_fetched_from_cache >= max_rows) return Status::OK;
+    if (num_rows_fetched_from_cache >= max_rows) return Status::OK();
   }
 
   // List of expr values to hold evaluated rows from the query
@@ -658,7 +705,7 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
     // Query with LIMIT 0.
     query_state_ = QueryState::FINISHED;
     eos_ = true;
-    return Status::OK;
+    return Status::OK();
   }
 
   query_state_ = QueryState::FINISHED;  // results will be ready after this call
@@ -666,7 +713,7 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
   if (current_batch_ == NULL || current_batch_row_ >= current_batch_->num_rows()) {
     RETURN_IF_ERROR(FetchNextBatch());
   }
-  if (current_batch_ == NULL) return Status::OK;
+  if (current_batch_ == NULL) return Status::OK();
 
   // Maximum number of rows to be fetched from the coord.
   int32_t max_coord_rows = max_rows;
@@ -689,6 +736,9 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
       ++current_batch_row_;
     }
   }
+  ExprContext::FreeLocalAllocations(output_expr_ctxs_);
+  // Check if there was an error evaluating a row value.
+  RETURN_IF_ERROR(coord_->runtime_state()->CheckQueryState());
 
   // Update the result cache if necessary.
   if (result_cache_max_size_ > 0 && result_cache_.get() != NULL) {
@@ -697,8 +747,21 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
       // Set the cache to NULL to indicate that adding the rows fetched from the coord
       // would exceed the bound of the cache, and therefore, RestartFetch() should fail.
       ClearResultCache();
-      return Status::OK;
+      return Status::OK();
     }
+
+    // We guess the size of the cache after adding fetched_rows by looking at the size of
+    // fetched_rows itself, and using this estimate to confirm that the memtracker will
+    // allow us to use this much extra memory. In fact, this might be an overestimate, as
+    // the size of two result sets combined into one is not always the size of both result
+    // sets added together (the best example is the null bitset for each column: it might
+    // have only one entry in each result set, and as a result consume two bytes, but when
+    // the result sets are combined, only one byte is needed). Therefore after we add the
+    // new result set into the cache, we need to fix up the memory consumption to the
+    // actual levels to ensure we don't 'leak' bytes that we aren't using.
+    int64_t before = result_cache_->ByteSize();
+
+    // Upper-bound on memory required to add fetched_rows to the cache.
     int64_t delta_bytes =
         fetched_rows->ByteSize(num_rows_fetched_from_cache, fetched_rows->size());
     MemTracker* query_mem_tracker = coord_->query_mem_tracker();
@@ -710,12 +773,27 @@ Status ImpalaServer::QueryExecState::FetchRowsInternal(const int32_t max_rows,
     // Append all rows fetched from the coordinator into the cache.
     int num_rows_added = result_cache_->AddRows(
         fetched_rows, num_rows_fetched_from_cache, fetched_rows->size());
+
+    int64_t after = result_cache_->ByteSize();
+
+    // Confirm that this was not an underestimate of the memory required.
+    DCHECK_GE(before + delta_bytes, after)
+        << "Combined result sets consume more memory than both individually "
+        << Substitute("(before: $0, delta_bytes: $1, after: $2)",
+            before, delta_bytes, after);
+
+    // Fix up the tracked values
+    if (before + delta_bytes > after) {
+      query_mem_tracker->Release(before + delta_bytes - after);
+      delta_bytes = after - before;
+    }
+
     // Update result set cache metrics.
     ImpaladMetrics::RESULTSET_CACHE_TOTAL_NUM_ROWS->Increment(num_rows_added);
     ImpaladMetrics::RESULTSET_CACHE_TOTAL_BYTES->Increment(delta_bytes);
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpalaServer::QueryExecState::GetRowValue(TupleRow* row, vector<void*>* result,
@@ -725,7 +803,7 @@ Status ImpalaServer::QueryExecState::GetRowValue(TupleRow* row, vector<void*>* r
     (*result)[i] = output_expr_ctxs_[i]->GetValue(row);
     (*scales)[i] = output_expr_ctxs_[i]->root()->output_scale();
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 void ImpalaServer::QueryExecState::Cancel(const Status* cause) {
@@ -748,7 +826,7 @@ void ImpalaServer::QueryExecState::Cancel(const Status* cause) {
 Status ImpalaServer::QueryExecState::UpdateCatalog() {
   if (!exec_request().__isset.query_exec_request ||
       exec_request().query_exec_request.stmt_type != TStmtType::DML) {
-    return Status::OK;
+    return Status::OK();
   }
 
   query_events_->MarkEvent("DML data written");
@@ -783,22 +861,18 @@ Status ImpalaServer::QueryExecState::UpdateCatalog() {
 
       VLOG_QUERY << "Executing FinalizeDml() using CatalogService";
       TUpdateCatalogResponse resp;
-      try {
-        client->UpdateCatalog(resp, catalog_update);
-      } catch (const TException& e) {
-        RETURN_IF_ERROR(client.Reopen());
-        client->UpdateCatalog(resp, catalog_update);
-      }
+      RETURN_IF_ERROR(
+          client.DoRpc(&CatalogServiceClient::UpdateCatalog, catalog_update, &resp));
 
       Status status(resp.result.status);
-      if (!status.ok()) LOG(ERROR) << "ERROR Finalizing DML: " << status.GetErrorMsg();
+      if (!status.ok()) LOG(ERROR) << "ERROR Finalizing DML: " << status.GetDetail();
       RETURN_IF_ERROR(status);
       RETURN_IF_ERROR(parent_server_->ProcessCatalogUpdateResult(resp.result,
           exec_request_.query_options.sync_ddl));
     }
   }
   query_events_->MarkEvent("DML Metastore update finished");
-  return Status::OK;
+  return Status::OK();
 }
 
 Status ImpalaServer::QueryExecState::FetchNextBatch() {
@@ -820,7 +894,7 @@ Status ImpalaServer::QueryExecState::FetchNextBatch() {
 
   current_batch_row_ = 0;
   eos_ = current_batch_ == NULL;
-  return Status::OK;
+  return Status::OK();
 }
 
 void ImpalaServer::QueryExecState::SetResultSet(const vector<string>& results) {
@@ -872,7 +946,8 @@ void ImpalaServer::QueryExecState::SetCreateTableAsSelectResultSet() {
   // operation.
   if (catalog_op_executor_->ddl_exec_response()->new_table_created) {
     DCHECK(coord_.get());
-    BOOST_FOREACH(const PartitionStatusMap::value_type& p, coord_->per_partition_status()) {
+    BOOST_FOREACH(
+        const PartitionStatusMap::value_type& p, coord_->per_partition_status()) {
       total_num_rows_inserted += p.second.num_appended_rows;
     }
   }
@@ -885,7 +960,7 @@ void ImpalaServer::QueryExecState::SetCreateTableAsSelectResultSet() {
 void ImpalaServer::QueryExecState::MarkInactive() {
   client_wait_sw_.Start();
   lock_guard<mutex> l(expiration_data_lock_);
-  last_active_time_ = ms_since_epoch();
+  last_active_time_ = UnixMillis();
   DCHECK(ref_count_ > 0) << "Invalid MarkInactive()";
   --ref_count_;
 }
@@ -895,14 +970,15 @@ void ImpalaServer::QueryExecState::MarkActive() {
   int64_t elapsed_time = client_wait_sw_.ElapsedTime();
   client_wait_timer_->Set(elapsed_time);
   lock_guard<mutex> l(expiration_data_lock_);
-  last_active_time_ = ms_since_epoch();
+  last_active_time_ = UnixMillis();
   ++ref_count_;
 }
 
 Status ImpalaServer::QueryExecState::UpdateTableAndColumnStats() {
   DCHECK_GE(child_queries_.size(), 1);
   DCHECK_LE(child_queries_.size(), 2);
-  catalog_op_executor_.reset(new CatalogOpExecutor(exec_env_, frontend_));
+  catalog_op_executor_.reset(
+      new CatalogOpExecutor(exec_env_, frontend_, &server_profile_));
 
   // If there was no column stats query, pass in empty thrift structures to
   // ExecComputeStats(). Otherwise pass in the column stats result.
@@ -937,7 +1013,7 @@ Status ImpalaServer::QueryExecState::UpdateTableAndColumnStats() {
   }
 
   query_events_->MarkEvent("Metastore update finished");
-  return Status::OK;
+  return Status::OK();
 }
 
 void ImpalaServer::QueryExecState::ExecChildQueriesAsync() {
@@ -954,7 +1030,7 @@ void ImpalaServer::QueryExecState::ExecChildQueries() {
 }
 
 Status ImpalaServer::QueryExecState::WaitForChildQueries() {
-  if (child_queries_thread_.get() == NULL) return Status::OK;
+  if (child_queries_thread_.get() == NULL) return Status::OK();
   child_queries_thread_->Join();
   {
     lock_guard<mutex> l(lock_);
@@ -962,7 +1038,7 @@ Status ImpalaServer::QueryExecState::WaitForChildQueries() {
     RETURN_IF_ERROR(UpdateQueryStatus(child_queries_status_));
   }
   query_events_->MarkEvent("Child queries finished");
-  return Status::OK;
+  return Status::OK();
 }
 
 void ImpalaServer::QueryExecState::ClearResultCache() {
@@ -972,7 +1048,7 @@ void ImpalaServer::QueryExecState::ClearResultCache() {
   int64_t total_bytes = result_cache_->ByteSize();
   ImpaladMetrics::RESULTSET_CACHE_TOTAL_BYTES->Increment(-total_bytes);
   if (coord_ != NULL) {
-    DCHECK_NOTNULL(coord_->query_mem_tracker());
+    DCHECK(coord_->query_mem_tracker() != NULL);
     coord_->query_mem_tracker()->Release(total_bytes);
   }
   result_cache_.reset(NULL);

@@ -31,6 +31,7 @@ import com.cloudera.impala.analysis.StringLiteral;
 import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.catalog.DataSource;
 import com.cloudera.impala.catalog.DataSourceTable;
+import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.InternalException;
 import com.cloudera.impala.extdatasource.ExternalDataSourceExecutor;
 import com.cloudera.impala.extdatasource.thrift.TBinaryPredicate;
@@ -42,6 +43,7 @@ import com.cloudera.impala.service.FeSupport;
 import com.cloudera.impala.thrift.TCacheJarResult;
 import com.cloudera.impala.thrift.TColumnValue;
 import com.cloudera.impala.thrift.TDataSourceScanNode;
+import com.cloudera.impala.thrift.TErrorCode;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TNetworkAddress;
 import com.cloudera.impala.thrift.TPlanNode;
@@ -51,7 +53,6 @@ import com.cloudera.impala.thrift.TScanRange;
 import com.cloudera.impala.thrift.TScanRangeLocation;
 import com.cloudera.impala.thrift.TScanRangeLocations;
 import com.cloudera.impala.thrift.TStatus;
-import com.cloudera.impala.thrift.TStatusCode;
 import com.google.common.base.Joiner;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
@@ -88,9 +89,10 @@ public class DataSourceScanNode extends ScanNode {
   }
 
   @Override
-  public void init(Analyzer analyzer) throws InternalException {
+  public void init(Analyzer analyzer) throws ImpalaException {
+    checkForSupportedFileFormats();
     assignConjuncts(analyzer);
-    analyzer.enforceSlotEquivalences(tupleIds_.get(0), conjuncts_);
+    analyzer.createEquivConjuncts(tupleIds_.get(0), conjuncts_);
     prepareDataSource();
     computeStats(analyzer);
     // materialize slots in remaining conjuncts_
@@ -158,7 +160,7 @@ public class DataSourceScanNode extends ScanNode {
     String hdfsLocation = table_.getDataSource().getHdfs_location();
     TCacheJarResult cacheResult = FeSupport.CacheJar(hdfsLocation);
     TStatus cacheJarStatus = cacheResult.getStatus();
-    if (cacheJarStatus.getStatus_code() != TStatusCode.OK) {
+    if (cacheJarStatus.getStatus_code() != TErrorCode.OK) {
       throw new InternalException(String.format(
           "Unable to cache data source library at location '%s'. Check that the file " +
           "exists and is readable. Message: %s",
@@ -171,7 +173,7 @@ public class DataSourceScanNode extends ScanNode {
     TStatus prepareStatus;
     try {
       ExternalDataSourceExecutor executor = new ExternalDataSourceExecutor(
-          localPath, className, apiVersion);
+          localPath, className, apiVersion, table_.getInitString());
       TPrepareParams prepareParams = new TPrepareParams();
       prepareParams.setInit_string(table_.getInitString());
       prepareParams.setPredicates(offeredPredicates);
@@ -184,7 +186,7 @@ public class DataSourceScanNode extends ScanNode {
           "Error calling prepare() on data source %s",
           DataSource.debugString(table_.getDataSource())), e);
     }
-    if (prepareStatus.getStatus_code() != TStatusCode.OK) {
+    if (prepareStatus.getStatus_code() != TErrorCode.OK) {
       throw new InternalException(String.format(
           "Data source %s returned an error from prepare(): %s",
           DataSource.debugString(table_.getDataSource()),
@@ -223,12 +225,12 @@ public class DataSourceScanNode extends ScanNode {
       TComparisonOp op = null;
       if ((conjunct.getChild(0).unwrapSlotRef(true) instanceof SlotRef) &&
           (conjunct.getChild(1) instanceof LiteralExpr)) {
-        slotRef = (SlotRef) conjunct.getChild(0).unwrapSlotRef(true);
+        slotRef = conjunct.getChild(0).unwrapSlotRef(true);
         literalExpr = (LiteralExpr) conjunct.getChild(1);
         op = ((BinaryPredicate) conjunct).getOp().getThriftOp();
       } else if ((conjunct.getChild(1).unwrapSlotRef(true) instanceof SlotRef) &&
                  (conjunct.getChild(0) instanceof LiteralExpr)) {
-        slotRef = (SlotRef) conjunct.getChild(1).unwrapSlotRef(true);
+        slotRef = conjunct.getChild(1).unwrapSlotRef(true);
         literalExpr = (LiteralExpr) conjunct.getChild(0);
         op = ((BinaryPredicate) conjunct).getOp().converse().getThriftOp();
       } else {
@@ -238,8 +240,9 @@ public class DataSourceScanNode extends ScanNode {
       TColumnValue val = literalToColumnValue(literalExpr);
       if (val == null) return false; // false if unsupported type, e.g.
 
-      TColumnDesc col = new TColumnDesc().setName(slotRef.getColumnName())
-          .setType(slotRef.getType().toThrift());
+      String colName = Joiner.on(".").join(slotRef.getResolvedPath().getRawPath());
+      TColumnDesc col = new TColumnDesc().setName(colName).setType(
+          slotRef.getType().toThrift());
       predicates.add(new TBinaryPredicate().setCol(col).setOp(op).setValue(val));
       return true;
     } else if (conjunct instanceof CompoundPredicate) {
@@ -256,14 +259,15 @@ public class DataSourceScanNode extends ScanNode {
   @Override
   public void computeStats(Analyzer analyzer) {
     super.computeStats(analyzer);
+    inputCardinality_ = numRowsEstimate_;
     cardinality_ = numRowsEstimate_;
     cardinality_ *= computeSelectivity();
-    cardinality_ = Math.max(0, cardinality_);
+    cardinality_ = Math.max(1, cardinality_);
     cardinality_ = capAtLimit(cardinality_);
 
     LOG.debug("computeStats DataSourceScan: cardinality=" + Long.toString(cardinality_));
 
-    numNodes_ = desc_.getTable().getNumNodes();
+    numNodes_ = table_.getNumNodes();
     LOG.debug("computeStats DataSourceScan: #nodes=" + Integer.toString(numNodes_));
   }
 

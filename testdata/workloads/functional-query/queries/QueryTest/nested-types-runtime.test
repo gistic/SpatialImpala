@@ -1,0 +1,423 @@
+====
+---- QUERY
+# Test sending collections through a broadcast exchange as the build of a hash join.
+select straight_join t1.id, m.key
+from complextypestbl t1 join [broadcast] complextypestbl t2, t2.int_map m
+where t1.id = t2.id
+---- RESULTS
+1,'k1'
+1,'k2'
+2,'k1'
+2,'k2'
+7,'k1'
+7,'k3'
+8,'k1'
+---- TYPES
+bigint,string
+====
+---- QUERY
+# Test sending collections through a hash exchange as the build of a hash join.
+select straight_join t1.id, m.key
+from complextypestbl t1 join [shuffle] complextypestbl t2, t2.int_map m
+where t1.id = t2.id
+---- RESULTS
+1,'k1'
+1,'k2'
+2,'k1'
+2,'k2'
+7,'k1'
+7,'k3'
+8,'k1'
+---- TYPES
+bigint,string
+====
+---- QUERY
+# Test top-n after a subplan flattening an array.
+select id, item from complextypestbl t, t.int_array
+order by id, item limit 5
+---- RESULTS
+1,1
+1,2
+1,3
+2,1
+2,2
+---- TYPES
+bigint,int
+====
+---- QUERY
+# Test top-n after a subplan flattening a map.
+select id, key, value from complextypestbl t, t.int_map_array.item
+order by id, key limit 3
+---- RESULTS
+1,'k1',1
+2,'k1',1
+2,'k3',NULL
+---- TYPES
+bigint,string,int
+====
+---- QUERY
+# Test sort after a subplan that flattens a map.
+select id, key, value from complextypestbl t, t.int_map
+order by id, key
+---- RESULTS
+1,'k1',1
+1,'k2',100
+2,'k1',2
+2,'k2',NULL
+7,'k1',NULL
+7,'k3',NULL
+8,'k1',-1
+---- TYPES
+bigint,string,int
+====
+---- QUERY
+# Test non-grouping aggregation after a subplan that flattens a map.
+select count(id), max(key), avg(value) from complextypestbl t, t.int_map
+---- RESULTS
+7,'k3',25.5
+---- TYPES
+bigint,string,double
+====
+---- QUERY
+# Test grouping aggregation after a subplan that flattens a map.
+select key, count(id), avg(value) from complextypestbl t, t.int_map
+group by key
+---- RESULTS
+'k1',4,0.6666666666666666
+'k2',2,100
+'k3',1,NULL
+---- TYPES
+string,bigint,double
+====
+---- QUERY
+# Test analytic function without partition by or order by on top of a subplan
+# that flattens a map.
+select id, avg(value) over (), max(key) over() from complextypestbl t, t.int_map
+---- RESULTS
+1,25.5,'k3'
+1,25.5,'k3'
+2,25.5,'k3'
+2,25.5,'k3'
+7,25.5,'k3'
+7,25.5,'k3'
+8,25.5,'k3'
+---- TYPES
+bigint,double,string
+====
+---- QUERY
+# Test analytic function with partition by on top of a subplan that flattens an array.
+select id, sum(item) over (partition by id) from complextypestbl t, t.int_array
+---- RESULTS
+1,6
+1,6
+1,6
+2,6
+2,6
+2,6
+2,6
+2,6
+2,6
+8,-1
+---- TYPES
+bigint,bigint
+====
+---- QUERY
+# Test analytic function with partition by on top of a subplan that flattens a map.
+select id, max(key) over(partition by id), sum(value) over (partition by id)
+from complextypestbl t, t.int_map
+---- RESULTS
+1,'k2',101
+1,'k2',101
+2,'k2',2
+2,'k2',2
+7,'k3',NULL
+7,'k3',NULL
+8,'k1',-1
+---- TYPES
+bigint,string,bigint
+====
+---- QUERY
+# Test several analytic functions with incompatible partition by and order by clauses
+# on top of a subplan that flattens a map.
+select id, key, value, max(key) over(partition by id), row_number() over (order by value)
+from complextypestbl t, t.int_map
+---- RESULTS: VERIFY_IS_EQUAL_SORTED
+1,'k1',1,'k2',2
+1,'k2',100,'k2',4
+2,'k1',2,'k2',3
+2,'k2',NULL,'k2',5
+7,'k1',NULL,'k3',6
+7,'k3',NULL,'k3',7
+8,'k1',-1,'k1',1
+---- TYPES
+bigint,string,int,string,bigint
+====
+---- QUERY
+# Test union of subplans.
+select id, "test" key, item from complextypestbl t, t.int_array
+union all
+select id, key, value from complextypestbl t, t.int_map
+---- RESULTS
+1,'k1',1
+1,'k2',100
+1,'test',1
+1,'test',2
+1,'test',3
+2,'k1',2
+2,'k2',NULL
+2,'test',1
+2,'test',2
+2,'test',3
+2,'test',NULL
+2,'test',NULL
+2,'test',NULL
+7,'k1',NULL
+7,'k3',NULL
+8,'k1',-1
+8,'test',-1
+---- TYPES
+bigint,string,int
+====
+---- QUERY
+# Tesh union distinct of subplans.
+select id, "test" key, item from complextypestbl t, t.int_array
+union distinct
+select id, key, value from complextypestbl t, t.int_map
+---- RESULTS
+1,'k1',1
+1,'k2',100
+1,'test',1
+1,'test',2
+1,'test',3
+2,'k1',2
+2,'k2',NULL
+2,'test',1
+2,'test',2
+2,'test',3
+2,'test',NULL
+7,'k1',NULL
+7,'k3',NULL
+8,'k1',-1
+8,'test',-1
+---- TYPES
+bigint,string,int
+====
+---- QUERY
+# Tests that unnested collection-typed slots are set to NULL. Relies on DCHECKs in the
+# coordinator to assert that all collection-typed slots in the final output batches
+# are set to NULL.
+select id, item from complextypestbl t, t.int_array
+---- RESULTS
+1,1
+1,2
+1,3
+2,1
+2,2
+2,3
+2,NULL
+2,NULL
+2,NULL
+8,-1
+---- TYPES
+bigint,int
+====
+---- QUERY
+# Tests that unnested collection-typed slots are set to NULL with nested subplans.
+select id, a.pos, m.key, m.value from complextypestbl t, t.int_map_array a, a.item m
+---- RESULTS
+1,0,'k1',1
+2,0,'k1',1
+2,0,'k3',NULL
+8,1,'k1',1
+---- TYPES
+bigint,bigint,string,int
+====
+---- QUERY
+# Tests that unnested collection-typed slots are set to NULL after an outer-join.
+# This tests asserts proper handling of NULL tuples.
+# The use of straight_join ensures that the subplan node is placed after the outer join.
+select straight_join t1.id, a.item
+from complextypestbl t1 left outer join complextypestbl t2 on (t1.id = t2.id + 10)
+  inner join t2.int_array a
+---- RESULTS
+---- TYPES
+bigint,int
+====
+---- QUERY
+# Tests that unnested collection-typed slots are set to NULL even if the same
+# nested collection is referenced multiple times.
+select straight_join t1.id, t2.id, a1.item, a2.item
+from complextypestbl t1 inner join t1.int_array a1
+  left outer join [shuffle] complextypestbl t2 on t1.id = t2.id
+  inner join t1.int_array a2
+where t1.id = 1
+---- RESULTS
+1,1,1,1
+1,1,1,2
+1,1,1,3
+1,1,2,1
+1,1,2,2
+1,1,2,3
+1,1,3,1
+1,1,3,2
+1,1,3,3
+---- TYPES
+bigint,bigint,int,int
+====
+---- QUERY
+# Test unnested collection from an outer-joined parent table.
+select t1.id, t2.id, a.item from complextypestbl t1
+left outer join complextypestbl t2
+  on (t1.id = t2.id + 4)
+inner join t2.int_array a
+---- RESULTS
+5,1,1
+5,1,2
+5,1,3
+6,2,1
+6,2,2
+6,2,3
+6,2,NULL
+6,2,NULL
+6,2,NULL
+---- TYPES
+bigint,bigint,int
+====
+---- QUERY
+# IMPALA-2326: Test that tuple nullability information is preserved through subplan nodes.
+# This test assumes that codegen optimizes the grouping aggregation node based on tuple
+# nullability. With codegen enabled, this test will cause a SEGV if the tuple nullability
+# information is incorrect at the aggregation node.
+select t2.id, count(a.item)
+from complextypestbl t1
+left outer join complextypestbl t2
+  on (t1.id = t2.id + 2)
+inner join t1.int_array a
+group by t2.id
+---- RESULTS
+NULL,6
+6,1
+---- TYPES
+bigint,bigint
+====
+---- QUERY
+# Test flattening an array that was first duplicated through a join. This test
+# checks that the projection of collection-typed slots does not affect the
+# result after duplicating the array.
+select straight_join c, id, item from complextypestbl t1, (values('A' c),('B')) v, t1.int_array
+---- RESULTS
+'A',1,1
+'A',1,2
+'A',1,3
+'A',2,1
+'A',2,2
+'A',2,3
+'A',2,NULL
+'A',2,NULL
+'A',2,NULL
+'A',8,-1
+'B',1,1
+'B',1,2
+'B',1,3
+'B',2,1
+'B',2,2
+'B',2,3
+'B',2,NULL
+'B',2,NULL
+'B',2,NULL
+'B',8,-1
+---- TYPES
+string,bigint,int
+====
+---- QUERY
+# IMPALA-2434: Test union all with a subplan operand. The tables and predicates below
+# are carefully chosen so that the subplan is executed as the second operand.
+select count(*) from (
+  select c_custkey from tpch_nested_parquet.customer c, c.c_orders
+  where c_custkey < 1000
+  union all
+  select a.id from functional.alltypes a, functional.alltypes b
+  where a.int_col < 0 and b.int_col < 0 and a.string_col = "" and b.string_col = ""
+) v
+---- RESULTS
+9869
+---- TYPES
+bigint
+====
+---- QUERY
+# IMPALA-2430: Test empty blocks containing relative table refs.
+select c_custkey, v1.cnt, v2.o_orderkey, v3.l_linenumber, v4.cnt
+from tpch_nested_parquet.customer c
+left outer join
+  (select count(*) cnt from c.c_orders
+   where false) v1
+left outer join
+  (select o_orderkey from c.c_orders
+   where 20 < 10) v2
+left outer join
+  (select l_linenumber from c.c_orders.o_lineitems
+   where "a" in ("b", "c")) v3
+left outer join
+  (select count(*) cnt from c.c_orders o left outer join
+     (select l_linenumber from o.o_lineitems
+      where null) nv) v4
+where c_custkey < 10
+---- RESULTS
+1,0,NULL,NULL,6
+2,0,NULL,NULL,7
+3,0,NULL,NULL,0
+4,0,NULL,NULL,20
+5,0,NULL,NULL,4
+6,0,NULL,NULL,0
+7,0,NULL,NULL,16
+8,0,NULL,NULL,13
+9,0,NULL,NULL,0
+---- TYPES
+BIGINT,BIGINT,BIGINT,INT,BIGINT
+====
+---- QUERY
+# IMPALA-2456: Test subplan that contains a hash join with unnest nodes on both the build
+# and probe sides of the join. Tests projection of collection-typed slots on both sides
+# of the join.
+select c_custkey, o_orderkey
+from tpch_nested_parquet.customer c
+inner join c.c_orders o1
+left anti join
+  (select o2.o_orderkey x
+   from c.c_orders o2, c.c_orders o3) v
+on c.c_custkey = v.x
+where c_custkey < 2
+---- RESULTS
+1,454791
+1,579908
+1,3868359
+1,4273923
+1,4808192
+1,5133509
+---- TYPES
+bigint,bigint
+====
+---- QUERY
+# IMPALA-2446: Test predicate assignment when outer join has no conjuncts in
+# the ON clause and there are predicates in the WHERE clause that can be assigned to
+# the join node.
+select id, pos from complextypestbl t1 left outer join t1.int_array t2
+  where t1.id = t2.pos
+---- RESULTS
+1,1
+2,2
+---- TYPES
+bigint,bigint
+====
+---- QUERY
+# IMPALA-2446: Test predicate assignment when full outer join has no conjuncts in
+# the ON clause and there are predicates in the WHERE clause that can be assigned to
+# the join node.
+select id, pos from complextypestbl t1 full outer join t1.int_array t2
+  where t1.id = t2.pos
+---- RESULTS
+1,1
+2,2
+---- TYPES
+bigint,bigint
+====

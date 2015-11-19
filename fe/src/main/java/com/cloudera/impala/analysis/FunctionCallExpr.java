@@ -38,6 +38,7 @@ public class FunctionCallExpr extends Expr {
   private final FunctionName fnName_;
   private final FunctionParams params_;
   private boolean isAnalyticFnCall_ = false;
+  private boolean isInternalFnCall_ = false;
 
   // Indicates whether this is a merge aggregation function that should use the merge
   // instead of the update symbol. This flag also affects the behavior of
@@ -74,10 +75,11 @@ public class FunctionCallExpr extends Expr {
    */
   public static Expr createExpr(FunctionName fnName, FunctionParams params) {
     FunctionCallExpr functionCallExpr = new FunctionCallExpr(fnName, params);
-    if (fnName.getFunction().equals("decode")
-        && (fnName.getDb() == null) || Catalog.BUILTINS_DB.equals(fnName.getDb())) {
-      // If someone created the DECODE function before it became a builtin, they can
-      // continue to use it by the fully qualified name.
+    if (fnName.getFnNamePath().size() == 1
+            && fnName.getFnNamePath().get(0).equalsIgnoreCase("decode")
+        || fnName.getFnNamePath().size() == 2
+            && fnName.getFnNamePath().get(0).equalsIgnoreCase(Catalog.BUILTINS_DB)
+            && fnName.getFnNamePath().get(1).equalsIgnoreCase("decode")) {
       return new CaseExpr(functionCallExpr);
     }
     return functionCallExpr;
@@ -115,6 +117,7 @@ public class FunctionCallExpr extends Expr {
     super(other);
     fnName_ = other.fnName_;
     isAnalyticFnCall_ = other.isAnalyticFnCall_;
+    isInternalFnCall_ = other.isInternalFnCall_;
     isMergeAggFn_ = other.isMergeAggFn_;
     // No need to deep clone the params, its exprs are already in children_.
     params_ = other.params_;
@@ -201,6 +204,7 @@ public class FunctionCallExpr extends Expr {
 
   public FunctionName getFnName() { return fnName_; }
   public void setIsAnalyticFnCall(boolean v) { isAnalyticFnCall_ = v; }
+  public void setIsInternalFnCall(boolean v) { isInternalFnCall_ = v; }
 
   @Override
   protected void toThrift(TExprNode msg) {
@@ -225,8 +229,8 @@ public class FunctionCallExpr extends Expr {
   // a bit more user friendly than a generic function not found.
   // TODO: should we bother to do this? We could also improve the general
   // error messages. For example, listing the alternatives.
-  private String getFunctionNotFoundError(Type[] argTypes) {
-    if (fnName_.isBuiltin_) {
+  protected String getFunctionNotFoundError(Type[] argTypes) {
+    if (fnName_.isBuiltin()) {
       // Some custom error message for builtins
       if (params_.isStar()) {
         return "'*' can only be used in conjunction with COUNT";
@@ -289,13 +293,16 @@ public class FunctionCallExpr extends Expr {
     int digitsAfter = childType.decimalScale();
     if (fnName_.getFunction().equalsIgnoreCase("ceil") ||
                fnName_.getFunction().equalsIgnoreCase("ceiling") ||
-               fnName_.getFunction().equals("floor")) {
+               fnName_.getFunction().equals("floor") ||
+               fnName_.getFunction().equals("dfloor")) {
       // These functions just return with scale 0 but can trigger rounding. We need
       // to increase the precision by 1 to handle that.
       ++digitsBefore;
       digitsAfter = 0;
     } else if (fnName_.getFunction().equalsIgnoreCase("truncate") ||
-               fnName_.getFunction().equalsIgnoreCase("round")) {
+               fnName_.getFunction().equalsIgnoreCase("dtrunc") ||
+               fnName_.getFunction().equalsIgnoreCase("round") ||
+               fnName_.getFunction().equalsIgnoreCase("dround")) {
       if (children_.size() > 1) {
         // The second argument to these functions is the desired scale, otherwise
         // the default is 0.
@@ -330,7 +337,8 @@ public class FunctionCallExpr extends Expr {
         digitsAfter = 0;
       }
 
-      if (fnName_.getFunction().equalsIgnoreCase("round") &&
+      if ((fnName_.getFunction().equalsIgnoreCase("round") ||
+           fnName_.getFunction().equalsIgnoreCase("dround")) &&
           digitsAfter < childType.decimalScale()) {
         // If we are rounding to fewer decimal places, it's possible we need another
         // digit before the decimal.
@@ -362,7 +370,7 @@ public class FunctionCallExpr extends Expr {
     Type[] argTypes = collectChildReturnTypes();
 
     // User needs DB access.
-    Db db = analyzer.getDb(fnName_.getDb(), Privilege.VIEW_METADATA);
+    Db db = analyzer.getDb(fnName_.getDb(), Privilege.VIEW_METADATA, true);
     if (!db.containsFunction(fnName_.getFunction())) {
       throw new AnalysisException(fnName_ + "() unknown");
     }
@@ -374,7 +382,7 @@ public class FunctionCallExpr extends Expr {
       // TODO: fix how we rewrite count distinct.
       argTypes = new Type[0];
       Function searchDesc = new Function(fnName_, argTypes, Type.INVALID, false);
-      fn_ = db.getFunction(searchDesc, Function.CompareMode.IS_SUPERTYPE_OF);
+      fn_ = db.getFunction(searchDesc, Function.CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
       type_ = fn_.getReturnType();
       // Make sure BE doesn't see any TYPE_NULL exprs
       for (int i = 0; i < children_.size(); ++i) {
@@ -397,9 +405,8 @@ public class FunctionCallExpr extends Expr {
     }
 
     Function searchDesc = new Function(fnName_, argTypes, Type.INVALID, false);
-    fn_ = db.getFunction(searchDesc, Function.CompareMode.IS_SUPERTYPE_OF);
-
-    if (fn_ == null || !fn_.userVisible()) {
+    fn_ = db.getFunction(searchDesc, Function.CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
+    if (fn_ == null || (!isInternalFnCall_ && !fn_.userVisible())) {
       throw new AnalysisException(getFunctionNotFoundError(argTypes));
     }
 
@@ -427,8 +434,13 @@ public class FunctionCallExpr extends Expr {
 
       // TODO: the distinct rewrite does not handle this but why?
       if (params_.isDistinct()) {
-        if (fnName_.getFunction().equalsIgnoreCase("group_concat")) {
-          throw new AnalysisException("GROUP_CONCAT() does not support DISTINCT.");
+        // The second argument in group_concat(distinct) must be a constant expr that
+        // returns a string.
+        if (fnName_.getFunction().equalsIgnoreCase("group_concat")
+            && getChildren().size() == 2
+            && !getChild(1).isConstant()) {
+            throw new AnalysisException("Second parameter in GROUP_CONCAT(DISTINCT)" +
+                " must be a constant expression that returns a string.");
         }
         if (fn_.getBinaryType() != TFunctionBinaryType.BUILTIN) {
           throw new AnalysisException("User defined aggregates do not support DISTINCT.");
@@ -452,6 +464,13 @@ public class FunctionCallExpr extends Expr {
     type_ = fn_.getReturnType();
     if (type_.isDecimal() && type_.isWildcardDecimal()) {
       type_ = resolveDecimalReturnType(analyzer);
+    }
+
+    // We do not allow any function to return a type CHAR or VARCHAR
+    // TODO add support for CHAR(N) and VARCHAR(N) return values in post 2.0,
+    // support for this was not added to the backend in 2.0
+    if (type_.isWildcardChar() || type_.isWildcardVarchar()) {
+      type_ = ScalarType.STRING;
     }
   }
 

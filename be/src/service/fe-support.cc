@@ -30,21 +30,22 @@
 #include "runtime/hdfs-fs-cache.h"
 #include "runtime/lib-cache.h"
 #include "runtime/client-cache.h"
+#include "service/impala-server.h"
 #include "util/cpu-info.h"
 #include "util/disk-info.h"
 #include "util/dynamic-util.h"
 #include "util/jni-util.h"
 #include "util/mem-info.h"
 #include "util/symbols-util.h"
-#include "rpc/thrift-util.h"
+#include "rpc/jni-thrift-util.h"
 #include "rpc/thrift-server.h"
 #include "util/debug-util.h"
 #include "gen-cpp/Data_types.h"
 #include "gen-cpp/Frontend_types.h"
 
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
-using namespace boost;
 using namespace apache::thrift::server;
 
 // Called from the FE when it explicitly loads libfesupport.so for tests.
@@ -96,8 +97,8 @@ Java_com_cloudera_impala_service_FeSupport_NativeEvalConstExprs(
     ExprContext* ctx;
     THROW_IF_ERROR_RET(Expr::CreateExprTree(&obj_pool, *it, &ctx), env,
                        JniUtil::internal_exc_class(), result_bytes);
-    THROW_IF_ERROR_RET(ctx->Prepare(&state, RowDescriptor()), env,
-                       JniUtil::internal_exc_class(), result_bytes);
+    THROW_IF_ERROR_RET(ctx->Prepare(&state, RowDescriptor(), state.query_mem_tracker()),
+                       env, JniUtil::internal_exc_class(), result_bytes);
     expr_ctxs.push_back(ctx);
   }
 
@@ -105,21 +106,39 @@ Java_com_cloudera_impala_service_FeSupport_NativeEvalConstExprs(
     // Finalize the module so any UDF functions are jit'd
     LlvmCodeGen* codegen = NULL;
     state.GetCodegen(&codegen, /* initialize */ false);
-    DCHECK_NOTNULL(codegen);
+    DCHECK(codegen != NULL);
     codegen->EnableOptimizations(false);
     codegen->FinalizeModule();
   }
 
   vector<TColumnValue> results;
-  // Open and evaluate the exprs
+  // Open and evaluate the exprs. Also, always Close() the exprs even in case of errors.
   for (int i = 0; i < expr_ctxs.size(); ++i) {
+    Status open_status = expr_ctxs[i]->Open(&state);
+    if (!open_status.ok()) {
+      for (int j = i; j < expr_ctxs.size(); ++j) {
+        expr_ctxs[j]->Close(&state);
+      }
+      (env)->ThrowNew(JniUtil::internal_exc_class(), open_status.GetDetail().c_str());
+      return result_bytes;
+    }
     TColumnValue val;
-    THROW_IF_ERROR_RET(expr_ctxs[i]->Open(&state), env,
-                       JniUtil::internal_exc_class(), result_bytes);
     expr_ctxs[i]->GetValue(NULL, false, &val);
+    // We check here if an error was set in the expression evaluated through GetValue()
+    // and throw an exception accordingly
+    Status getvalue_status = expr_ctxs[i]->root()->GetFnContextError(expr_ctxs[i]);
+    if (!getvalue_status.ok()) {
+      for (int j = i; j < expr_ctxs.size(); ++j) {
+        expr_ctxs[j]->Close(&state);
+      }
+      (env)->ThrowNew(JniUtil::internal_exc_class(), getvalue_status.GetDetail().c_str());
+      return result_bytes;
+    }
+
     expr_ctxs[i]->Close(&state);
     results.push_back(val);
   }
+
   expr_results.__set_colVals(results);
   THROW_IF_ERROR_RET(SerializeThriftMsg(env, &expr_results, &result_bytes), env,
                      JniUtil::internal_exc_class(), result_bytes);
@@ -153,51 +172,53 @@ static void ResolveSymbolLookup(const TSymbolLookupParams params,
         params.location, type, &dummy_local_path);
     if (!status.ok()) {
       result->__set_result_code(TSymbolLookupResultCode::BINARY_NOT_FOUND);
-      result->__set_error_msg(status.GetErrorMsg());
+      result->__set_error_msg(status.GetDetail());
       return;
     }
   }
 
-  if (SymbolsUtil::IsMangled(params.symbol)) {
-    DCHECK(params.fn_binary_type != TFunctionBinaryType::HIVE);
-    Status status =
-        LibCache::instance()->CheckSymbolExists(params.location, type, params.symbol);
-    if (status.ok()) {
-      // The FE specified symbol exists, just use that.
-      result->__set_result_code(TSymbolLookupResultCode::SYMBOL_FOUND);
-      result->__set_symbol(params.symbol);
-      // TODO: we can demangle the user symbol here and validate it against
-      // params.arg_types. This would prevent someone from typing the wrong symbol
-      // by accident. This requires more string parsing of the symbol.
-      return;
-    } else {
-      // The input was already mangled and we couldn't find it, return the error.
-      result->__set_result_code(TSymbolLookupResultCode::SYMBOL_NOT_FOUND);
-      stringstream ss;
-      ss << "Could not find symbol '" << params.symbol << "' in: " << params.location;
-      result->__set_error_msg(ss.str());
-      return;
-    }
+  // Check if the FE-specified symbol exists as-is.
+  // Set 'quiet' to true so we don't flood the log with unfound builtin symbols on
+  // startup.
+  Status status =
+      LibCache::instance()->CheckSymbolExists(params.location, type, params.symbol, true);
+  if (status.ok()) {
+    result->__set_result_code(TSymbolLookupResultCode::SYMBOL_FOUND);
+    result->__set_symbol(params.symbol);
+    return;
+  }
+
+  if (params.fn_binary_type == TFunctionBinaryType::HIVE ||
+      SymbolsUtil::IsMangled(params.symbol)) {
+    // No use trying to mangle Hive or already mangled symbols, return the error.
+    // TODO: we can demangle the user symbol here and validate it against
+    // params.arg_types. This would prevent someone from typing the wrong symbol
+    // by accident. This requires more string parsing of the symbol.
+    result->__set_result_code(TSymbolLookupResultCode::SYMBOL_NOT_FOUND);
+    stringstream ss;
+    ss << "Could not find symbol '" << params.symbol << "' in: " << params.location;
+    result->__set_error_msg(ss.str());
+    VLOG(1) << ss.str() << endl << status.GetDetail();
+    return;
   }
 
   string symbol = params.symbol;
   ColumnType ret_type(INVALID_TYPE);
-  if (params.__isset.ret_arg_type) ret_type = ColumnType(params.ret_arg_type);
+  if (params.__isset.ret_arg_type) ret_type = ColumnType::FromThrift(params.ret_arg_type);
 
-  if (params.fn_binary_type != TFunctionBinaryType::HIVE) {
-    // Mangle the user input
-    if (params.symbol_type == TSymbolType::UDF_EVALUATE) {
-      symbol = SymbolsUtil::MangleUserFunction(params.symbol,
-          arg_types, params.has_var_args, params.__isset.ret_arg_type ? &ret_type : NULL);
-    } else {
-      DCHECK(params.symbol_type == TSymbolType::UDF_PREPARE ||
-             params.symbol_type == TSymbolType::UDF_CLOSE);
-      symbol = SymbolsUtil::ManglePrepareOrCloseFunction(params.symbol);
-    }
+  // Mangle the user input
+  DCHECK_NE(params.fn_binary_type, TFunctionBinaryType::HIVE);
+  if (params.symbol_type == TSymbolType::UDF_EVALUATE) {
+    symbol = SymbolsUtil::MangleUserFunction(params.symbol,
+        arg_types, params.has_var_args, params.__isset.ret_arg_type ? &ret_type : NULL);
+  } else {
+    DCHECK(params.symbol_type == TSymbolType::UDF_PREPARE ||
+           params.symbol_type == TSymbolType::UDF_CLOSE);
+    symbol = SymbolsUtil::ManglePrepareOrCloseFunction(params.symbol);
   }
 
-  // Look up the symbol
-  Status status = LibCache::instance()->CheckSymbolExists(params.location, type, symbol);
+  // Look up the mangled symbol
+  status = LibCache::instance()->CheckSymbolExists(params.location, type, symbol);
   if (!status.ok()) {
     result->__set_result_code(TSymbolLookupResultCode::SYMBOL_NOT_FOUND);
     stringstream ss;
@@ -259,7 +280,7 @@ Java_com_cloudera_impala_service_FeSupport_NativeLookupSymbol(
 
   vector<ColumnType> arg_types;
   for (int i = 0; i < lookup.arg_types.size(); ++i) {
-    arg_types.push_back(ColumnType(lookup.arg_types[i]));
+    arg_types.push_back(ColumnType::FromThrift(lookup.arg_types[i]));
   }
 
   TSymbolLookupResult result;
@@ -280,14 +301,14 @@ Java_com_cloudera_impala_service_FeSupport_NativePrioritizeLoad(
   TPrioritizeLoadRequest request;
   DeserializeThriftMsg(env, thrift_struct, &request);
 
-  CatalogOpExecutor catalog_op_executor(ExecEnv::GetInstance(), NULL);
+  CatalogOpExecutor catalog_op_executor(ExecEnv::GetInstance(), NULL, NULL);
   TPrioritizeLoadResponse result;
   Status status = catalog_op_executor.PrioritizeLoad(request, &result);
   if (!status.ok()) {
-    LOG(ERROR) << status.GetErrorMsg();
+    LOG(ERROR) << status.GetDetail();
     // Create a new Status, copy in this error, then update the result.
     Status catalog_service_status(result.status);
-    catalog_service_status.AddError(status);
+    catalog_service_status.MergeStatus(status);
     status.ToThrift(&result.status);
   }
 
@@ -297,6 +318,19 @@ Java_com_cloudera_impala_service_FeSupport_NativePrioritizeLoad(
   return result_bytes;
 }
 
+extern "C"
+JNIEXPORT jbyteArray JNICALL
+Java_com_cloudera_impala_service_FeSupport_NativeGetStartupOptions(JNIEnv* env,
+    jclass caller_class) {
+  TStartupOptions options;
+  ExecEnv* exec_env = ExecEnv::GetInstance();
+  ImpalaServer* impala_server = exec_env->impala_server();
+  options.__set_compute_lineage(impala_server->IsLineageLoggingEnabled());
+  jbyteArray result_bytes = NULL;
+  THROW_IF_ERROR_RET(SerializeThriftMsg(env, &options, &result_bytes), env,
+                     JniUtil::internal_exc_class(), result_bytes);
+  return result_bytes;
+}
 
 namespace impala {
 
@@ -320,6 +354,10 @@ static JNINativeMethod native_methods[] = {
   {
     (char*)"NativePrioritizeLoad", (char*)"([B)[B",
     (void*)::Java_com_cloudera_impala_service_FeSupport_NativePrioritizeLoad
+  },
+  {
+    (char*)"NativeGetStartupOptions", (char*)"()[B",
+    (void*)::Java_com_cloudera_impala_service_FeSupport_NativeGetStartupOptions
   },
 };
 

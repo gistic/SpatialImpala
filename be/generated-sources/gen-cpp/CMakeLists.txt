@@ -50,6 +50,8 @@ set(SRC_FILES
   DataSinks_types.cpp
   Descriptors_constants.cpp
   Descriptors_types.cpp
+  ErrorCodes_types.cpp
+  ErrorCodes_constants.cpp
   ExecStats_constants.cpp
   ExecStats_types.cpp
   Exprs_constants.cpp
@@ -63,6 +65,12 @@ set(SRC_FILES
   JniCatalog_constants.cpp
   JniCatalog_types.cpp
   Logging_types.cpp
+  LineageGraph_types.cpp
+  LineageGraph_constants.cpp
+  Metrics_constants.cpp
+  Metrics_types.cpp
+  MetricDefs_constants.cpp
+  MetricDefs_types.cpp
   NetworkTest_constants.cpp
   NetworkTest_types.cpp
   NetworkTestService.cpp
@@ -102,4 +110,4 @@ add_library(ImpalaThrift ${SRC_FILES})
 # correctly
 set_source_files_properties(${SRC_FILES} PROPERTIES GENERATED TRUE)
 
-add_dependencies(ImpalaThrift thrift-cpp)
+add_dependencies(ImpalaThrift thrift-deps)

@@ -29,7 +29,8 @@
 #include <llvm/Linker.h>
 #include <llvm/PassManager.h>
 #include <llvm/Support/DynamicLibrary.h>
-#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Host.h>
+#include "llvm/Support/InstIterator.h"
 #include <llvm/Support/NoFolder.h>
 #include <llvm/Support/TargetRegistry.h>
 #include <llvm/Support/TargetSelect.h>
@@ -44,17 +45,19 @@
 
 #include "common/logging.h"
 #include "codegen/codegen-anyval.h"
-#include "codegen/subexpr-elimination.h"
+#include "codegen/impala-ir-data.h"
 #include "codegen/instruction-counter.h"
+#include "codegen/subexpr-elimination.h"
 #include "impala-ir/impala-ir-names.h"
 #include "runtime/hdfs-fs-cache.h"
 #include "util/cpu-info.h"
 #include "util/hdfs-util.h"
 #include "util/path-builder.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace llvm;
-using namespace std;
+using std::fstream;
 
 DEFINE_bool(print_llvm_ir_instruction_count, false,
     "if true, prints the instruction counts of all JIT'd functions");
@@ -62,10 +65,10 @@ DEFINE_bool(print_llvm_ir_instruction_count, false,
 DEFINE_bool(disable_optimization_passes, false,
     "if true, disables llvm optimization passes (used for testing)");
 DEFINE_bool(dump_ir, false, "if true, output IR after optimization passes");
-DEFINE_string(unopt_module, "",
-    "if set, saves the unoptimized generated IR to the specified file.");
-DEFINE_string(opt_module, "",
-    "if set, saves the optimized generated IR to the specified file.");
+DEFINE_string(unopt_module_dir, "",
+    "if set, saves unoptimized generated IR modules to the specified directory.");
+DEFINE_string(opt_module_dir, "",
+    "if set, saves optimized generated IR modules to the specified directory.");
 DECLARE_string(local_library_dir);
 
 namespace impala {
@@ -94,8 +97,8 @@ void LlvmCodeGen::InitializeLlvm(bool load_backend) {
   }
 }
 
-LlvmCodeGen::LlvmCodeGen(ObjectPool* pool, const string& name) :
-  name_(name),
+LlvmCodeGen::LlvmCodeGen(ObjectPool* pool, const string& id) :
+  id_(id),
   profile_(pool, "CodeGen"),
   optimizations_enabled_(false),
   is_corrupt_(false),
@@ -108,55 +111,78 @@ LlvmCodeGen::LlvmCodeGen(ObjectPool* pool, const string& name) :
   DCHECK(llvm_initialized) << "Must call LlvmCodeGen::InitializeLlvm first.";
 
   load_module_timer_ = ADD_TIMER(&profile_, "LoadTime");
-  module_file_size_ = ADD_COUNTER(&profile_, "ModuleFileSize", TCounterType::BYTES);
-  compile_timer_ = ADD_TIMER(&profile_, "CompileTime");
+  prepare_module_timer_ = ADD_TIMER(&profile_, "PrepareTime");
+  module_file_size_ = ADD_COUNTER(&profile_, "ModuleFileSize", TUnit::BYTES);
   codegen_timer_ = ADD_TIMER(&profile_, "CodegenTime");
+  optimization_timer_ = ADD_TIMER(&profile_, "OptimizationTime");
+  compile_timer_ = ADD_TIMER(&profile_, "CompileTime");
 
   loaded_functions_.resize(IRFunction::FN_END);
 }
 
 Status LlvmCodeGen::LoadFromFile(ObjectPool* pool,
-    const string& file, scoped_ptr<LlvmCodeGen>* codegen) {
-  codegen->reset(new LlvmCodeGen(pool, ""));
+    const string& file, const string& id, scoped_ptr<LlvmCodeGen>* codegen) {
+  codegen->reset(new LlvmCodeGen(pool, id));
   SCOPED_TIMER((*codegen)->profile_.total_time_counter());
 
   Module* loaded_module;
-  RETURN_IF_ERROR(LoadModule(codegen->get(), file, &loaded_module));
+  RETURN_IF_ERROR(LoadModuleFromFile(codegen->get(), file, &loaded_module));
   (*codegen)->module_ = loaded_module;
 
   return (*codegen)->Init();
 }
 
-Status LlvmCodeGen::LoadModule(LlvmCodeGen* codegen, const string& file,
-                               Module** module) {
-  SCOPED_TIMER(codegen->load_module_timer_);
+Status LlvmCodeGen::LoadFromMemory(ObjectPool* pool, MemoryBuffer* module_ir,
+    const string& module_name, const string& id, scoped_ptr<LlvmCodeGen>* codegen) {
+  codegen->reset(new LlvmCodeGen(pool, id));
+  SCOPED_TIMER((*codegen)->profile_.total_time_counter());
 
+  Module* loaded_module;
+  RETURN_IF_ERROR(LoadModuleFromMemory(codegen->get(), module_ir, module_name,
+      &loaded_module));
+  (*codegen)->module_ = loaded_module;
+
+  return (*codegen)->Init();
+}
+
+Status LlvmCodeGen::LoadModuleFromFile(LlvmCodeGen* codegen, const string& file,
+      llvm::Module** module) {
   OwningPtr<MemoryBuffer> file_buffer;
-  llvm::error_code err = MemoryBuffer::getFile(file, file_buffer);
-  if (err.value() != 0) {
-    stringstream ss;
-    ss << "Could not load module " << file << ": " << err.message();
-    return Status(ss.str());
-  }
-  COUNTER_ADD(codegen->module_file_size_, file_buffer->getBufferSize());
+  {
+    SCOPED_TIMER(codegen->load_module_timer_);
 
+    llvm::error_code err = MemoryBuffer::getFile(file, file_buffer);
+    if (err.value() != 0) {
+      stringstream ss;
+      ss << "Could not load module " << file << ": " << err.message();
+      return Status(ss.str());
+    }
+  }
+
+  COUNTER_ADD(codegen->module_file_size_, file_buffer->getBufferSize());
+  return LoadModuleFromMemory(codegen, file_buffer.get(), file, module);
+}
+
+Status LlvmCodeGen::LoadModuleFromMemory(LlvmCodeGen* codegen, MemoryBuffer* module_ir,
+      std::string module_name, llvm::Module** module) {
+  SCOPED_TIMER(codegen->prepare_module_timer_);
   string error;
-  *module = ParseBitcodeFile(file_buffer.get(), codegen->context(), &error);
+  *module = ParseBitcodeFile(module_ir, codegen->context(), &error);
   if (*module == NULL) {
     stringstream ss;
-    ss << "Could not parse module " << file << ": " << error;
+    ss << "Could not parse module " << module_name << ": " << error;
     return Status(ss.str());
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 // TODO: Create separate counters/timers (file size, load time) for each module linked
 Status LlvmCodeGen::LinkModule(const string& file) {
-  if (linked_modules_.find(file) != linked_modules_.end()) return Status::OK;
+  if (linked_modules_.find(file) != linked_modules_.end()) return Status::OK();
 
   SCOPED_TIMER(profile_.total_time_counter());
   Module* new_module;
-  RETURN_IF_ERROR(LoadModule(this, file, &new_module));
+  RETURN_IF_ERROR(LoadModuleFromFile(this, file, &new_module));
   string error_msg;
   bool error =
       Linker::LinkModules(module_, new_module, Linker::DestroySource, &error_msg);
@@ -166,25 +192,34 @@ Status LlvmCodeGen::LinkModule(const string& file) {
     return Status(ss.str());
   }
   linked_modules_.insert(file);
-  return Status::OK;
+  return Status::OK();
 }
 
-Status LlvmCodeGen::LoadImpalaIR(ObjectPool* pool, scoped_ptr<LlvmCodeGen>* codegen_ret) {
-  // Load the statically cross compiled file.  We cannot load an ll file with sse
-  // instructions on a machine without sse support (the load fails, doesn't matter
-  // if those instructions end up getting run or not).
-  string module_file;
+Status LlvmCodeGen::LoadImpalaIR(
+    ObjectPool* pool, const string& id, scoped_ptr<LlvmCodeGen>* codegen_ret) {
+  // Select the appropriate IR version.  We cannot use LLVM IR with sse instructions on
+  // a machine without sse support (loading the module will fail regardless of whether
+  // those instructions are run or not).
+  StringRef module_ir;
+  string module_name;
   if (CpuInfo::IsSupported(CpuInfo::SSE4_2)) {
-    PathBuilder::GetFullPath("llvm-ir/impala-sse.ll", &module_file);
+    module_ir = StringRef(reinterpret_cast<const char*>(impala_sse_llvm_ir),
+        impala_sse_llvm_ir_len);
+    module_name = "Impala IR with SSE support";
   } else {
-    PathBuilder::GetFullPath("llvm-ir/impala-no-sse.ll", &module_file);
+    module_ir = StringRef(reinterpret_cast<const char*>(impala_no_sse_llvm_ir),
+        impala_no_sse_llvm_ir_len);
+    module_name = "Impala IR with no SSE support";
   }
-  RETURN_IF_ERROR(LoadFromFile(pool, module_file, codegen_ret));
+  scoped_ptr<MemoryBuffer> module_ir_buf(
+      MemoryBuffer::getMemBuffer(module_ir, "", false));
+  RETURN_IF_ERROR(LoadFromMemory(pool, module_ir_buf.get(), module_name, id,
+      codegen_ret));
   LlvmCodeGen* codegen = codegen_ret->get();
 
   // Parse module for cross compiled functions and types
   SCOPED_TIMER(codegen->profile_.total_time_counter());
-  SCOPED_TIMER(codegen->load_module_timer_);
+  SCOPED_TIMER(codegen->prepare_module_timer_);
 
   // Get type for StringValue
   codegen->string_val_type_ = codegen->GetType(StringValue::LLVM_CLASS_NAME);
@@ -213,9 +248,10 @@ Status LlvmCodeGen::LoadImpalaIR(ObjectPool* pool, scoped_ptr<LlvmCodeGen>* code
       // TODO: reconsider this.  Substring match is probably not strict enough but
       // undoing the mangling is no fun either.
       if (fn_name.find(FN_MAPPINGS[j].fn_name) != string::npos) {
-        if (codegen->loaded_functions_[FN_MAPPINGS[j].fn] != NULL) {
-          return Status("Duplicate definition found for function: " + fn_name);
-        }
+        // TODO: make this a DCHECK when we resolve IMPALA-2439
+        CHECK(codegen->loaded_functions_[FN_MAPPINGS[j].fn] == NULL)
+            << "Duplicate definition found for function " << FN_MAPPINGS[j].fn << ": "
+            << fn_name;
         functions[i]->addFnAttr(Attribute::AlwaysInline);
         codegen->loaded_functions_[FN_MAPPINGS[j].fn] = functions[i];
         ++parsed_functions;
@@ -237,12 +273,12 @@ Status LlvmCodeGen::LoadImpalaIR(ObjectPool* pool, scoped_ptr<LlvmCodeGen>* code
     return Status(ss.str());
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status LlvmCodeGen::Init() {
   if (module_ == NULL) {
-    module_ = new Module(name_, context());
+    module_ = new Module(id_, context());
   }
   llvm::CodeGenOpt::Level opt_level = CodeGenOpt::Aggressive;
 #ifndef NDEBUG
@@ -251,8 +287,13 @@ Status LlvmCodeGen::Init() {
   // blows up the fe tests (which take ~10-20 ms each).
   opt_level = CodeGenOpt::None;
 #endif
-  execution_engine_.reset(
-      ExecutionEngine::createJIT(module_, &error_string_, NULL, opt_level));
+  EngineBuilder builder = EngineBuilder(module_).setOptLevel(opt_level);
+  //TODO Uncomment the below line as soon as we upgrade to LLVM 3.5 to enable SSE, if
+  // available. In LLVM 3.3 this is done automatically and cannot be enabled because
+  // for some reason SSE4 intrinsics selection will not work.
+  //builder.setMCPU(llvm::sys::getHostCPUName());
+  builder.setErrorStr(&error_string_);
+  execution_engine_.reset(builder.create());
   if (execution_engine_ == NULL) {
     // execution_engine_ will take ownership of the module if it is created
     delete module_;
@@ -268,7 +309,7 @@ Status LlvmCodeGen::Init() {
 
   RETURN_IF_ERROR(LoadIntrinsics());
 
-  return Status::OK;
+  return Status::OK();
 }
 
 LlvmCodeGen::~LlvmCodeGen() {
@@ -333,7 +374,7 @@ PointerType* LlvmCodeGen::GetPtrType(const ColumnType& type) {
 
 Type* LlvmCodeGen::GetType(const string& name) {
   Type* type = module_->getTypeByName(name);
-  DCHECK_NOTNULL(type);
+  DCHECK(type != NULL);
   return type;
 }
 
@@ -409,15 +450,31 @@ Function* LlvmCodeGen::GetFunction(IRFunction::Type function) {
   return loaded_functions_[function];
 }
 
-// There is an llvm bug (#10957) that causes the first step of the verifier to always
-// abort the process if it runs into an issue and ignores ReturnStatusAction.  This
-// would cause impalad to go down if one query has a problem.
-// To work around this, we will copy that step here and not abort on error.
-// TODO: doesn't seem there is much traction in getting this fixed but we'll see
 bool LlvmCodeGen::VerifyFunction(Function* fn) {
   if (is_corrupt_) return false;
 
-  // Verify the function is valid. Adapted from the pre-verifier function pass.
+  // Check that there are no calls to Expr::GetConstant(). These should all have been
+  // inlined via Expr::InlineConstants().
+  for (inst_iterator iter = inst_begin(fn); iter != inst_end(fn); ++iter) {
+    Instruction* instr = &*iter;
+    if (!isa<CallInst>(instr)) continue;
+    CallInst* call_instr = reinterpret_cast<CallInst*>(instr);
+    Function* called_fn = call_instr->getCalledFunction();
+    // look for call to Expr::GetConstant()
+    if (called_fn != NULL &&
+        called_fn->getName().find(Expr::GET_CONSTANT_SYMBOL_PREFIX) != string::npos) {
+      LOG(ERROR) << "Found call to Expr::GetConstant(): " << Print(call_instr);
+      is_corrupt_ = true;
+      break;
+    }
+  }
+
+  // There is an llvm bug (#10957) that causes the first step of the verifier to always
+  // abort the process if it runs into an issue and ignores ReturnStatusAction.  This
+  // would cause impalad to go down if one query has a problem.  To work around this, we
+  // will copy that step here and not abort on error. Adapted from the pre-verifier
+  // function pass.
+  // TODO: doesn't seem there is much traction in getting this fixed but we'll see
   for (Function::iterator i = fn->begin(), e = fn->end(); i != e; ++i) {
     if (i->empty() || !i->back().isTerminator()) {
       LOG(ERROR) << "Basic block must end with terminator: \n" << Print(&(*i));
@@ -487,24 +544,17 @@ Function* LlvmCodeGen::ReplaceCallSites(Function* caller, bool update_in_place,
   }
 
   *replaced = 0;
-  // loop over all blocks
-  Function::iterator block_iter = caller->begin();
-  while (block_iter != caller->end()) {
-    BasicBlock* block = block_iter++;
-    // loop over instructions in the block
-    BasicBlock::iterator instr_iter = block->begin();
-    while (instr_iter != block->end()) {
-      Instruction* instr = instr_iter++;
-      // look for call instructions
-      if (CallInst::classof(instr)) {
-        CallInst* call_instr = reinterpret_cast<CallInst*>(instr);
-        Function* old_fn = call_instr->getCalledFunction();
-        // look for call instruction that matches the name
-        if (old_fn != NULL && old_fn->getName().find(replacee_name) != string::npos) {
-          // Replace the called function
-          call_instr->setCalledFunction(new_fn);
-          ++*replaced;
-        }
+  for (inst_iterator iter = inst_begin(caller); iter != inst_end(caller); ++iter) {
+    Instruction* instr = &*iter;
+    // look for call instructions
+    if (CallInst::classof(instr)) {
+      CallInst* call_instr = reinterpret_cast<CallInst*>(instr);
+      Function* old_fn = call_instr->getCalledFunction();
+      // look for call instruction that matches the name
+      if (old_fn != NULL && old_fn->getName().find(replacee_name) != string::npos) {
+        // Replace the called function
+        call_instr->setCalledFunction(new_fn);
+        ++*replaced;
       }
     }
   }
@@ -594,10 +644,11 @@ Status LlvmCodeGen::FinalizeModule() {
   DCHECK(!is_compiled_);
   is_compiled_ = true;
 
-  if (FLAGS_unopt_module.size() != 0) {
-    fstream f(FLAGS_unopt_module.c_str(), fstream::out | fstream::trunc);
+  if (FLAGS_unopt_module_dir.size() != 0) {
+    string path = FLAGS_unopt_module_dir + "/" + id_ + "_unopt.ll";
+    fstream f(path.c_str(), fstream::out | fstream::trunc);
     if (f.fail()) {
-      LOG(ERROR) << "Could not save IR to: " << FLAGS_unopt_module;
+      LOG(ERROR) << "Could not save IR to: " << path;
     } else {
       f << GetIR(true);
       f.close();
@@ -606,7 +657,6 @@ Status LlvmCodeGen::FinalizeModule() {
 
   if (is_corrupt_) return Status("Module is corrupt.");
   SCOPED_TIMER(profile_.total_time_counter());
-  SCOPED_TIMER(compile_timer_);
 
   // Don't waste time optimizing module if there are no functions to JIT. This can happen
   // if the codegen object is created but no functions are successfully codegen'd.
@@ -615,25 +665,29 @@ Status LlvmCodeGen::FinalizeModule() {
     OptimizeModule();
   }
 
+  SCOPED_TIMER(compile_timer_);
   // JIT compile all codegen'd functions
   for (int i = 0; i < fns_to_jit_compile_.size(); ++i) {
     *fns_to_jit_compile_[i].second = JitFunction(fns_to_jit_compile_[i].first);
   }
 
-  if (FLAGS_opt_module.size() != 0) {
-    fstream f(FLAGS_opt_module.c_str(), fstream::out | fstream::trunc);
+  if (FLAGS_opt_module_dir.size() != 0) {
+    string path = FLAGS_opt_module_dir + "/" + id_ + "_opt.ll";
+    fstream f(path.c_str(), fstream::out | fstream::trunc);
     if (f.fail()) {
-      LOG(ERROR) << "Could not save IR to: " << FLAGS_opt_module;
+      LOG(ERROR) << "Could not save IR to: " << path;
     } else {
       f << GetIR(true);
       f.close();
     }
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void LlvmCodeGen::OptimizeModule() {
+  SCOPED_TIMER(optimization_timer_);
+
   // This pass manager will construct optimizations passes that are "typical" for
   // c/c++ programs.  We're relying on llvm to pick the best passes for us.
   // TODO: we can likely muck with this to get better compile speeds or write
@@ -732,7 +786,7 @@ void* LlvmCodeGen::JitFunction(Function* function) {
 
   // TODO: log a warning if the jitted function is too big (larger than I cache)
   void* jitted_function = execution_engine_->getPointerToFunction(function);
-  lock_guard<mutex> l(jitted_functions_lock_);
+  boost::lock_guard<mutex> l(jitted_functions_lock_);
   if (jitted_function != NULL) {
     jitted_functions_[function] = true;
   }
@@ -909,10 +963,13 @@ Status LlvmCodeGen::LoadIntrinsics() {
     llvm_intrinsics_[id] = fn;
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void LlvmCodeGen::CodegenMemcpy(LlvmBuilder* builder, Value* dst, Value* src, int size) {
+  DCHECK_GE(size, 0);
+  if (size == 0) return;
+
   // Cast src/dst to int8_t*.  If they already are, this will get optimized away
   DCHECK(PointerType::classof(dst->getType()));
   DCHECK(PointerType::classof(src->getType()));

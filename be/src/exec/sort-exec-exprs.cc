@@ -14,7 +14,7 @@
 
 #include "exec/sort-exec-exprs.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -36,18 +36,18 @@ Status SortExecExprs::Init(const vector<TExpr>& ordering_exprs,
   } else {
     materialize_tuple_ = false;
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SortExecExprs::Prepare(RuntimeState* state, const RowDescriptor& child_row_desc,
-    const RowDescriptor& output_row_desc) {
+    const RowDescriptor& output_row_desc, MemTracker* expr_mem_tracker) {
   if (materialize_tuple_) {
-    RETURN_IF_ERROR(Expr::Prepare(sort_tuple_slot_expr_ctxs_, state, child_row_desc));
-    state->AddExprCtxsToFree(sort_tuple_slot_expr_ctxs_);
+    RETURN_IF_ERROR(Expr::Prepare(
+        sort_tuple_slot_expr_ctxs_, state, child_row_desc, expr_mem_tracker));
   }
-  RETURN_IF_ERROR(Expr::Prepare(lhs_ordering_expr_ctxs_, state, output_row_desc));
-  state->AddExprCtxsToFree(lhs_ordering_expr_ctxs_);
-  return Status::OK;
+  RETURN_IF_ERROR(Expr::Prepare(
+      lhs_ordering_expr_ctxs_, state, output_row_desc, expr_mem_tracker));
+  return Status::OK();
 }
 
 Status SortExecExprs::Open(RuntimeState* state) {
@@ -55,8 +55,9 @@ Status SortExecExprs::Open(RuntimeState* state) {
     RETURN_IF_ERROR(Expr::Open(sort_tuple_slot_expr_ctxs_, state));
   }
   RETURN_IF_ERROR(Expr::Open(lhs_ordering_expr_ctxs_, state));
-  RETURN_IF_ERROR(Expr::Clone(lhs_ordering_expr_ctxs_, state, &rhs_ordering_expr_ctxs_));
-  return Status::OK;
+  RETURN_IF_ERROR(Expr::CloneIfNotExists(
+      lhs_ordering_expr_ctxs_, state, &rhs_ordering_expr_ctxs_));
+  return Status::OK();
 }
 
 void SortExecExprs::Close(RuntimeState* state) {

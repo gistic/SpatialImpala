@@ -771,6 +771,62 @@ from alltypesagg where id < 50 and (tinyint_col is null or tinyint_col < 4)
 INT, TINYINT, TINYINT, STRING, TINYINT, STRING
 ====
 ---- QUERY
+# IMPALA-1302: Incorrect result of FIRST_VALUE query.
+select
+first_value(id) over (order by id rows between 3 preceding and 3 following),
+first_value(id) over (order by id rows between 3 preceding and 2 following),
+first_value(id) over (order by id rows between 3 preceding and 1 following),
+first_value(id) over (order by id rows between 3 preceding and current row),
+first_value(id) over (order by id rows between 3 preceding and 1 preceding),
+first_value(id) over (order by id rows between 3 preceding and 2 preceding),
+first_value(id) over (order by id rows between 3 preceding and 3 preceding),
+first_value(id) over (order by id rows between 2 preceding and 3 following),
+first_value(id) over (order by id rows between 1 preceding and 3 following),
+first_value(id) over (order by id rows between current row and 3 following),
+first_value(id) over (order by id rows between 1 following and 3 following),
+first_value(id) over (order by id rows between 2 following and 3 following),
+first_value(id) over (order by id rows between 3 following and 3 following),
+first_value(id) over (order by id rows between 15 preceding and 15 preceding),
+first_value(id) over (order by id rows between 15 preceding and 15 following),
+first_value(id) over (order by id rows between 15 preceding and 6 preceding),
+first_value(id) over (order by id rows between 6 preceding and 15 following),
+first_value(id) over (order by id rows between 15 following and 15 following),
+first_value(id) over (order by id rows between unbounded preceding and 8 preceding),
+last_value(id) over (order by id rows between 3 preceding and 3 following),
+last_value(id) over (order by id rows between 3 preceding and 2 following),
+last_value(id) over (order by id rows between 3 preceding and 1 following),
+last_value(id) over (order by id rows between 3 preceding and current row),
+last_value(id) over (order by id rows between 3 preceding and 1 preceding),
+last_value(id) over (order by id rows between 3 preceding and 2 preceding),
+last_value(id) over (order by id rows between 3 preceding and 3 preceding),
+last_value(id) over (order by id rows between 2 preceding and 3 following),
+last_value(id) over (order by id rows between 1 preceding and 3 following),
+last_value(id) over (order by id rows between current row and 3 following),
+last_value(id) over (order by id rows between 1 following and 3 following),
+last_value(id) over (order by id rows between 2 following and 3 following),
+last_value(id) over (order by id rows between 3 following and 3 following),
+last_value(id) over (order by id rows between 15 preceding and 15 preceding),
+last_value(id) over (order by id rows between 15 preceding and 15 following),
+last_value(id) over (order by id rows between 15 preceding and 6 preceding),
+last_value(id) over (order by id rows between 6 preceding and 15 following),
+last_value(id) over (order by id rows between 15 following and 15 following),
+last_value(id) over (order by id rows between 8 following and unbounded following)
+from alltypes where id < 10 order by id;
+---- RESULTS
+0,0,0,0,NULL,NULL,NULL,0,0,0,1,2,3,NULL,0,NULL,0,NULL,NULL,3,2,1,0,NULL,NULL,NULL,3,3,3,3,3,3,NULL,9,NULL,9,NULL,9
+0,0,0,0,0,NULL,NULL,0,0,1,2,3,4,NULL,0,NULL,0,NULL,NULL,4,3,2,1,0,NULL,NULL,4,4,4,4,4,4,NULL,9,NULL,9,NULL,9
+0,0,0,0,0,0,NULL,0,1,2,3,4,5,NULL,0,NULL,0,NULL,NULL,5,4,3,2,1,0,NULL,5,5,5,5,5,5,NULL,9,NULL,9,NULL,NULL
+0,0,0,0,0,0,0,1,2,3,4,5,6,NULL,0,NULL,0,NULL,NULL,6,5,4,3,2,1,0,6,6,6,6,6,6,NULL,9,NULL,9,NULL,NULL
+1,1,1,1,1,1,1,2,3,4,5,6,7,NULL,0,NULL,0,NULL,NULL,7,6,5,4,3,2,1,7,7,7,7,7,7,NULL,9,NULL,9,NULL,NULL
+2,2,2,2,2,2,2,3,4,5,6,7,8,NULL,0,NULL,0,NULL,NULL,8,7,6,5,4,3,2,8,8,8,8,8,8,NULL,9,NULL,9,NULL,NULL
+3,3,3,3,3,3,3,4,5,6,7,8,9,NULL,0,0,0,NULL,NULL,9,8,7,6,5,4,3,9,9,9,9,9,9,NULL,9,0,9,NULL,NULL
+4,4,4,4,4,4,4,5,6,7,8,9,NULL,NULL,0,0,1,NULL,NULL,9,9,8,7,6,5,4,9,9,9,9,9,NULL,NULL,9,1,9,NULL,NULL
+5,5,5,5,5,5,5,6,7,8,9,NULL,NULL,NULL,0,0,2,NULL,0,9,9,9,8,7,6,5,9,9,9,9,NULL,NULL,NULL,9,2,9,NULL,NULL
+6,6,6,6,6,6,6,7,8,9,NULL,NULL,NULL,NULL,0,0,3,NULL,0,9,9,9,9,8,7,6,9,9,9,NULL,NULL,NULL,NULL,9,3,9,NULL,NULL
+---- TYPES
+INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT, INT
+====
+---- QUERY
 # Test RANGE with UNBOUNDED FOLLOWING
 select id,
 sum(id) over (order by id range between unbounded preceding and unbounded following)
@@ -907,26 +963,614 @@ where exists (select tt1.month from alltypes tt1 where t1.int_col = tt1.smallint
 1
 1
 1
-====
----- QUERY
-# IMPALA-1312
-SELECT
-  SUM(t1.int_col * t1.id) OVER (
-    ORDER BY t1.int_col * t1.id ASC, t3.year + t3.tinyint_col ASC ROWS
-    BETWEEN 66 PRECEDING AND 21 FOLLOWING) AS int_col_1
-FROM alltypes t1
-INNER JOIN alltypes t2 ON t2.month = t1.smallint_col
-INNER JOIN alltypes t3 ON t3.bigint_col = t2.bigint_col
-WHERE
-t2.id <= t3.smallint_col + t2.tinyint_col
-order by 1
-limit 5
 ---- TYPES
 BIGINT
+====
+---- QUERY
+# Regression test for IMPALA-1223. Query with analytic query with right join.
+# Need proper handling of NULLs.
+SELECT SUM(t1.int_col) OVER () AS int_col_1 FROM alltypestiny t1
+RIGHT JOIN alltypestiny t2 ON t2.tinyint_col = t1.bigint_col AND t2.id = t1.month;
 ---- RESULTS
-22
-23
-24
-25
-26
+0
+0
+0
+0
+0
+0
+0
+0
+---- TYPES
+BIGINT
+====
+---- QUERY
+## IMPALA-1312: Fix DCHECK failure in BufferedTupleStream
+## Disabled due to slow execution without codegen, breaks exhaustive runs (IMPALA-1414)
+#SELECT
+#  SUM(t1.int_col * t1.id) OVER (
+#    ORDER BY t1.int_col * t1.id ASC, t3.year + t3.tinyint_col ASC ROWS
+#    BETWEEN 66 PRECEDING AND 21 FOLLOWING) AS int_col_1
+#FROM alltypes t1
+#INNER JOIN alltypes t2 ON t2.month = t1.smallint_col
+#INNER JOIN alltypes t3 ON t3.bigint_col = t2.bigint_col
+#WHERE
+#t2.id <= t3.smallint_col + t2.tinyint_col
+#order by 1
+#limit 5
+#---- TYPES
+#BIGINT
+#---- RESULTS
+#22
+#23
+#24
+#25
+#26
+#====
+#----QUERY
+# Testing crashes in buffered tuple stream related to IMPALA-1306.
+SELECT AVG(t1.int_col) OVER () AS double_col_1
+FROM alltypestiny t1
+WHERE EXISTS
+    (SELECT t1.month AS int_col_1
+     FROM alltypestiny t1)
+---- RESULTS
+0.5
+0.5
+0.5
+0.5
+0.5
+0.5
+0.5
+0.5
+---- TYPES
+DOUBLE
+====
+---- QUERY
+# IMPALA-1808: handle partition/order by exprs with NaN
+select id / int_col,
+count(*) over (partition by id / int_col order by id),
+count(*) over (order by id / int_col),
+count(*) over (order by id / int_col rows between 100 preceding and 90 preceding),
+count(*) over (order by id / int_col rows between 2 preceding and 1 preceding),
+count(*) over (order by id / int_col rows between 1 preceding and 1 following),
+count(*) over (order by id / int_col rows between 1 following and 2 following),
+count(*) over (order by id / int_col rows between 90 following and 100 following)
+from alltypestiny
+---- RESULTS
+NaN,1,1,0,0,2,2,0
+1,1,2,0,1,3,2,0
+3,1,3,0,2,3,2,0
+5,1,4,0,2,3,2,0
+7,1,5,0,2,3,2,0
+Infinity,1,8,0,2,3,2,0
+Infinity,2,8,0,2,3,1,0
+Infinity,3,8,0,2,2,0,0
+---- TYPES
+DOUBLE, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT
+====
+----QUERY
+# IMPALA-1483: Check that TupleIsNullPredicates referring to the logical
+# analytic output are substituted with TupleIsNullPredicates referring to
+# the physical output.
+select t2.a, t2.id, t2.int_col
+from functional.alltypes t1
+left outer join
+  (select sum(int_col) over(order by id) a, id, int_col is null as int_col
+   from functional.alltypes
+   where year = 2009 and month between 1 and 2) t2
+on (t1.id = t2.id)
+where year = 2009 and month = 1
+order by t2.id limit 10
+---- RESULTS
+0,0,false
+1,1,false
+3,2,false
+6,3,false
+10,4,false
+15,5,false
+21,6,false
+28,7,false
+36,8,false
+45,9,false
+---- TYPES
+BIGINT, INT, BOOLEAN
+====
+---- QUERY
+# IMPALA-1542: Analytic fn containing arithmetic expr on NULL crashed
+select lag(coalesce(505, 1 + NULL), 1) over (order by int_col desc)
+from functional.alltypestiny
+---- RESULTS
+NULL
+505
+505
+505
+505
+505
+505
+505
+---- TYPES
+SMALLINT
+====
+---- QUERY
+# IMPALA-1562: AnalyticEvalNode not properly handling nullable tuple
+select max(t3.c1) from
+(select min(t2.string_col) over () c1
+ from alltypesagg t1
+ left join alltypes t2 on t2.string_col = t1.string_col ) t3
+---- RESULTS
+'0'
+---- TYPES
+STRING
+====
+---- QUERY
+# IMPALA-1559: FIRST_VALUE rewrite function intermediate type not matching slot type
+select
+first_value(-32.9) over (order by id rows between 92 preceding and unbounded following),
+first_value(1.1) over (order by id rows between 92 preceding and 1 preceding)
+from alltypestiny
+---- RESULTS
+-32.9,NULL
+-32.9,1.1
+-32.9,1.1
+-32.9,1.1
+-32.9,1.1
+-32.9,1.1
+-32.9,1.1
+-32.9,1.1
+---- TYPES
+DECIMAL, DECIMAL
+====
+---- QUERY
+# IMPALA-1888: FIRST_VALUE produces incorrect results when the window
+# completely precedes all rows in a partition.
+select id, date_string_col,
+first_value(id) over (partition by date_string_col order by id
+                      rows between 10 preceding and 3 preceding)
+from alltypes where id < 15 order by id
+---- RESULTS
+0,'01/01/09',NULL
+1,'01/01/09',NULL
+2,'01/01/09',NULL
+3,'01/01/09',0
+4,'01/01/09',0
+5,'01/01/09',0
+6,'01/01/09',0
+7,'01/01/09',0
+8,'01/01/09',0
+9,'01/01/09',0
+10,'01/02/09',NULL
+11,'01/02/09',NULL
+12,'01/02/09',NULL
+13,'01/02/09',10
+14,'01/02/09',10
+---- TYPES
+INT, STRING, INT
+====
+---- QUERY
+# IMPALA-1519: Check that the first analytic sort of a select block
+# materializes TupleIsNullPredicates to be substituted in ancestor nodes.
+select
+  sum(t1.id) over (partition by t1.bool_col),
+  count(1) over (order by t1.int_col),
+  avg(g) over (order by f),
+  t2.a,
+  t2.d
+from functional.alltypestiny t1
+left outer join
+  (select
+     id as a,
+     coalesce(id, 10) as b,
+     int_col as c,
+     coalesce(int_col, 20) as d,
+     bigint_col e,
+     coalesce(bigint_col, 30) as f,
+     coalesce(id + bigint_col, 40) as g
+   from functional.alltypestiny) t2
+on (t1.id = t2.a + 100)
+---- RESULTS: VERIFY_IS_EQUAL_SORTED
+12,4,NULL,NULL,NULL
+12,4,NULL,NULL,NULL
+12,4,NULL,NULL,NULL
+12,4,NULL,NULL,NULL
+16,8,NULL,NULL,NULL
+16,8,NULL,NULL,NULL
+16,8,NULL,NULL,NULL
+16,8,NULL,NULL,NULL
+---- TYPES
+BIGINT, BIGINT, DOUBLE, INT, INT
+====
+---- QUERY
+# IMPALA-1519: Check that the first analytic sort of a select block
+# materializes TupleIsNullPredicates to be substituted in ancestor nodes.
+# Same test as the one above, but with an aggregation on top.
+select avg(af1), sum(af3), count(a)
+from
+  (select
+    sum(t1.id) over (partition by t1.bool_col) af1,
+    count(1) over (order by t1.int_col) af2,
+    avg(g) over (order by f) af3,
+    t2.a,
+    t2.d
+  from functional.alltypestiny t1
+  left outer join
+    (select
+       id as a,
+       coalesce(id, 10) as b,
+       int_col as c,
+       coalesce(int_col, 20) as d,
+       bigint_col e,
+       coalesce(bigint_col, 30) as f,
+       coalesce(id + bigint_col, 40) as g
+     from functional.alltypestiny) t2
+  on (t1.id = t2.a + 100)) t3
+group by d
+---- RESULTS: VERIFY_IS_EQUAL_SORTED
+14,NULL,0
+---- TYPES
+DOUBLE, DOUBLE, BIGINT
+====
+---- QUERY
+# IMPALA-1519: Check that expr wrapping with a TupleIsNullPredicate
+# is performed correctly with analytics and multiple nesting levels.
+# The test covers these cases:
+# - analytic output that needs to be wrapped
+# - analytic input that needs to be wrapped
+# - both cases above with and without order by in the over() clause
+# - exprs that need to be wrapped multiple times due to multiple outer joins
+select * from
+  (select
+   a.id,
+   sum(x) over (partition by a.id) as x,
+   ifnull(y, 10) as y,
+   ifnull(z, "b") as z
+   from functional.alltypestiny a
+   left outer join
+     (select id,
+      ifnull(int_col, 1) x,
+      count(bigint_col) over(partition by id) y,
+      ifnull(string_col, "a") z
+      from functional.alltypestiny b) v1
+   on (a.id = v1.id)) v2
+full outer join
+  (select
+   c.id,
+   sum(x) over (order by c.id) as x,
+   ifnull(y, 10) as y,
+   ifnull(z, "b") as z
+   from functional.alltypestiny c
+   left outer join
+     (select id,
+      ifnull(int_col, 1) x,
+      count(bigint_col) over(order by id) y,
+      ifnull(string_col, "a") z
+      from functional.alltypestiny d) v3
+   on (c.id = v3.id)) v4
+on (v2.id = v4.id)
+---- RESULTS: VERIFY_IS_EQUAL_SORTED
+0,0,1,'0',0,0,1,'0'
+1,1,1,'1',1,1,2,'1'
+2,0,1,'0',2,1,3,'0'
+3,1,1,'1',3,2,4,'1'
+4,0,1,'0',4,2,5,'0'
+5,1,1,'1',5,3,6,'1'
+6,0,1,'0',6,3,7,'0'
+7,1,1,'1',7,4,8,'1'
+---- TYPES
+INT, BIGINT, BIGINT, STRING, INT, BIGINT, BIGINT, STRING
+====
+---- QUERY
+# IMPALA-1519: Check that expr wrapping with a TupleIsNullPredicate
+# is performed correctly with analytics and multiple nesting levels.
+# This is a tricky case from IMPALA-1518 which has a non-materialized
+# analytic in a WITH-clause.
+with w as
+  (select coalesce(-668, -335, count(smallint_col)) as int_col,
+          lead('670', 87) over
+            (order by coalesce(-668, -335, count(smallint_col)) desc) as char_col
+   from functional.alltypes)
+select
+  lead(-410, 11) over
+    (order by (t2.int_col) + (t2.int_col) desc,
+     greatest(coalesce(t2.float_col, 16.51),
+     coalesce(t2.int_col, 997)) desc) as int_col,
+  (coalesce(177, -593, 723)) + (lag(227, 43) over
+    (order by (t2.int_col) + (t2.int_col) desc,
+     greatest(coalesce(t2.float_col, 16.51),
+     coalesce(t2.int_col, 997)) desc)) as int_col_2,
+  (t2.int_col) + (t2.int_col) as int_col_3,
+  greatest(coalesce(t2.float_col, 16.51), coalesce(t2.int_col, 997)) as float_col,
+  coalesce(t1.int_col, t1.int_col, t2.int_col) as int_col_4
+from w t1
+right outer join
+  (select (t1.month) + (t1.year) as int_col,
+   least(coalesce(t1.float_col, 683.98), -213.01) as float_col
+   from functional.alltypestiny t1
+   where (t1.int_col) not in (t1.smallint_col, t1.smallint_col)) t2
+on (t2.int_col = t1.int_col and t2.int_col = t1.int_col and t2.int_col = t1.int_col)
+---- RESULTS
+---- TYPES
+SMALLINT, INT, BIGINT, DOUBLE, BIGINT
+====
+---- QUERY
+# IMPALA-1946: Check that On-clause predicates of an outer join assigned in a scan
+# are not wrapped in TupleIsNullPredicates.
+select /* +straight_join */ a.id, b.id
+from functional.alltypestiny a
+left outer join
+  (select t1.id, ifnull(t1.int_col, 10) as int_col
+   from functional.alltypestiny t1
+   inner join functional.alltypestiny t2
+   on (t1.id = t2.id)) b
+on (a.id = b.id and b.int_col < 10)
+---- RESULTS
+0,0
+1,1
+2,2
+3,3
+4,4
+5,5
+6,6
+7,7
+---- TYPES
+INT, INT
+====
+---- QUERY
+# Test percent_rank() with multiple partition exprs and multiple order by exprs and
+# compare with the rewrite target query
+select t.year, t.month, t.id, t.pr, (t.r-1)/(t.c-1)
+from (select year, month, id, rank() over (partition by year, month order by id) as r,
+count() over(partition by year, month) as c,
+percent_rank() over(partition by year, month order by id) as pr
+from functional.alltypes where tinyint_col < 2 and month < 3 and (id % 100 < 10)) as t
+order by t.year, t.month, t.id;
+---- RESULTS
+2009,1,0,0,0
+2009,1,1,0.1428571428571428,0.1428571428571428
+2009,1,100,0.2857142857142857,0.2857142857142857
+2009,1,101,0.4285714285714285,0.4285714285714285
+2009,1,200,0.5714285714285714,0.5714285714285714
+2009,1,201,0.7142857142857143,0.7142857142857143
+2009,1,300,0.8571428571428571,0.8571428571428571
+2009,1,301,1,1
+2009,2,400,0,0
+2009,2,401,0.3333333333333333,0.3333333333333333
+2009,2,500,0.6666666666666666,0.6666666666666666
+2009,2,501,1,1
+2010,1,3700,0,0
+2010,1,3701,0.2,0.2
+2010,1,3800,0.4,0.4
+2010,1,3801,0.6,0.6
+2010,1,3900,0.8,0.8
+2010,1,3901,1,1
+2010,2,4000,0,0
+2010,2,4001,0.2,0.2
+2010,2,4100,0.4,0.4
+2010,2,4101,0.6,0.6
+2010,2,4200,0.8,0.8
+2010,2,4201,1,1
+---- TYPES
+INT, INT, INT, DOUBLE, DOUBLE
+====
+---- QUERY
+# Test cume_dist() with multiple partition exprs and multiple order by exprs
+# and compare with the rewrite query
+select t.year, t.month, t.id, t.cd, ((t.c-t.r)+1)/t.c
+from (select year, month, id,
+rank() over (partition by year, month order by id desc) as r,
+count() over(partition by year, month) as c,
+cume_dist() over(partition by year, month order by id) as cd
+from functional.alltypes where tinyint_col < 2 and month < 3 and (id % 100 < 10)) as t
+order by t.year, t.month, t.id;
+---- RESULTS
+2009,1,0,0.125,0.125
+2009,1,1,0.25,0.25
+2009,1,100,0.375,0.375
+2009,1,101,0.5,0.5
+2009,1,200,0.625,0.625
+2009,1,201,0.75,0.75
+2009,1,300,0.875,0.875
+2009,1,301,1,1
+2009,2,400,0.25,0.25
+2009,2,401,0.5,0.5
+2009,2,500,0.75,0.75
+2009,2,501,1,1
+2010,1,3700,0.1666666666666667,0.1666666666666667
+2010,1,3701,0.3333333333333333,0.3333333333333333
+2010,1,3800,0.5,0.5
+2010,1,3801,0.6666666666666666,0.6666666666666666
+2010,1,3900,0.8333333333333334,0.8333333333333334
+2010,1,3901,1,1
+2010,2,4000,0.1666666666666667,0.1666666666666667
+2010,2,4001,0.3333333333333333,0.3333333333333333
+2010,2,4100,0.5,0.5
+2010,2,4101,0.6666666666666666,0.6666666666666666
+2010,2,4200,0.8333333333333334,0.8333333333333334
+2010,2,4201,1,1
+---- TYPES
+INT, INT, INT, DOUBLE, DOUBLE
+====
+---- QUERY
+# Test ntile() with multiple partition exprs and multiple order by exprs and compare
+# with the rewrite query
+select t.year, t.month, t.id, t.nt, floor((if(t.c>3, 3, t.c)*(t.rownum-1))/t.c) + 1
+from (select year, month, id,
+row_number() over (partition by year, month order by id) as rownum,
+count() over(partition by year, month) as c,
+ntile(3) over(partition by year, month order by id) as nt
+from functional.alltypes where tinyint_col < 2 and month < 3 and (id % 100 < 10)) as t
+order by t.year, t.month, t.id;
+---- RESULTS
+2009,1,0,1,1
+2009,1,1,1,1
+2009,1,100,1,1
+2009,1,101,2,2
+2009,1,200,2,2
+2009,1,201,2,2
+2009,1,300,3,3
+2009,1,301,3,3
+2009,2,400,1,1
+2009,2,401,1,1
+2009,2,500,2,2
+2009,2,501,3,3
+2010,1,3700,1,1
+2010,1,3701,1,1
+2010,1,3800,2,2
+2010,1,3801,2,2
+2010,1,3900,3,3
+2010,1,3901,3,3
+2010,2,4000,1,1
+2010,2,4001,1,1
+2010,2,4100,2,2
+2010,2,4101,2,2
+2010,2,4200,3,3
+2010,2,4201,3,3
+---- TYPES
+INT, INT, INT, BIGINT, BIGINT
+====
+---- QUERY
+# Test for ntile when the argument is larger than number of rows
+select year, month, id, ntile(1000) over(order by year, month, id) from alltypes where
+tinyint_col < 2 and month < 3 and (id % 100 < 10) order by year, month, id
+---- RESULTS
+2009,1,0,1
+2009,1,1,2
+2009,1,100,3
+2009,1,101,4
+2009,1,200,5
+2009,1,201,6
+2009,1,300,7
+2009,1,301,8
+2009,2,400,9
+2009,2,401,10
+2009,2,500,11
+2009,2,501,12
+2010,1,3700,13
+2010,1,3701,14
+2010,1,3800,15
+2010,1,3801,16
+2010,1,3900,17
+2010,1,3901,18
+2010,2,4000,19
+2010,2,4001,20
+2010,2,4100,21
+2010,2,4101,22
+2010,2,4200,23
+2010,2,4201,24
+---- TYPES
+INT, INT, INT, BIGINT
+====
+---- QUERY
+# percent_rank() and cume_dist() with inline views
+select bool_col, a, b, a + b from
+  (select
+   bool_col,
+   percent_rank() over(order by id) a,
+   cume_dist() over(partition by bool_col order by id) b
+   from
+     (select * from functional.alltypes where id < 20) v1) v2
+order by 1, 2, 3
+---- RESULTS: VERIFY_IS_EQUAL_SORTED
+false,0.05263157894736842,0.1,0.1526315789473684
+false,0.1578947368421053,0.2,0.3578947368421053
+false,0.2631578947368421,0.3,0.5631578947368421
+false,0.3684210526315789,0.4,0.7684210526315789
+false,0.4736842105263158,0.5,0.9736842105263157
+false,0.5789473684210527,0.6,1.178947368421053
+false,0.6842105263157895,0.7,1.38421052631579
+false,0.7894736842105263,0.8,1.589473684210526
+false,0.8947368421052632,0.9,1.794736842105263
+false,1,1,2
+true,0,0.1,0.1
+true,0.1052631578947368,0.2,0.3052631578947368
+true,0.2105263157894737,0.3,0.5105263157894737
+true,0.3157894736842105,0.4,0.7157894736842105
+true,0.4210526315789473,0.5,0.9210526315789473
+true,0.5263157894736842,0.6,1.126315789473684
+true,0.631578947368421,0.7,1.331578947368421
+true,0.7368421052631579,0.8,1.536842105263158
+true,0.8421052631578947,0.9,1.742105263157895
+true,0.9473684210526315,1,1.947368421052631
+---- TYPES
+BOOLEAN, DOUBLE, DOUBLE, DOUBLE
+====
+---- QUERY
+select 1 a, cume_dist() over (order by int_col) as cd from alltypes where id < 5
+union
+distinct (select 2, percent_rank() over (partition by bool_col order by int_col)
+from alltypesagg where id >= 5 and id <= 10) order by a, cd;
+---- RESULTS
+1,0.2
+1,0.4
+1,0.6
+1,0.8
+1,1
+2,0
+2,0.333333333333333
+2,0.5
+2,0.666666666666666
+2,1
+---- TYPES
+TINYINT, DOUBLE
+====
+---- QUERY
+# Test analytic function rewrite when the same expr appears twice
+select id, percent_rank() over(order by id) from functional.alltypestiny
+order by percent_rank() over (order by id)
+---- RESULTS
+0,0
+1,0.1428571428571428
+2,0.2857142857142857
+3,0.4285714285714285
+4,0.5714285714285714
+5,0.7142857142857143
+6,0.8571428571428571
+7,1
+---- TYPES
+INT, DOUBLE
+====
+---- QUERY
+# Tests IMPALA-2158. Check that analytic functions with a limit succeed.
+select id, rank() over(order by id) from functional.alltypesagg limit 10
+---- RESULTS
+0,1
+0,1
+1,3
+2,4
+3,5
+4,6
+5,7
+6,8
+7,9
+8,10
+---- TYPES
+INT, BIGINT
+====
+---- QUERY
+# IMPALA-2457 - PERCENT_RANK() returns NaN for row group with 1 row.
+select id, rank() over (partition by id order by tinyint_col),
+count() over (partition by id), percent_rank() over (partition by id order by tinyint_col)
+from functional.alltypestiny order by id
+---- RESULTS
+0,1,1,0
+1,1,1,0
+2,1,1,0
+3,1,1,0
+4,1,1,0
+5,1,1,0
+6,1,1,0
+7,1,1,0
+---- TYPES
+int, bigint, bigint, double
+====
+---- QUERY
+# Regression test for IMPALA-2265, IMPALA-2559. The mem_limit is tuned to reproduce the
+# issue when running this query against functional_parquet.
+SET mem_limit=150m;
+SELECT lag(-180, 13) over (ORDER BY t1.int_col ASC, t2.int_col ASC) AS int_col
+FROM functional_parquet.alltypes t1 CROSS JOIN functional_parquet.alltypes t2 LIMIT 10
+---- CATCH
+Memory limit exceeded
+====
+---- QUERY
+set mem_limit=0
 ====

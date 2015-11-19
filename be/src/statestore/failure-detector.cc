@@ -13,13 +13,18 @@
 // limitations under the License.
 
 #include "statestore/failure-detector.h"
+
 #include <boost/assign.hpp>
+#include <boost/thread.hpp>
+
 #include "common/logging.h"
 
+#include "common/names.h"
+
+using boost::get_system_time;
+using boost::posix_time::time_duration;
+using boost::system_time;
 using namespace impala;
-using namespace std;
-using namespace boost;
-using namespace boost::posix_time;
 
 static const map<FailureDetector::PeerState, string> PEER_STATE_TO_STRING =
     boost::assign::map_list_of

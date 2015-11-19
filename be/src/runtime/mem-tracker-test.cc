@@ -18,7 +18,7 @@
 #include "runtime/mem-tracker.h"
 #include "util/metrics.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -49,7 +49,11 @@ TEST(MemTestTest, SingleTrackerWithLimit) {
 }
 
 TEST(MemTestTest, ConsumptionMetric) {
-  Metrics::PrimitiveMetric<uint64_t> metric("test", 0);
+  TMetricDef md;
+  md.__set_key("test");
+  md.__set_units(TUnit::BYTES);
+  md.__set_kind(TMetricKind::GAUGE);
+  UIntGauge metric(md, 0);
   EXPECT_EQ(metric.value(), 0);
 
   MemTracker t(&metric, 100, -1, "");
@@ -68,21 +72,27 @@ TEST(MemTestTest, ConsumptionMetric) {
 
   metric.Increment(10);
   // consumption_ is only updated with consumption_metric_ after calls to
-  // Consume()/Release()
-  t.Consume(0);
+  // Consume()/Release() with a non-zero value
+  t.Consume(1);
   EXPECT_EQ(t.consumption(), 10);
   EXPECT_EQ(t.peak_consumption(), 10);
   metric.Increment(-5);
-  t.Consume(0);
+  t.Consume(-1);
   EXPECT_EQ(t.consumption(), 5);
   EXPECT_EQ(t.peak_consumption(), 10);
   EXPECT_FALSE(t.LimitExceeded());
   metric.Increment(150);
-  t.Consume(0);
+  t.Consume(1);
   EXPECT_EQ(t.consumption(), 155);
   EXPECT_EQ(t.peak_consumption(), 155);
   EXPECT_TRUE(t.LimitExceeded());
   metric.Increment(-150);
+  t.Consume(-1);
+  EXPECT_EQ(t.consumption(), 5);
+  EXPECT_EQ(t.peak_consumption(), 155);
+  EXPECT_FALSE(t.LimitExceeded());
+  // consumption_ is not updated when Consume()/Release() is called with a zero value
+  metric.Increment(10);
   t.Consume(0);
   EXPECT_EQ(t.consumption(), 5);
   EXPECT_EQ(t.peak_consumption(), 155);

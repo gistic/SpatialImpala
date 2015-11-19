@@ -14,7 +14,7 @@
 
 #include "exec/empty-set-node.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -25,7 +25,7 @@ EmptySetNode::EmptySetNode(ObjectPool* pool, const TPlanNode& tnode,
 
 Status EmptySetNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
   *eos = true;
-  return Status::OK;
+  return Status::OK();
 }
 
 }

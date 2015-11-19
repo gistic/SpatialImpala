@@ -43,9 +43,9 @@
 #include "gen-cpp/Exprs_types.h"
 #include "gen-cpp/PlanNodes_types.h"
 
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
-using namespace boost;
 using namespace llvm;
 
 namespace impala {
@@ -79,7 +79,7 @@ Status AggregationNode::Init(const TPlanNode& tnode) {
         pool_, tnode.agg_node.aggregate_functions[i], &evaluator));
     aggregate_evaluators_.push_back(evaluator);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status AggregationNode::Prepare(RuntimeState* state) {
@@ -87,20 +87,21 @@ Status AggregationNode::Prepare(RuntimeState* state) {
   RETURN_IF_ERROR(ExecNode::Prepare(state));
 
   tuple_pool_.reset(new MemPool(mem_tracker()));
-  agg_fn_pool_.reset(new MemPool(state->udf_mem_tracker()));
+  agg_fn_pool_.reset(new MemPool(expr_mem_tracker()));
   build_timer_ = ADD_TIMER(runtime_profile(), "BuildTime");
   get_results_timer_ = ADD_TIMER(runtime_profile(), "GetResultsTime");
   hash_table_buckets_counter_ =
-      ADD_COUNTER(runtime_profile(), "BuildBuckets", TCounterType::UNIT);
+      ADD_COUNTER(runtime_profile(), "BuildBuckets", TUnit::UNIT);
   hash_table_load_factor_counter_ =
-      ADD_COUNTER(runtime_profile(), "LoadFactor", TCounterType::DOUBLE_VALUE);
+      ADD_COUNTER(runtime_profile(), "LoadFactor", TUnit::DOUBLE_VALUE);
 
   intermediate_tuple_desc_ =
       state->desc_tbl().GetTupleDescriptor(intermediate_tuple_id_);
   output_tuple_desc_ = state->desc_tbl().GetTupleDescriptor(output_tuple_id_);
   DCHECK_EQ(intermediate_tuple_desc_->slots().size(),
       output_tuple_desc_->slots().size());
-  RETURN_IF_ERROR(Expr::Prepare(probe_expr_ctxs_, state, child(0)->row_desc()));
+  RETURN_IF_ERROR(
+      Expr::Prepare(probe_expr_ctxs_, state, child(0)->row_desc(), expr_mem_tracker()));
 
   // Construct build exprs from intermediate_agg_tuple_desc_
   for (int i = 0; i < probe_expr_ctxs_.size(); ++i) {
@@ -120,7 +121,8 @@ Status AggregationNode::Prepare(RuntimeState* state) {
   // nor this node's output row desc may contain the intermediate tuple, e.g.,
   // in a single-node plan with an intermediate tuple different from the output tuple.
   RowDescriptor build_row_desc(intermediate_tuple_desc_, false);
-  RETURN_IF_ERROR(Expr::Prepare(build_expr_ctxs_, state, build_row_desc));
+  RETURN_IF_ERROR(
+      Expr::Prepare(build_expr_ctxs_, state, build_row_desc, expr_mem_tracker()));
 
   agg_fn_ctxs_.resize(aggregate_evaluators_.size());
   int j = probe_expr_ctxs_.size();
@@ -166,7 +168,7 @@ Status AggregationNode::Prepare(RuntimeState* state) {
       }
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status AggregationNode::Open(RuntimeState* state) {
@@ -188,7 +190,7 @@ Status AggregationNode::Open(RuntimeState* state) {
   while (true) {
     bool eos;
     RETURN_IF_CANCELLED(state);
-    RETURN_IF_ERROR(state->QueryMaintenance());
+    RETURN_IF_ERROR(QueryMaintenance(state));
     RETURN_IF_ERROR(children_[0]->GetNext(state, &batch, &eos));
     SCOPED_TIMER(build_timer_);
 
@@ -213,7 +215,7 @@ Status AggregationNode::Open(RuntimeState* state) {
     output_iterator_ = hash_tbl_->Begin();
 
     batch.Reset();
-    RETURN_IF_ERROR(state->QueryMaintenance());
+    RETURN_IF_ERROR(QueryMaintenance(state));
     if (eos) break;
   }
 
@@ -222,24 +224,33 @@ Status AggregationNode::Open(RuntimeState* state) {
   child(0)->Close(state);
   VLOG_FILE << "aggregated " << num_input_rows << " input rows into "
             << hash_tbl_->size() << " output rows";
-  return Status::OK;
+  return Status::OK();
 }
 
 Status AggregationNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   RETURN_IF_CANCELLED(state);
-  RETURN_IF_ERROR(state->QueryMaintenance());
+  RETURN_IF_ERROR(QueryMaintenance(state));
   SCOPED_TIMER(get_results_timer_);
 
   if (ReachedLimit()) {
     *eos = true;
-    return Status::OK;
+    return Status::OK();
   }
+  *eos = false;
   ExprContext** ctxs = &conjunct_ctxs_[0];
   int num_ctxs = conjunct_ctxs_.size();
 
+  int count = 0;
+  const int N = state->batch_size();
   while (!output_iterator_.AtEnd() && !row_batch->AtCapacity()) {
+    // This loop can go on for a long time if the conjuncts are very selective. Do query
+    // maintenance every N iterations.
+    if (count++ % N == 0) {
+      RETURN_IF_CANCELLED(state);
+      RETURN_IF_ERROR(QueryMaintenance(state));
+    }
     int row_idx = row_batch->AddRow();
     TupleRow* row = row_batch->GetRow(row_idx);
     Tuple* intermediate_tuple = output_iterator_.GetTuple();
@@ -256,19 +267,31 @@ Status AggregationNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* 
   }
   *eos = output_iterator_.AtEnd() || ReachedLimit();
   COUNTER_SET(rows_returned_counter_, num_rows_returned_);
-  return Status::OK;
+  return Status::OK();
+}
+
+Status AggregationNode::Reset(RuntimeState* state) {
+  DCHECK(false) << "NYI";
+  return Status("NYI");
 }
 
 void AggregationNode::Close(RuntimeState* state) {
   if (is_closed()) return;
 
   // Iterate through the remaining rows in the hash table and call Serialize/Finalize on
-  // them in order to free any memory allocated by UDAs
+  // them in order to free any memory allocated by UDAs. Finalize() requires a dst tuple
+  // but we don't actually need the result, so allocate a single dummy tuple to avoid
+  // accumulating memory.
+  Tuple* dummy_dst = NULL;
+  if (needs_finalize_ && output_tuple_desc_ != NULL) {
+    dummy_dst = Tuple::Create(output_tuple_desc_->byte_size(), tuple_pool_.get());
+  }
   while (!output_iterator_.AtEnd()) {
-    Tuple* intermediate_tuple = output_iterator_.GetTuple();
-    if (FinalizeTuple(intermediate_tuple, tuple_pool_.get()) != intermediate_tuple) {
-      // Avoid consuming excessive memory.
-      tuple_pool_->FreeAll();
+    Tuple* tuple = output_iterator_.GetTuple();
+    if (needs_finalize_) {
+      AggFnEvaluator::Finalize(aggregate_evaluators_, agg_fn_ctxs_, tuple, dummy_dst);
+    } else {
+      AggFnEvaluator::Serialize(aggregate_evaluators_, agg_fn_ctxs_, tuple);
     }
     output_iterator_.Next<false>();
   }
@@ -350,18 +373,16 @@ void AggregationNode::UpdateTuple(Tuple* tuple, TupleRow* row) {
 
 Tuple* AggregationNode::FinalizeTuple(Tuple* tuple, MemPool* pool) {
   DCHECK(tuple != NULL || aggregate_evaluators_.empty());
+  DCHECK(output_tuple_desc_ != NULL);
+
   Tuple* dst = tuple;
   if (needs_finalize_ && intermediate_tuple_id_ != output_tuple_id_) {
     dst = Tuple::Create(output_tuple_desc_->byte_size(), pool);
   }
-  for (int i = 0; i < aggregate_evaluators_.size(); ++i) {
-    AggFnEvaluator* evaluator = aggregate_evaluators_[i];
-    FunctionContext* agg_fn_ctx = agg_fn_ctxs_[i];
-    if (needs_finalize_) {
-      evaluator->Finalize(agg_fn_ctx, tuple, dst);
-    } else {
-      evaluator->Serialize(agg_fn_ctx, tuple);
-    }
+  if (needs_finalize_) {
+    AggFnEvaluator::Finalize(aggregate_evaluators_, agg_fn_ctxs_, tuple, dst);
+  } else {
+    AggFnEvaluator::Serialize(aggregate_evaluators_, agg_fn_ctxs_, tuple);
   }
   // Copy grouping values from tuple to dst.
   // TODO: Codegen this.
@@ -498,7 +519,7 @@ llvm::Function* AggregationNode::CodegenUpdateSlot(
   Function* agg_expr_fn;
   Status status = input_expr->GetCodegendComputeFn(state, &agg_expr_fn);
   if (!status.ok()) {
-    VLOG_QUERY << "Could not codegen UpdateSlot(): " << status.GetErrorMsg();
+    VLOG_QUERY << "Could not codegen UpdateSlot(): " << status.GetDetail();
     return NULL;
   }
   DCHECK(agg_expr_fn != NULL);

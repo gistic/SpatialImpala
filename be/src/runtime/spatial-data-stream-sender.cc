@@ -99,5 +99,5 @@ Status SpatialDataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool 
       }
     }
   }
-  return Status::OK;
+  return Status::OK();
 }

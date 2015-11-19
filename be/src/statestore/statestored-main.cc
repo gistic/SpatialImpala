@@ -35,11 +35,13 @@ DECLARE_int32(state_store_port);
 DECLARE_int32(webserver_port);
 DECLARE_bool(enable_webserver);
 DECLARE_string(principal);
+DECLARE_string(ssl_server_certificate);
+DECLARE_string(ssl_private_key);
+DECLARE_string(ssl_private_key_password_cmd);
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
-
 using namespace apache::thrift;
 
 int main(int argc, char** argv) {
@@ -57,15 +59,14 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Not starting webserver";
   }
 
-  scoped_ptr<Metrics> metrics(new Metrics());
+  scoped_ptr<MetricGroup> metrics(new MetricGroup("statestore"));
   metrics->Init(FLAGS_enable_webserver ? webserver.get() : NULL);
   EXIT_IF_ERROR(RegisterMemoryMetrics(metrics.get(), false));
   StartThreadInstrumentation(metrics.get(), webserver.get());
   InitRpcEventTracing(webserver.get());
   // TODO: Add a 'common metrics' method to add standard metrics to
   // both statestored and impalad
-  metrics->CreateAndRegisterPrimitiveMetric<string>(
-      "statestore.version", GetVersionString(true));
+  metrics->AddProperty<string>("statestore.version", GetVersionString(true));
 
   Statestore statestore(metrics.get());
   statestore.RegisterWebpages(webserver.get());
@@ -77,6 +78,11 @@ int main(int argc, char** argv) {
 
   ThriftServer* server = new ThriftServer("StatestoreService", processor,
       FLAGS_state_store_port, NULL, metrics.get(), 5);
+  if (EnableInternalSslConnections()) {
+    LOG(INFO) << "Enabling SSL for Statestore";
+    EXIT_IF_ERROR(server->EnableSsl(FLAGS_ssl_server_certificate, FLAGS_ssl_private_key,
+        FLAGS_ssl_private_key_password_cmd));
+  }
   EXIT_IF_ERROR(server->Start());
 
   statestore.MainLoop();

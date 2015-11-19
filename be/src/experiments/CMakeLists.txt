@@ -9,6 +9,7 @@ set(EXECUTABLE_OUTPUT_PATH "${BUILD_OUTPUT_ROOT_DIRECTORY}/experiments")
 add_library(Experiments
   data-provider.cc
 )
+add_dependencies(Experiments thrift-deps)
 
 add_executable(data-provider-test data-provider-test.cc)
 add_executable(tuple-splitter-test tuple-splitter-test.cc)
@@ -23,5 +24,3 @@ target_link_libraries(hash-partition-test ${IMPALA_LINK_LIBS})
 target_link_libraries(compression-test ${IMPALA_LINK_LIBS})
 
 ADD_BE_TEST(string-search-test)
-
-add_subdirectory(hashing)

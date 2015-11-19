@@ -1,10 +1,12 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 
+import os
 from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
 from tests.common.test_vector import *
 from tests.common.impala_test_suite import *
 from tests.common.impala_cluster import ImpalaCluster
+from tests.common.skip import SkipIfS3
+from tests.util.filesystem_utils import get_fs_path, IS_S3
 from subprocess import call
 
 class TestUdfs(ImpalaTestSuite):
@@ -27,27 +29,54 @@ class TestUdfs(ImpalaTestSuite):
     database = 'native_function_test'
 
     self.__load_functions(
-      self.create_udfs_template, vector, database, '/test-warehouse/libTestUdfs.so')
+      self.create_udfs_template, vector, database,
+      get_fs_path('/test-warehouse/libTestUdfs.so'))
     self.__load_functions(
-      self.create_udas_template, vector, database, '/test-warehouse/libudasample.so')
+      self.create_sample_udas_template, vector, database,
+      get_fs_path('/test-warehouse/libudasample.so'))
+    self.__load_functions(
+      self.create_test_udas_template, vector, database,
+      get_fs_path('/test-warehouse/libTestUdas.so'))
 
     self.run_test_case('QueryTest/udf', vector, use_db=database)
-    self.run_test_case('QueryTest/udf-init-close', vector, use_db=database)
+    if not IS_S3: # S3 doesn't support INSERT
+      self.run_test_case('QueryTest/udf-init-close', vector, use_db=database)
     self.run_test_case('QueryTest/uda', vector, use_db=database)
 
   def test_ir_functions(self, vector):
     database = 'ir_function_test'
     self.__load_functions(
-      self.create_udfs_template, vector, database, '/test-warehouse/test-udfs.ll')
+      self.create_udfs_template, vector, database,
+      get_fs_path('/test-warehouse/test-udfs.ll'))
     self.run_test_case('QueryTest/udf', vector, use_db=database)
-    self.run_test_case('QueryTest/udf-init-close', vector, use_db=database)
+    if not IS_S3: # S3 doesn't support INSERT
+      self.run_test_case('QueryTest/udf-init-close', vector, use_db=database)
 
   def test_udf_errors(self, vector):
     self.run_test_case('QueryTest/udf-errors', vector)
 
+  def test_udf_invalid_symbol(self, vector):
+    """ IMPALA-1642: Impala crashes if the symbol for a Hive UDF doesn't exist
+        Crashing is non-deterministic so we run the UDF several times."""
+    drop_fn_stmt = "drop function if exists default.fn_invalid_symbol(STRING)"
+    create_fn_stmt = ("create function default.fn_invalid_symbol(STRING) returns "
+        "STRING LOCATION '%s' SYMBOL='not.a.Symbol'" %
+        get_fs_path('/test-warehouse/impala-hive-udfs.jar'))
+    query = "select default.fn_invalid_symbol('test')"
+
+    self.client.execute(drop_fn_stmt)
+    try:
+      self.client.execute(create_fn_stmt)
+      for _ in xrange(5):
+        ex = self.execute_query_expect_failure(self.client, query)
+        assert "Unable to find class" in str(ex)
+    finally:
+      self.client.execute(drop_fn_stmt)
+
+
   def test_hive_udfs(self, vector):
-    self.client.execute('create database if not exists udf_test')
-    self.client.execute('create database if not exists uda_test')
+    #self.client.execute('create database if not exists udf_test')
+    #self.client.execute('create database if not exists uda_test')
     self.run_test_case('QueryTest/load-hive-udfs', vector)
     self.run_test_case('QueryTest/hive-udf', vector)
 
@@ -64,7 +93,7 @@ class TestUdfs(ImpalaTestSuite):
         'testdata/udfs/impala-hive-udfs.jar')
     new_udf = os.path.join(os.environ['IMPALA_HOME'],
         'tests/test-hive-udfs/target/test-hive-udfs-1.0.jar')
-    udf_dst = '/test-warehouse/impala-hive-udfs2.jar'
+    udf_dst = get_fs_path('/test-warehouse/impala-hive-udfs2.jar')
 
     drop_fn_stmt = 'drop function if exists default.udf_update_test_drop()'
     create_fn_stmt = "create function default.udf_update_test_drop() returns string "\
@@ -94,7 +123,7 @@ class TestUdfs(ImpalaTestSuite):
         'testdata/udfs/impala-hive-udfs.jar')
     new_udf = os.path.join(os.environ['IMPALA_HOME'],
         'tests/test-hive-udfs/target/test-hive-udfs-1.0.jar')
-    udf_dst = '/test-warehouse/impala-hive-udfs3.jar'
+    udf_dst = get_fs_path('/test-warehouse/impala-hive-udfs3.jar')
     old_function_name = "udf_update_test_create1"
     new_function_name = "udf_update_test_create2"
 
@@ -130,7 +159,8 @@ class TestUdfs(ImpalaTestSuite):
   def test_drop_function_while_running(self, vector):
     self.client.execute("drop function if exists default.drop_while_running(BIGINT)")
     self.client.execute("create function default.drop_while_running(BIGINT) returns "\
-        "BIGINT LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Identity'")
+        "BIGINT LOCATION '%s' SYMBOL='Identity'" %
+        get_fs_path('/test-warehouse/libTestUdfs.so'))
     query = \
         "select default.drop_while_running(l_orderkey) from tpch.lineitem limit 10000";
 
@@ -199,8 +229,8 @@ class TestUdfs(ImpalaTestSuite):
       result = self.execute_query_expect_success(self.client, query, exec_options)
       assert result is not None
 
-  # Create test UDA functions in {database} from library {location}
-  create_udas_template = """
+  # Create sample UDA functions in {database} from library {location}
+  create_sample_udas_template = """
 drop function if exists {database}.test_count(int);
 drop function if exists {database}.hll(int);
 drop function if exists {database}.sum_small_decimal(decimal(9,2));
@@ -215,6 +245,18 @@ location '{location}' update_fn='HllUpdate';
 
 create aggregate function {database}.sum_small_decimal(decimal(9,2))
 returns decimal(9,2) location '{location}' update_fn='SumSmallDecimalUpdate';
+"""
+
+  # Create test UDA functions in {database} from library {location}
+  create_test_udas_template = """
+drop function if exists {database}.trunc_sum(double);
+
+create database if not exists {database};
+
+create aggregate function {database}.trunc_sum(double)
+returns bigint intermediate double location '{location}'
+update_fn='TruncSumUpdate' merge_fn='TruncSumMerge'
+serialize_fn='TruncSumSerialize' finalize_fn='TruncSumFinalize';
 """
 
   # Create test UDF functions in {database} from library {location}
@@ -247,6 +289,12 @@ drop function if exists {database}.constant_arg(int);
 drop function if exists {database}.validate_open(int);
 drop function if exists {database}.mem_test(bigint);
 drop function if exists {database}.mem_test_leaks(bigint);
+drop function if exists {database}.unmangled_symbol();
+drop function if exists {database}.four_args(int, int, int, int);
+drop function if exists {database}.five_args(int, int, int, int, int);
+drop function if exists {database}.six_args(int, int, int, int, int, int);
+drop function if exists {database}.seven_args(int, int, int, int, int, int, int);
+drop function if exists {database}.eight_args(int, int, int, int, int, int, int, int);
 
 create database if not exists {database};
 
@@ -342,4 +390,23 @@ prepare_fn='MemTestPrepare' close_fn='MemTestClose';
 create function {database}.mem_test_leaks(bigint) returns bigint
 location '{location}' symbol='MemTest'
 prepare_fn='MemTestPrepare';
+
+-- Regression test for IMPALA-1475
+create function {database}.unmangled_symbol() returns bigint
+location '{location}' symbol='UnmangledSymbol';
+
+create function {database}.four_args(int, int, int, int) returns int
+location '{location}' symbol='FourArgs';
+
+create function {database}.five_args(int, int, int, int, int) returns int
+location '{location}' symbol='FiveArgs';
+
+create function {database}.six_args(int, int, int, int, int, int) returns int
+location '{location}' symbol='SixArgs';
+
+create function {database}.seven_args(int, int, int, int, int, int, int) returns int
+location '{location}' symbol='SevenArgs';
+
+create function {database}.eight_args(int, int, int, int, int, int, int, int) returns int
+location '{location}' symbol='EightArgs';
 """

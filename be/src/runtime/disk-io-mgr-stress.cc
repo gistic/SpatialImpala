@@ -16,9 +16,9 @@
 
 #include "util/time.h"
 
-using namespace boost;
+#include "common/names.h"
+
 using namespace impala;
-using namespace std;
 
 static const float ABORT_CHANCE = .10f;
 static const int MIN_READ_LEN = 1;
@@ -228,12 +228,12 @@ void DiskIoMgrStress::NewClient(int i) {
     range_len = min(range_len, file_len - assigned_len);
 
     DiskIoMgr::ScanRange* range = new DiskIoMgr::ScanRange();;
-    range->Reset(
-        files_[client.file_idx].filename.c_str(), range_len, assigned_len, 0, false);
+    range->Reset(NULL, files_[client.file_idx].filename.c_str(), range_len,
+        assigned_len, 0, false, false, DiskIoMgr::ScanRange::NEVER_CACHE);
     client.scan_ranges.push_back(range);
     assigned_len += range_len;
   }
-  Status status = io_mgr_->RegisterContext(NULL, &client.reader, NULL);
+  Status status = io_mgr_->RegisterContext(&client.reader, NULL);
   CHECK(status.ok());
   status = io_mgr_->AddScanRanges(client.reader, client.scan_ranges);
   CHECK(status.ok());

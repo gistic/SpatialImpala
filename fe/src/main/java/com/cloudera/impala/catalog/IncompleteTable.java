@@ -22,8 +22,8 @@ import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.JniUtil;
 import com.cloudera.impala.thrift.TCatalogObjectType;
+import com.cloudera.impala.thrift.TErrorCode;
 import com.cloudera.impala.thrift.TStatus;
-import com.cloudera.impala.thrift.TStatusCode;
 import com.cloudera.impala.thrift.TTable;
 import com.cloudera.impala.thrift.TTableDescriptor;
 import com.google.common.base.Joiner;
@@ -62,9 +62,6 @@ public class IncompleteTable extends Table {
   public TCatalogObjectType getCatalogObjectType() { return TCatalogObjectType.TABLE; }
 
   @Override
-  public int getNumNodes() { throw new IllegalStateException(cause_); }
-
-  @Override
   public TTableDescriptor toThriftDescriptor(Set<Long> referencedPartitions) {
     throw new IllegalStateException(cause_);
   }
@@ -84,7 +81,7 @@ public class IncompleteTable extends Table {
     TTable table = new TTable(db_.getName(), name_);
     table.setId(id_.asInt());
     if (cause_ != null) {
-      table.setLoad_status(new TStatus(TStatusCode.INTERNAL_ERROR,
+      table.setLoad_status(new TStatus(TErrorCode.INTERNAL_ERROR,
           Lists.newArrayList(JniUtil.throwableToString(cause_),
                              JniUtil.throwableToStackTrace(cause_))));
     }

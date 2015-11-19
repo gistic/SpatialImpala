@@ -63,6 +63,19 @@ public abstract class AggregateInfoBase {
   }
 
   /**
+   * C'tor for cloning.
+   */
+  protected AggregateInfoBase(AggregateInfoBase other) {
+    groupingExprs_ =
+        (other.groupingExprs_ != null) ? Expr.cloneList(other.groupingExprs_) : null;
+    aggregateExprs_ =
+        (other.aggregateExprs_ != null) ? Expr.cloneList(other.aggregateExprs_) : null;
+    intermediateTupleDesc_ = other.intermediateTupleDesc_;
+    outputTupleDesc_ = other.outputTupleDesc_;
+    materializedSlots_ = Lists.newArrayList(other.materializedSlots_);
+  }
+
+  /**
    * Creates the intermediate and output tuple descriptors. If no agg expr has an
    * intermediate type different from its output type, then only the output tuple
    * descriptor is created and the intermediate tuple is set to the output tuple.
@@ -97,10 +110,7 @@ public abstract class AggregateInfoBase {
     for (int i = 0; i < exprs.size(); ++i) {
       Expr expr = exprs.get(i);
       SlotDescriptor slotDesc = analyzer.addSlotDescriptor(result);
-      slotDesc.setLabel(expr.toSql());
-      slotDesc.setStats(ColumnStats.fromExpr(expr));
-      Preconditions.checkState(expr.getType().isValid());
-      slotDesc.setType(expr.getType());
+      slotDesc.initFromExpr(expr);
       if (i < aggregateExprStartIndex) {
         // register equivalence between grouping slot and grouping expr;
         // do this only when the grouping expr isn't a constant, otherwise
@@ -114,8 +124,10 @@ public abstract class AggregateInfoBase {
         FunctionCallExpr aggExpr = (FunctionCallExpr)expr;
         if (aggExpr.isMergeAggFn()) {
           slotDesc.setLabel(aggExpr.getChild(0).toSql());
+          slotDesc.setSourceExpr(aggExpr.getChild(0));
         } else {
           slotDesc.setLabel(aggExpr.toSql());
+          slotDesc.setSourceExpr(aggExpr);
         }
 
         // count(*) is non-nullable.

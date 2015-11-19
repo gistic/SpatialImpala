@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +16,8 @@ from subprocess import call
 from tests.common.test_vector import *
 from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
 from tests.common.impala_test_suite import *
+from tests.common.skip import SkipIfS3, SkipIfIsilon
+from tests.util.filesystem_utils import WAREHOUSE
 
 # The purpose of view compatibility testing is to check whether views created in Hive
 # can be queried in Impala and vice versa. A test typically consists of
@@ -33,6 +34,12 @@ from tests.common.impala_test_suite import *
 # a so-called "extended view definition". As this process of transformation could
 # potentially change in Impala and/or Hive simply testing various SQL statements
 # in Impala and Hive would be insufficient.
+
+
+# Missing Coverage: Views created by Hive and Impala being visible and queryble by each
+# other on non hdfs storage.
+@SkipIfS3.hive
+@SkipIfIsilon.hive
 class TestViewCompatibility(ImpalaTestSuite):
   TEST_DB_NAME = "view_compat_test_db"
   VALID_SECTION_NAMES = ["CREATE_VIEW", "CREATE_VIEW_RESULTS",\
@@ -53,15 +60,16 @@ class TestViewCompatibility(ImpalaTestSuite):
   def setup_method(self, method):
     # cleanup and create a fresh test database
     self.cleanup_db(self.TEST_DB_NAME)
-    self.execute_query("create database %s" % (self.TEST_DB_NAME))
+    self.execute_query("create database %s location '%s/%s'" % (self.TEST_DB_NAME,
+      WAREHOUSE, self.TEST_DB_NAME))
 
   def teardown_method(self, method):
     self.cleanup_db(self.TEST_DB_NAME)
 
   def test_view_compatibility(self, vector):
-    self.__run_view_compat_test_case('QueryTest/views-compatibility', vector)
+    self._run_view_compat_test_case('QueryTest/views-compatibility', vector)
 
-  def __run_view_compat_test_case(self, test_file_name, vector):
+  def _run_view_compat_test_case(self, test_file_name, vector):
     """
     Runs a view-compatibility test file, containing the following sections:
 
@@ -83,7 +91,7 @@ class TestViewCompatibility(ImpalaTestSuite):
       test_case = ViewCompatTestCase(test_section, test_file_name, self.TEST_DB_NAME)
 
       # create views in Hive and Impala checking against the expected results
-      self.__exec_in_hive(test_case.get_create_view_sql('HIVE'),\
+      self._exec_in_hive(test_case.get_create_view_sql('HIVE'),\
                           test_case.get_create_view_sql('HIVE'),\
                           test_case.get_create_exp_res())
       # The table may or may not have been created in Hive. And so, "invalidate metadata"
@@ -93,7 +101,7 @@ class TestViewCompatibility(ImpalaTestSuite):
       except ImpalaBeeswaxException as e:
         assert "TableNotFoundException" in str(e)
 
-      self.__exec_in_impala(test_case.get_create_view_sql('IMPALA'),\
+      self._exec_in_impala(test_case.get_create_view_sql('IMPALA'),\
                             test_case.get_create_view_sql('IMPALA'),\
                             test_case.get_create_exp_res())
 
@@ -101,47 +109,47 @@ class TestViewCompatibility(ImpalaTestSuite):
       if test_case.has_query_hive_section():
         exp_res = test_case.get_query_exp_res('HIVE');
         if 'HIVE' in exp_res:
-          self.__exec_in_hive(test_case.get_query_view_sql('HIVE'),\
+          self._exec_in_hive(test_case.get_query_view_sql('HIVE'),\
                               test_case.get_create_view_sql('HIVE'), exp_res)
         if 'IMPALA' in exp_res:
-          self.__exec_in_impala(test_case.get_query_view_sql('HIVE'),\
+          self._exec_in_impala(test_case.get_query_view_sql('HIVE'),\
                                 test_case.get_create_view_sql('HIVE'), exp_res)
 
       # explain a simple query on the view created by Impala in Hive and Impala
       if test_case.has_query_impala_section():
         exp_res = test_case.get_query_exp_res('IMPALA');
         if 'HIVE' in exp_res:
-          self.__exec_in_hive(test_case.get_query_view_sql('IMPALA'),\
+          self._exec_in_hive(test_case.get_query_view_sql('IMPALA'),\
                               test_case.get_create_view_sql('IMPALA'), exp_res)
         if 'IMPALA' in exp_res:
-          self.__exec_in_impala(test_case.get_query_view_sql('IMPALA'),\
+          self._exec_in_impala(test_case.get_query_view_sql('IMPALA'),\
                                 test_case.get_create_view_sql('IMPALA'), exp_res)
 
       # drop the views without checking success or failure
-      self.__exec_in_hive(test_case.get_drop_view_sql('HIVE'),\
+      self._exec_in_hive(test_case.get_drop_view_sql('HIVE'),\
                           test_case.get_create_view_sql('HIVE'), None)
       try:
         self.client.invalidate_table(test_case.hive_view_name)
       except ImpalaBeeswaxException as e:
         assert "TableNotFoundException" in str(e)
 
-      self.__exec_in_impala(test_case.get_drop_view_sql('IMPALA'),\
+      self._exec_in_impala(test_case.get_drop_view_sql('IMPALA'),\
                             test_case.get_create_view_sql('IMPALA'), None)
 
-  def __exec_in_hive(self, sql_str, create_view_sql, exp_res):
+  def _exec_in_hive(self, sql_str, create_view_sql, exp_res):
     hive_ret = call(['hive', '-e', sql_str])
-    self.__cmp_expected(sql_str, create_view_sql, exp_res, "HIVE", hive_ret == 0)
+    self._cmp_expected(sql_str, create_view_sql, exp_res, "HIVE", hive_ret == 0)
 
-  def __exec_in_impala(self, sql_str, create_view_sql, exp_res):
+  def _exec_in_impala(self, sql_str, create_view_sql, exp_res):
     success = True
     try:
       impala_ret = self.execute_query(sql_str)
       success = impala_ret.success
     except: # consider any exception a failure
       success = False
-    self.__cmp_expected(sql_str, create_view_sql, exp_res, "IMPALA", success)
+    self._cmp_expected(sql_str, create_view_sql, exp_res, "IMPALA", success)
 
-  def __cmp_expected(self, sql_str, create_view_sql, exp_res, engine, success):
+  def _cmp_expected(self, sql_str, create_view_sql, exp_res, engine, success):
     if exp_res is None:
       return
     if exp_res[engine] and not success:
@@ -166,7 +174,7 @@ class ViewCompatTestCase(object):
     # get map of expected results from test sections
     if 'CREATE_VIEW_RESULTS' in test_section:
       self.create_exp_res =\
-          self.__get_expected_results(test_section['CREATE_VIEW_RESULTS'])
+          self._get_expected_results(test_section['CREATE_VIEW_RESULTS'])
     else:
       assert 0, 'Error in test file %s. Test cases require a '\
           'CREATE_VIEW_RESULTS section.\n%s' %\
@@ -175,12 +183,12 @@ class ViewCompatTestCase(object):
     self.query_hive_exp_res = None
     if 'QUERY_HIVE_VIEW_RESULTS' in test_section:
       self.query_hive_exp_res =\
-          self.__get_expected_results(test_section['QUERY_HIVE_VIEW_RESULTS'])
+          self._get_expected_results(test_section['QUERY_HIVE_VIEW_RESULTS'])
 
     self.query_impala_exp_res = None
     if 'QUERY_IMPALA_VIEW_RESULTS' in test_section:
       self.query_impala_exp_res =\
-          self.__get_expected_results(test_section['QUERY_IMPALA_VIEW_RESULTS'])
+          self._get_expected_results(test_section['QUERY_IMPALA_VIEW_RESULTS'])
 
     if self.query_hive_exp_res is None and self.query_impala_exp_res is None:
       assert 0, 'Error in test file %s. Test cases require a QUERY_HIVE_VIEW_RESULTS '\
@@ -190,7 +198,7 @@ class ViewCompatTestCase(object):
     # clean test section, remove comments etc.
     self.create_view_sql = QueryTestSectionReader.build_query(test_section['CREATE_VIEW'])
 
-    view_name = self.__get_view_name(self.create_view_sql)
+    view_name = self._get_view_name(self.create_view_sql)
     if view_name.find(".") != -1:
       assert 0, 'Error in test file %s. Found unexpected view name %s that is '\
           'qualified with a database' % (test_file_name, view_name)
@@ -215,7 +223,7 @@ class ViewCompatTestCase(object):
     self.drop_hive_view_sql = "drop view %s" % (self.hive_view_name)
     self.drop_impala_view_sql = "drop view %s" % (self.impala_view_name)
 
-  def __get_view_name(self, create_view_sql):
+  def _get_view_name(self, create_view_sql):
     lexer = shlex.shlex(create_view_sql)
     tokens = list(lexer)
     # sanity check the create view statement
@@ -231,7 +239,7 @@ class ViewCompatTestCase(object):
       # expect a create view view_name ...
       return tokens[2]
 
-  def __get_expected_results(self, section_text):
+  def _get_expected_results(self, section_text):
     lines = section_text.splitlines()
     exp_res = dict()
     for line in lines:

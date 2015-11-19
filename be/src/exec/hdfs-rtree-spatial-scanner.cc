@@ -69,8 +69,8 @@ Status HdfsRTreeSpatialScanner::IssueInitialRanges(HdfsScanNode* scan_node,
     header_ranges.push_back(files[i]->splits[0]);
   }
 
-  RETURN_IF_ERROR(scan_node->AddDiskIoRanges(header_ranges));
-  return Status::OK;
+  RETURN_IF_ERROR(scan_node->AddDiskIoRanges(header_ranges, 0));
+  return Status::OK();
 }
 
 Status HdfsRTreeSpatialScanner::ProcessSplit() {
@@ -107,18 +107,17 @@ Status HdfsRTreeSpatialScanner::ProcessSplit() {
         RTreeSplit split = list_of_splits[i];
         ScanRangeMetadata* metadata =
             reinterpret_cast<ScanRangeMetadata*>(file->splits[0]->meta_data());
-        DiskIoMgr::ScanRange* file_range = scan_node_->AllocateScanRange(
-            file->filename.c_str(), split.end_offset - split.start_offset, split.start_offset,
-            metadata->partition_id, file->splits[0]->disk_id(), file->splits[0]->try_cache());
+        DiskIoMgr::ScanRange* file_range = scan_node_->AllocateScanRange(file->fs, file->filename.c_str(), split.end_offset - split.start_offset, split.start_offset,
+            metadata->partition_id, file->splits[0]->disk_id(), file->splits[0]->try_cache(), file->splits[0]->expected_local(), file->mtime);
         new_scan_ranges.push_back(file_range);
       }
 
-      RETURN_IF_ERROR(scan_node_->AddDiskIoRanges(new_scan_ranges));
+      RETURN_IF_ERROR(scan_node_->AddDiskIoRanges(new_scan_ranges, 1));
 
       // Update Scan node with the new number of (splits/scan ranges) for this file.
       spatial_scan_node->UpdateScanRanges(THdfsFileFormat::RTREE, file->file_compression,
           file->splits.size(), list_of_splits.size());
-      return Status::OK;
+      return Status::OK();
     }
   }
 
@@ -144,7 +143,7 @@ Status HdfsRTreeSpatialScanner::ProcessSplit() {
   }
 
   // All done with this scan range.
-  return Status::OK;
+  return Status::OK();
 }
 
 void HdfsRTreeSpatialScanner::Close() {
@@ -177,14 +176,14 @@ Status HdfsRTreeSpatialScanner::InitNewRange() {
   }
 
   delimited_text_parser_.reset(new DelimitedTextParser(
-      scan_node_->num_cols(), scan_node_->num_partition_keys(),
+      scan_node_->hdfs_table()->num_cols(), scan_node_->num_partition_keys(),
       scan_node_->is_materialized_col(), hdfs_partition->line_delim(),
       field_delim, collection_delim, hdfs_partition->escape_char()));
   text_converter_.reset(new TextConverter(hdfs_partition->escape_char(),
       scan_node_->hdfs_table()->null_column_value()));
 
   RETURN_IF_ERROR(ResetScanner());
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsRTreeSpatialScanner::ResetScanner() {
@@ -209,16 +208,16 @@ Status HdfsRTreeSpatialScanner::ResetScanner() {
   // Initialize codegen fn
   RETURN_IF_ERROR(InitializeWriteTuplesFn(
     context_->partition_descriptor(), THdfsFileFormat::RTREE, "HdfsRTreeSpatialScanner"));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsRTreeSpatialScanner::FinishScanRange() {
-  if (scan_node_->ReachedLimit()) return Status::OK;
+  if (scan_node_->ReachedLimit()) return Status::OK();
 
   // For text we always need to scan past the scan range to find the next delimiter
   while (true) {
     bool eosr = true;
-    Status status = Status::OK;
+    Status status = Status::OK();
     byte_buffer_read_size_ = 0;
 
     // If compressed text, then there is nothing more to be read.
@@ -232,8 +231,10 @@ Status HdfsRTreeSpatialScanner::FinishScanRange() {
       if (!status.ok()) {
         stringstream ss;
         ss << "Read failed while trying to finish scan range: " << stream_->filename()
-           << ":" << stream_->file_offset() << endl << status.GetErrorMsg();
-        if (state_->LogHasSpace()) state_->LogError(ss.str());
+           << ":" << stream_->file_offset() << endl << status.GetDetail();
+        if (state_->LogHasSpace()) {
+          state_->LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()));
+        }
         if (state_->abort_on_error()) return Status(ss.str());
       } else if (!partial_tuple_empty_ || !boundary_column_.Empty() ||
           !boundary_row_.Empty()) {
@@ -267,7 +268,7 @@ Status HdfsRTreeSpatialScanner::FinishScanRange() {
     DCHECK_EQ(num_tuples, 0);
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsRTreeSpatialScanner::ProcessRange(int* num_tuples, bool past_scan_range) {
@@ -350,9 +351,9 @@ Status HdfsRTreeSpatialScanner::ProcessRange(int* num_tuples, bool past_scan_ran
       break;
     }
 
-    if (scan_node_->ReachedLimit()) return Status::OK;
+    if (scan_node_->ReachedLimit()) return Status::OK();
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HdfsRTreeSpatialScanner::FillByteBuffer(bool* eosr, int num_bytes) {
@@ -373,7 +374,7 @@ Status HdfsRTreeSpatialScanner::FillByteBuffer(bool* eosr, int num_bytes) {
     // If didn't read anything, return.
     if (byte_buffer_read_size_ == 0) {
       *eosr = true;
-      return Status::OK;
+      return Status::OK();
     }
     DCHECK(decompression_type_ != THdfsCompression::SNAPPY);
 
@@ -427,7 +428,7 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
   // If RTree was constructed, this scan range is already at the first tuple.
   if (rtree_ != NULL) {
     DCHECK(delimited_text_parser_->AtTupleStart());
-    return Status::OK;
+    return Status::OK();
   }
 
   if (stream_->scan_range()->offset() != 0) {
@@ -458,7 +459,7 @@ Status HdfsRTreeSpatialScanner::FindFirstTuple(bool* tuple_found) {
     return SkipHeader(tuple_found);
   }
   DCHECK(delimited_text_parser_->AtTupleStart());
-  return Status::OK;
+  return Status::OK();
 }
 
 int HdfsRTreeSpatialScanner::ReadRTreeBytes(char* offset_array, int prev_read_size_offset,
@@ -591,7 +592,7 @@ Status HdfsRTreeSpatialScanner::ReadRTreeFileHeader() {
       }
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 
@@ -654,7 +655,7 @@ Status HdfsRTreeSpatialScanner::SkipHeader(bool* tuple_found) {
   }
 
   DCHECK(delimited_text_parser_->AtTupleStart());
-  return Status::OK;
+  return Status::OK();
 }
 
 // Codegen for materializing parsed data into tuples.  The function WriteCompleteTuple is
@@ -683,7 +684,7 @@ Status HdfsRTreeSpatialScanner::Prepare(ScannerContext* context) {
   field_locations_.resize(state_->batch_size() * scan_node_->materialized_slots().size());
   row_end_locations_.resize(state_->batch_size());
 
-  return Status::OK;
+  return Status::OK();
 }
 
 void HdfsRTreeSpatialScanner::LogRowParseError(int row_idx, stringstream* ss) {
@@ -741,7 +742,7 @@ int HdfsRTreeSpatialScanner::WriteFields(MemPool* pool, TupleRow* tuple_row,
           stringstream ss;
           ss << "file: " << stream_->filename() << endl << "record: ";
           LogRowParseError(0, &ss);
-          state_->LogError(ss.str());
+          state_->LogError(ErrorMsg(TErrorCode::GENERAL, ss.str()));
         }
         if (state_->abort_on_error()) parse_status_ = Status(state_->ErrorLog());
         if (!parse_status_.ok()) return 0;
@@ -759,7 +760,7 @@ int HdfsRTreeSpatialScanner::WriteFields(MemPool* pool, TupleRow* tuple_row,
 
       if (EvalConjuncts(tuple_row)) {
         ++num_tuples_materialized;
-        tuple_ = next_tuple(tuple_);
+        tuple_ = next_tuple(tuple_byte_size_, tuple_);
         tuple_row = next_row(tuple_row);
       }
     }
@@ -819,9 +820,7 @@ void HdfsRTreeSpatialScanner::CopyBoundaryField(FieldLocation* data, MemPool* po
   data->len = needs_escape ? -total_len : total_len;
 }
 
-int HdfsRTreeSpatialScanner::WritePartialTuple(FieldLocation* fields,
-    int num_fields, bool copy_strings) {
-  copy_strings |= scan_node_->requires_compaction();
+int HdfsRTreeSpatialScanner::WritePartialTuple(FieldLocation* fields, int num_fields, bool copy_strings) {
   int next_line_offset = 0;
   for (int i = 0; i < num_fields; ++i) {
     int need_escape = false;

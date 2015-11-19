@@ -19,7 +19,7 @@
 #include "runtime/raw-value.h"
 #include "gen-cpp/PlanNodes_types.h"
 
-using namespace std;
+#include "common/names.h"
 
 namespace impala {
 
@@ -32,53 +32,60 @@ SelectNode::SelectNode(
 }
 
 Status SelectNode::Prepare(RuntimeState* state) {
+  SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Prepare(state));
-  child_row_batch_.reset(
-      new RowBatch(child(0)->row_desc(), state->batch_size(), mem_tracker()));
-  return Status::OK;
+  return Status::OK();
 }
 
 Status SelectNode::Open(RuntimeState* state) {
+  SCOPED_TIMER(runtime_profile_->total_time_counter());
   RETURN_IF_ERROR(ExecNode::Open(state));
   RETURN_IF_ERROR(child(0)->Open(state));
-  return Status::OK;
+  child_row_batch_.reset(
+      new RowBatch(child(0)->row_desc(), state->batch_size(), mem_tracker()));
+  return Status::OK();
 }
 
 Status SelectNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
-  RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
   SCOPED_TIMER(runtime_profile_->total_time_counter());
+  RETURN_IF_ERROR(ExecDebugAction(TExecNodePhase::GETNEXT, state));
 
   if (ReachedLimit() || (child_row_idx_ == child_row_batch_->num_rows() && child_eos_)) {
     // we're already done or we exhausted the last child batch and there won't be any
     // new ones
     *eos = true;
-    return Status::OK;
+    child_row_batch_->TransferResourceOwnership(row_batch);
+    return Status::OK();
   }
+  *eos = false;
 
   // start (or continue) consuming row batches from child
   while (true) {
     RETURN_IF_CANCELLED(state);
-    RETURN_IF_ERROR(state->QueryMaintenance());
+    RETURN_IF_ERROR(QueryMaintenance(state));
     if (child_row_idx_ == child_row_batch_->num_rows()) {
+      child_row_idx_ = 0;
       // fetch next batch
       child_row_batch_->TransferResourceOwnership(row_batch);
       child_row_batch_->Reset();
+      if (row_batch->AtCapacity()) return Status::OK();
       RETURN_IF_ERROR(child(0)->GetNext(state, child_row_batch_.get(), &child_eos_));
-      child_row_idx_ = 0;
     }
 
     if (CopyRows(row_batch)) {
       *eos = ReachedLimit()
           || (child_row_idx_ == child_row_batch_->num_rows() && child_eos_);
-      return Status::OK;
+      if (*eos) child_row_batch_->TransferResourceOwnership(row_batch);
+      return Status::OK();
     }
     if (child_eos_) {
       // finished w/ last child row batch, and child eos is true
+      child_row_batch_->TransferResourceOwnership(row_batch);
       *eos = true;
-      return Status::OK;
+      return Status::OK();
     }
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 bool SelectNode::CopyRows(RowBatch* output_batch) {
@@ -101,6 +108,13 @@ bool SelectNode::CopyRows(RowBatch* output_batch) {
     }
   }
   return output_batch->AtCapacity();
+}
+
+Status SelectNode::Reset(RuntimeState* state) {
+  child_row_batch_->Reset();
+  child_row_idx_ = 0;
+  child_eos_ = false;
+  return ExecNode::Reset(state);
 }
 
 void SelectNode::Close(RuntimeState* state) {

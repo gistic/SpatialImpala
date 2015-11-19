@@ -25,7 +25,8 @@
 #include "runtime/mem-pool.h"
 #include "runtime/tuple.h"
 
-using namespace std;
+#include "common/names.h"
+
 using namespace impala;
 
 jclass HBaseTableScanner::scan_cl_ = NULL;
@@ -48,6 +49,7 @@ jmethodID HBaseTableScanner::scan_set_start_row_id_ = NULL;
 jmethodID HBaseTableScanner::scan_set_stop_row_id_ = NULL;
 jmethodID HBaseTableScanner::resultscanner_next_id_ = NULL;
 jmethodID HBaseTableScanner::resultscanner_close_id_ = NULL;
+jmethodID HBaseTableScanner::result_isempty_id_ = NULL;
 jmethodID HBaseTableScanner::result_raw_cells_id_ = NULL;
 jmethodID HBaseTableScanner::cell_get_row_array_ = NULL;
 jmethodID HBaseTableScanner::cell_get_family_array_ = NULL;
@@ -202,6 +204,9 @@ Status HBaseTableScanner::Init() {
         "()[Lorg/apache/hadoop/hbase/KeyValue;");
   }
   RETURN_ERROR_IF_EXC(env);
+  result_isempty_id_ = env->GetMethodID(result_cl_, "isEmpty", "()Z");
+  RETURN_ERROR_IF_EXC(env);
+
 
   // Cell or equivalent KeyValue method ids.
   // Method ids to retrieve buffers backing different portions of row data.
@@ -279,7 +284,7 @@ Status HBaseTableScanner::Init() {
   RETURN_IF_ERROR(JniUtil::LocalToGlobalRef(env, reinterpret_cast<jobject>(compare_ops_),
       reinterpret_cast<jobject*>(&compare_ops_)));
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::ScanSetup(JNIEnv* env, const TupleDescriptor* tuple_desc,
@@ -395,13 +400,13 @@ Status HBaseTableScanner::ScanSetup(JNIEnv* env, const TupleDescriptor* tuple_de
     RETURN_ERROR_IF_EXC(env);
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::HandleResultScannerTimeout(JNIEnv* env, bool* timeout) {
   *timeout = false;
   jthrowable exc = env->ExceptionOccurred();
-  if (exc == NULL) return Status::OK;
+  if (exc == NULL) return Status::OK();
 
   // GetJniExceptionMsg gets the error message and clears the exception status (which is
   // necessary). We return the error if the exception was not a ScannerTimeoutException.
@@ -458,7 +463,7 @@ Status HBaseTableScanner::InitScanRange(JNIEnv* env, jbyteArray start_bytes,
   RETURN_IF_ERROR(htable_->GetResultScanner(scan_, &resultscanner_));
   resultscanner_ = env->NewGlobalRef(resultscanner_);
   RETURN_ERROR_IF_EXC(env);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::StartScan(JNIEnv* env, const TupleDescriptor* tuple_desc,
@@ -490,7 +495,7 @@ Status HBaseTableScanner::CreateByteArray(JNIEnv* env, const string& s,
   } else {
     *bytes = reinterpret_cast<jbyteArray>(empty_row_);
   }
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::Next(JNIEnv* env, bool* has_next) {
@@ -514,13 +519,17 @@ Status HBaseTableScanner::Next(JNIEnv* env, bool* has_next) {
         // There shouldn't be a timeout now, so we will just return any errors.
         RETURN_ERROR_IF_EXC(env);
       }
-
       // jump to the next region when finished with the current region.
-      if (result == NULL &&
-          current_scan_range_idx_ + 1 < scan_range_vector_->size()) {
+      if (result == NULL && current_scan_range_idx_ + 1 < scan_range_vector_->size()) {
         ++current_scan_range_idx_;
         RETURN_IF_ERROR(InitScanRange(env,
             (*scan_range_vector_)[current_scan_range_idx_]));
+        continue;
+      }
+
+      // Ignore empty rows
+      if (result != NULL &&
+          JNI_TRUE == env->CallBooleanMethod(result, result_isempty_id_)) {
         continue;
       }
       break;
@@ -529,7 +538,7 @@ Status HBaseTableScanner::Next(JNIEnv* env, bool* has_next) {
 
   if (result == NULL) {
     *has_next = false;
-    return Status::OK;
+    return Status::OK();
   }
 
   if (cells_ != NULL) env->DeleteGlobalRef(cells_);
@@ -557,7 +566,7 @@ Status HBaseTableScanner::Next(JNIEnv* env, bool* has_next) {
 
   value_pool_->Clear();
   *has_next = true;
-  return Status::OK;
+  return Status::OK();
 }
 
 inline void HBaseTableScanner::WriteTupleSlot(const SlotDescriptor* slot_desc,
@@ -614,7 +623,7 @@ Status HBaseTableScanner::GetRowKey(JNIEnv* env, void** key, int* key_length) {
   jobject cell = env->GetObjectArrayElement(cells_, 0);
   GetRowKey(env, cell, key, key_length);
   RETURN_ERROR_IF_EXC(env);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::GetRowKey(JNIEnv* env, const SlotDescriptor* slot_desc,
@@ -626,7 +635,7 @@ Status HBaseTableScanner::GetRowKey(JNIEnv* env, const SlotDescriptor* slot_desc
   DCHECK_EQ(key_length, slot_desc->type().GetByteSize());
   WriteTupleSlot(slot_desc, tuple, reinterpret_cast<char*>(key));
   RETURN_ERROR_IF_EXC(env);
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::GetCurrentValue(JNIEnv* env, const string& family,
@@ -634,7 +643,7 @@ Status HBaseTableScanner::GetCurrentValue(JNIEnv* env, const string& family,
   // Current row doesn't have any more cells. All remaining values are NULL.
   if (cell_index_ >= num_cells_) {
     *is_null = true;
-    return Status::OK;
+    return Status::OK();
   }
   JniLocalFrame jni_frame;
   RETURN_IF_ERROR(jni_frame.push(env));
@@ -646,7 +655,7 @@ Status HBaseTableScanner::GetCurrentValue(JNIEnv* env, const string& family,
     GetFamily(env, cell, &family_data, &family_length);
     if (CompareStrings(family, family_data, family_length) != 0) {
       *is_null = true;
-      return Status::OK;
+      return Status::OK();
     }
 
     // Check qualifier. If it doesn't match, we have a NULL value.
@@ -655,12 +664,12 @@ Status HBaseTableScanner::GetCurrentValue(JNIEnv* env, const string& family,
     GetQualifier(env, cell, &qualifier_data, &qualifier_length);
     if (CompareStrings(qualifier, qualifier_data, qualifier_length) != 0) {
       *is_null = true;
-      return Status::OK;
+      return Status::OK();
     }
   }
   GetValue(env, cell, data, length);
   *is_null = false;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::GetValue(JNIEnv* env, const string& family,
@@ -671,10 +680,10 @@ Status HBaseTableScanner::GetValue(JNIEnv* env, const string& family,
   if (is_null) {
     *value = NULL;
     *value_length = 0;
-    return Status::OK;
+    return Status::OK();
   }
   ++cell_index_;
-  return Status::OK;
+  return Status::OK();
 }
 
 Status HBaseTableScanner::GetValue(JNIEnv* env, const string& family,
@@ -686,12 +695,12 @@ Status HBaseTableScanner::GetValue(JNIEnv* env, const string& family,
   RETURN_ERROR_IF_EXC(env);
   if (is_null) {
     tuple->SetNull(slot_desc->null_indicator_offset());
-    return Status::OK;
+    return Status::OK();
   }
   DCHECK_EQ(value_length, slot_desc->type().GetByteSize());
   WriteTupleSlot(slot_desc, tuple, reinterpret_cast<char*>(value));
   ++cell_index_;
-  return Status::OK;
+  return Status::OK();
 }
 
 int HBaseTableScanner::CompareStrings(const string& s, void* data, int length) {

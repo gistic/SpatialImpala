@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,6 +15,10 @@
 # Client tests for Impala's HiveServer2 interface
 
 import pytest
+import json
+import time
+from socket import getfqdn
+from urllib2 import urlopen
 from tests.hs2.hs2_test_suite import HS2TestSuite, needs_session, operation_id_to_query_id
 from TCLIService import TCLIService
 from ImpalaService import ImpalaHiveServer2Service
@@ -26,6 +29,18 @@ class TestHS2(HS2TestSuite):
     """Check that a session can be opened"""
     open_session_req = TCLIService.TOpenSessionReq()
     TestHS2.check_response(self.hs2_client.OpenSession(open_session_req))
+
+  def test_open_session_http_addr(self):
+    """Check that OpenSession returns the coordinator's http address."""
+    open_session_req = TCLIService.TOpenSessionReq()
+    open_session_resp = self.hs2_client.OpenSession(open_session_req)
+    TestHS2.check_response(open_session_resp)
+    http_addr = open_session_resp.configuration['http_addr']
+    resp = urlopen("http://%s/queries?json" % http_addr)
+    assert resp.msg == 'OK'
+    queries_json = json.loads(resp.read())
+    assert 'completed_queries' in queries_json
+    assert 'in_flight_queries' in queries_json
 
   def test_open_session_unsupported_protocol(self):
     """Test that we get the right protocol version back if we ask for one larger than the
@@ -62,6 +77,61 @@ class TestHS2(HS2TestSuite):
     # Double close should be an error
     TestHS2.check_response(self.hs2_client.CloseSession(close_session_req),
                            TCLIService.TStatusCode.ERROR_STATUS)
+
+  # This test verifies the number of open and expired sessions so avoid running
+  # concurrently with other sessions.
+  @pytest.mark.execute_serially
+  def test_idle_session_timeout(self):
+    """Test for idle sessions' expiration"""
+    timeout_periods = [0, 5, 10]
+    session_handles = []
+
+    for timeout in timeout_periods:
+      open_session_req = TCLIService.TOpenSessionReq()
+      open_session_req.configuration = {}
+      open_session_req.configuration['idle_session_timeout'] = str(timeout)
+      resp = self.hs2_client.OpenSession(open_session_req)
+      TestHS2.check_response(resp)
+      session_handles.append(resp.sessionHandle)
+
+    num_open_sessions = self.impalad_test_service.get_metric_value(
+      "impala-server.num-open-hiveserver2-sessions")
+    num_expired_sessions = self.impalad_test_service.get_metric_value(
+      "impala-server.num-sessions-expired")
+
+    execute_statement_req = TCLIService.TExecuteStatementReq()
+    execute_statement_req.statement = "SELECT 1+2"
+    for session_handle in session_handles:
+      execute_statement_req.sessionHandle = session_handle
+      resp = self.hs2_client.ExecuteStatement(execute_statement_req)
+      TestHS2.check_response(resp)
+
+    assert num_open_sessions == self.impalad_test_service.get_metric_value(
+      "impala-server.num-open-hiveserver2-sessions")
+    assert num_expired_sessions == self.impalad_test_service.get_metric_value(
+      "impala-server.num-sessions-expired")
+
+    for timeout in timeout_periods:
+      sleep_period = timeout * 1.5
+      time.sleep(sleep_period)
+      for i, session_handle in enumerate(session_handles):
+        if session_handle is not None:
+          execute_statement_req.sessionHandle = session_handle
+          resp = self.hs2_client.ExecuteStatement(execute_statement_req)
+          if timeout_periods[i] == 0 or sleep_period < timeout_periods[i]:
+            TestHS2.check_response(resp)
+          else:
+            TestHS2.check_response(resp, TCLIService.TStatusCode.ERROR_STATUS)
+            close_session_req = TCLIService.TCloseSessionReq()
+            close_session_req.sessionHandle = session_handles[i]
+            TestHS2.check_response(self.hs2_client.CloseSession(close_session_req))
+            session_handles[i] = None
+            num_open_sessions -= 1
+            num_expired_sessions += 1
+      assert num_open_sessions == self.impalad_test_service.get_metric_value(
+        "impala-server.num-open-hiveserver2-sessions")
+      assert num_expired_sessions == self.impalad_test_service.get_metric_value(
+        "impala-server.num-sessions-expired")
 
   @needs_session()
   def test_get_operation_status(self):
@@ -188,10 +258,6 @@ class TestHS2(HS2TestSuite):
 
   @needs_session()
   def test_get_log(self):
-    # Test query that generates analysis warnings
-    log = self.get_log("compute stats functional.decimal_tbl")
-    assert "Decimal column stats not yet supported" in log
-
     # Test query that generates BE warnings
     log = self.get_log("select * from functional.alltypeserror")
     assert "Error converting column" in log
@@ -199,18 +265,6 @@ class TestHS2(HS2TestSuite):
     # Test overflow warning
     log = self.get_log("select cast(1000 as decimal(2, 1))")
     assert "Expression overflowed, returning NULL" in log
-
-    # Test CDH4 decimal warnings
-    TEST_TABLE = "%s.get_log_test" % self.TEST_DB
-    LOG_MSG = "DECIMAL columns are not supported by every component of CDH4"
-    try:
-      log = self.get_log("create table %s(a decimal)" % TEST_TABLE)
-      assert LOG_MSG in log
-      log = self.get_log("alter table %s add columns (b int, c decimal)" % TEST_TABLE)
-      assert LOG_MSG in log
-      log = self.get_log("alter table %s change b b decimal(2,1)" % TEST_TABLE)
-    finally:
-      self.client.execute("drop table if exists %s.get_log_test" % self.TEST_DB)
 
   @needs_session()
   def test_get_exec_summary(self):
@@ -225,8 +279,10 @@ class TestHS2(HS2TestSuite):
     exec_summary_req.sessionHandle = self.session_handle
     exec_summary_resp = self.hs2_client.GetExecSummary(exec_summary_req)
 
-    # GetExecSummary() only works for closed queries
-    TestHS2.check_response(exec_summary_resp, TCLIService.TStatusCode.ERROR_STATUS)
+    # Test getting the summary while query is running. We can't verify anything
+    # about the summary (depends how much progress query has made) but the call
+    # should work.
+    TestHS2.check_response(exec_summary_resp)
 
     close_operation_req = TCLIService.TCloseOperationReq()
     close_operation_req.operationHandle = execute_statement_resp.operationHandle
@@ -259,3 +315,29 @@ class TestHS2(HS2TestSuite):
     TestHS2.check_response(get_profile_resp)
 
     assert execute_statement_req.statement in get_profile_resp.profile
+
+  @needs_session(conf_overlay={"use:database": "functional"})
+  def test_change_default_database(self):
+    execute_statement_req = TCLIService.TExecuteStatementReq()
+    execute_statement_req.sessionHandle = self.session_handle
+    execute_statement_req.statement = "SELECT 1 FROM alltypes LIMIT 1"
+    execute_statement_resp = self.hs2_client.ExecuteStatement(execute_statement_req)
+    # Will fail if there's no table called 'alltypes' in the database
+    TestHS2.check_response(execute_statement_resp)
+
+  @needs_session(conf_overlay={"use:database": "FUNCTIONAL"})
+  def test_change_default_database_case_insensitive(self):
+    execute_statement_req = TCLIService.TExecuteStatementReq()
+    execute_statement_req.sessionHandle = self.session_handle
+    execute_statement_req.statement = "SELECT 1 FROM alltypes LIMIT 1"
+    execute_statement_resp = self.hs2_client.ExecuteStatement(execute_statement_req)
+    # Will fail if there's no table called 'alltypes' in the database
+    TestHS2.check_response(execute_statement_resp)
+
+  @needs_session(conf_overlay={"use:database": "doesnt-exist"})
+  def test_bad_default_database(self):
+    execute_statement_req = TCLIService.TExecuteStatementReq()
+    execute_statement_req.sessionHandle = self.session_handle
+    execute_statement_req.statement = "SELECT 1 FROM alltypes LIMIT 1"
+    execute_statement_resp = self.hs2_client.ExecuteStatement(execute_statement_req)
+    TestHS2.check_response(execute_statement_resp, TCLIService.TStatusCode.ERROR_STATUS)

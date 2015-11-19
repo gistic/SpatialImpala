@@ -15,8 +15,10 @@
 #include "exprs/aggregate-functions.h"
 
 #include <math.h>
-#include <sstream>
 #include <algorithm>
+#include <map>
+#include <sstream>
+#include <utility>
 
 #include <boost/random/ranlux.hpp>
 #include <boost/random/uniform_int.hpp>
@@ -26,10 +28,93 @@
 #include "runtime/string-value.h"
 #include "runtime/timestamp-value.h"
 #include "exprs/anyval-util.h"
+#include "exprs/hll-bias.h"
 
-using namespace std;
-using namespace boost;
-using namespace boost::random;
+#include "common/names.h"
+
+using boost::uniform_int;
+using boost::ranlux64_3;
+using std::push_heap;
+using std::pop_heap;
+using std::map;
+using std::make_pair;
+
+namespace {
+// Threshold for each precision where it's better to use linear counting instead
+// of the bias corrected estimate.
+static float HllThreshold(int p) {
+  switch (p) {
+    case 4:
+      return 10.0;
+    case 5:
+      return 20.0;
+    case 6:
+      return 40.0;
+    case 7:
+      return 80.0;
+    case 8:
+      return 220.0;
+    case 9:
+      return 400.0;
+    case 10:
+      return 900.0;
+    case 11:
+      return 1800.0;
+    case 12:
+      return 3100.0;
+    case 13:
+      return 6500.0;
+    case 14:
+      return 11500.0;
+    case 15:
+      return 20000.0;
+    case 16:
+      return 50000.0;
+    case 17:
+      return 120000.0;
+    case 18:
+      return 350000.0;
+  }
+  return 0.0;
+}
+
+// Implements k nearest neighbor interpolation for k=6,
+// we choose 6 bassed on the HLL++ paper
+int64_t HllEstimateBias(int64_t estimate) {
+  const size_t K = 6;
+
+  // Precision index into data arrays
+  // We don't have data for precisions less than 4
+  DCHECK(impala::AggregateFunctions::HLL_PRECISION >= 4);
+  const size_t idx = impala::AggregateFunctions::HLL_PRECISION - 4;
+
+  // Calculate the square of the difference of this estimate to all
+  // precalculated estimates for a particular precision
+  map<double, size_t> distances;
+  for (size_t i = 0;
+      i < impala::HLL_DATA_SIZES[idx] / sizeof(double); ++i) {
+    double val = estimate - impala::HLL_RAW_ESTIMATE_DATA[idx][i];
+    distances.insert(make_pair(val * val, i));
+  }
+
+  size_t nearest[K];
+  size_t j = 0;
+  // Use a sorted map to find the K closest estimates to our initial estimate
+  for (map<double, size_t>::iterator it = distances.begin();
+       j < K && it != distances.end(); ++it, ++j) {
+    nearest[j] = it->second;
+  }
+
+  // Compute the average bias correction the K closest estimates
+  double bias = 0.0;
+  for (size_t i = 0; i < K; ++i) {
+    bias += impala::HLL_BIAS_DATA[idx][nearest[i]];
+  }
+
+  return bias / K;
+}
+
+}
 
 // TODO: this file should be cross compiled and then all of the builtin
 // aggregate functions will have a codegen enabled path. Then we can remove
@@ -42,9 +127,7 @@ StringVal ToStringVal(FunctionContext* context, T val) {
   stringstream ss;
   ss << val;
   const string &str = ss.str();
-  StringVal string_val(context, str.size());
-  memcpy(string_val.ptr, str.c_str(), str.size());
-  return string_val;
+  return StringVal::CopyFrom(context, reinterpret_cast<const uint8_t*>(str.c_str()), str.size());
 }
 
 // Delimiter to use if the separator is NULL.
@@ -52,8 +135,8 @@ static const StringVal DEFAULT_STRING_CONCAT_DELIM((uint8_t*)", ", 2);
 
 // Hyperloglog precision. Default taken from paper. Doesn't seem to matter very
 // much when between [6,12]
-const int HLL_PRECISION = 10;
-const int HLL_LEN = 1024; // 2^HLL_PRECISION
+const int AggregateFunctions::HLL_PRECISION = 10;
+const int AggregateFunctions::HLL_LEN = 1024; // 2^HLL_PRECISION
 
 void AggregateFunctions::InitNull(FunctionContext*, AnyVal* dst) {
   dst->is_null = true;
@@ -74,9 +157,7 @@ void AggregateFunctions::InitZero(FunctionContext*, DecimalVal* dst) {
 StringVal AggregateFunctions::StringValGetValue(
     FunctionContext* ctx, const StringVal& src) {
   if (src.is_null) return src;
-  StringVal result(ctx, src.len);
-  memcpy(result.ptr, src.ptr, src.len);
-  return result;
+  return StringVal::CopyFrom(ctx, src.ptr, src.len);
 }
 
 StringVal AggregateFunctions::StringValSerializeOrFinalize(
@@ -182,7 +263,7 @@ void AggregateFunctions::TimestampAvgUpdate(FunctionContext* ctx,
   DCHECK(dst->ptr != NULL);
   DCHECK_EQ(sizeof(AvgState), dst->len);
   AvgState* avg = reinterpret_cast<AvgState*>(dst->ptr);
-  double val = TimestampValue::FromTimestampVal(src);
+  double val = TimestampValue::FromTimestampVal(src).ToSubsecondUnixTime();
   avg->sum += val;
   ++avg->count;
 }
@@ -193,7 +274,7 @@ void AggregateFunctions::TimestampAvgRemove(FunctionContext* ctx,
   DCHECK(dst->ptr != NULL);
   DCHECK_EQ(sizeof(AvgState), dst->len);
   AvgState* avg = reinterpret_cast<AvgState*>(dst->ptr);
-  double val = TimestampValue::FromTimestampVal(src);
+  double val = TimestampValue::FromTimestampVal(src).ToSubsecondUnixTime();
   avg->sum -= val;
   --avg->count;
   DCHECK_GE(avg->count, 0);
@@ -246,12 +327,11 @@ void AggregateFunctions::DecimalAvgAddOrRemove(FunctionContext* ctx,
   DecimalAvgState* avg = reinterpret_cast<DecimalAvgState*>(dst->ptr);
   const FunctionContext::TypeDesc* arg_desc = ctx->GetArgType(0);
   DCHECK(arg_desc != NULL);
-  const ColumnType& arg_type = AnyValUtil::TypeDescToColumnType(*arg_desc);
 
   // Since the src and dst are guaranteed to be the same scale, we can just
   // do a simple add.
   int m = remove ? -1 : 1;
-  switch (arg_type.GetByteSize()) {
+  switch (ColumnType::GetDecimalByteSize(arg_desc->precision)) {
     case 4:
       avg->sum.val16 += m * src.val4;
       break;
@@ -262,7 +342,7 @@ void AggregateFunctions::DecimalAvgAddOrRemove(FunctionContext* ctx,
       avg->sum.val16 += m * src.val16;
       break;
     default:
-      DCHECK(false) << "Invalid byte size for type " << arg_type.DebugString();
+      DCHECK(false) << "Invalid byte size";
   }
   if (remove) {
     --avg->count;
@@ -499,13 +579,7 @@ void AggregateFunctions::StringConcatUpdate(FunctionContext* ctx,
     *result = StringVal(ctx->Allocate(header_len), header_len);
     *reinterpret_cast<StringConcatHeader*>(result->ptr) = sep->len;
   }
-  int new_len = result->len + sep->len + src.len;
-  result->ptr = ctx->Reallocate(result->ptr, new_len);
-  memcpy(result->ptr + result->len, sep->ptr, sep->len);
-  result->len += sep->len;
-  memcpy(result->ptr + result->len, src.ptr, src.len);
-  result->len += src.len;
-  DCHECK(result->len == new_len);
+  result->Append(ctx, sep->ptr, sep->len, src.ptr, src.len);
 }
 
 void AggregateFunctions::StringConcatMerge(FunctionContext* ctx,
@@ -515,15 +589,12 @@ void AggregateFunctions::StringConcatMerge(FunctionContext* ctx,
   if (result->is_null) {
     // Copy the header from the first intermediate value.
     *result = StringVal(ctx->Allocate(header_len), header_len);
+    if (result->is_null) return;
     *reinterpret_cast<StringConcatHeader*>(result->ptr) =
         *reinterpret_cast<StringConcatHeader*>(src.ptr);
   }
   // Append the string portion of the intermediate src to result (omit src's header).
-  int new_len = result->len + src.len - header_len;
-  result->ptr = ctx->Reallocate(result->ptr, new_len);
-  memcpy(result->ptr + result->len, src.ptr + header_len, src.len - header_len);
-  result->len += src.len - header_len;
-  DCHECK(result->len == new_len);
+  result->Append(ctx, src.ptr + header_len, src.len - header_len);
 }
 
 StringVal AggregateFunctions::StringConcatFinalize(FunctionContext* ctx,
@@ -534,8 +605,8 @@ StringVal AggregateFunctions::StringConcatFinalize(FunctionContext* ctx,
   int sep_len = *reinterpret_cast<StringConcatHeader*>(src.ptr);
   DCHECK(src.len >= header_len + sep_len);
   // Remove the header and the first separator.
-  StringVal result(ctx, src.len - header_len - sep_len);
-  memcpy(result.ptr, src.ptr + header_len + sep_len, result.len);
+  StringVal result = StringVal::CopyFrom(ctx, src.ptr + header_len + sep_len,
+      src.len - header_len - sep_len);
   ctx->Free(src.ptr);
   return result;
 }
@@ -554,6 +625,7 @@ StringVal AggregateFunctions::StringConcatFinalize(FunctionContext* ctx,
 const static int NUM_PC_BITMAPS = 64; // number of bitmaps
 const static int PC_BITMAP_LENGTH = 32; // the length of each bit map
 const static float PC_THETA = 0.77351f; // the magic number to compute the final result
+const static float PC_K = -1.75f; // the magic correction for low cardinalities
 
 void AggregateFunctions::PcInit(FunctionContext* c, StringVal* dst) {
   // Initialize the distinct estimate bit map - Probabilistic Counting Algorithms for Data
@@ -701,39 +773,27 @@ double DistinceEstimateFinalize(const StringVal& src) {
     sum += row_bit_count;
   }
   double avg = static_cast<double>(sum) / static_cast<double>(NUM_PC_BITMAPS);
-  double result = pow(static_cast<double>(2), avg) / PC_THETA;
+  // We apply a correction for small cardinalities based on equation (6) from
+  // Scheuermann et al DialM-POMC '07 so the above equation becomes
+  // (2^avg - 2^PC_K*avg) / PC_THETA
+  double result = (pow(static_cast<double>(2), avg) -
+                   pow(static_cast<double>(2), avg * PC_K)) / PC_THETA;
   return result;
 }
 
-StringVal AggregateFunctions::PcFinalize(FunctionContext* c, const StringVal& src) {
+BigIntVal AggregateFunctions::PcFinalize(FunctionContext* c, const StringVal& src) {
   DCHECK(!src.is_null);
   double estimate = DistinceEstimateFinalize(src);
-  int64_t result = estimate;
   c->Free(src.ptr);
-
-  // TODO: this should return bigint. this is a hack
-  stringstream ss;
-  ss << result;
-  string str = ss.str();
-  StringVal dst(c, str.length());
-  memcpy(dst.ptr, str.c_str(), str.length());
-  return dst;
+  return static_cast<int64_t>(estimate);
 }
 
-StringVal AggregateFunctions::PcsaFinalize(FunctionContext* c, const StringVal& src) {
+BigIntVal AggregateFunctions::PcsaFinalize(FunctionContext* c, const StringVal& src) {
   DCHECK(!src.is_null);
   // When using stochastic averaging, the result has to be multiplied by NUM_PC_BITMAPS.
   double estimate = DistinceEstimateFinalize(src) * NUM_PC_BITMAPS;
-  int64_t result = estimate;
   c->Free(src.ptr);
-
-  // TODO: this should return bigint. this is a hack
-  stringstream ss;
-  ss << result;
-  string str = ss.str();
-  StringVal dst(c, str.length());
-  memcpy(dst.ptr, str.c_str(), str.length());
-  return dst;
+  return static_cast<int64_t>(estimate);
 }
 
 // Histogram constants
@@ -752,6 +812,9 @@ struct ReservoirSample {
 
   ReservoirSample() : key(-1) { }
   ReservoirSample(const T& val) : val(val), key(-1) { }
+
+  // Gets a copy of the sample value that allocates memory from ctx, if necessary.
+  T GetValue(FunctionContext* ctx) { return val; }
 };
 
 // Template specialization for StringVal because we do not store the StringVal itself.
@@ -767,6 +830,11 @@ struct ReservoirSample<StringVal> {
   ReservoirSample(const StringVal& string_val) : key(-1) {
     len = min(string_val.len, MAX_STRING_SAMPLE_LEN);
     memcpy(&val[0], string_val.ptr, len);
+  }
+
+  // Gets a copy of the sample value that allocates memory from ctx, if necessary.
+  StringVal GetValue(FunctionContext* ctx) {
+    return StringVal::CopyFrom(ctx, &val[0], len);
   }
 };
 
@@ -821,8 +889,7 @@ template <typename T>
 const StringVal AggregateFunctions::ReservoirSampleSerialize(FunctionContext* ctx,
     const StringVal& src) {
   if (src.is_null) return src;
-  StringVal result(ctx, src.len);
-  memcpy(result.ptr, src.ptr, src.len);
+  StringVal result = StringVal::CopyFrom(ctx, src.ptr, src.len);
   ctx->Free(src.ptr);
 
   ReservoirSampleState<T>* state = reinterpret_cast<ReservoirSampleState<T>*>(result.ptr);
@@ -973,28 +1040,28 @@ StringVal AggregateFunctions::HistogramFinalize(FunctionContext* ctx,
     if (bucket_idx < (num_buckets - 1)) out << ", ";
   }
   const string& out_str = out.str();
-  StringVal result_str(ctx, out_str.size());
-  memcpy(result_str.ptr, out_str.c_str(), result_str.len);
+  StringVal result_str = StringVal::CopyFrom(ctx,
+      reinterpret_cast<const uint8_t*>(out_str.c_str()), out_str.size());
   ctx->Free(src_val.ptr);
   return result_str;
 }
 
 template <typename T>
-StringVal AggregateFunctions::AppxMedianFinalize(FunctionContext* ctx,
+T AggregateFunctions::AppxMedianFinalize(FunctionContext* ctx,
     const StringVal& src_val) {
   DCHECK(!src_val.is_null);
   DCHECK_EQ(src_val.len, sizeof(ReservoirSampleState<T>));
 
   ReservoirSampleState<T>* src = reinterpret_cast<ReservoirSampleState<T>*>(src_val.ptr);
+  if (src->num_samples == 0) {
+    ctx->Free(src_val.ptr);
+    return T::null();
+  }
   sort(src->samples, src->samples + src->num_samples, SampleValLess<T>);
 
-  stringstream out;
-  PrintSample<T>(src->samples[src->num_samples / 2], &out);
-  const string& out_str = out.str();
-  StringVal result_str(ctx, out_str.size());
-  memcpy(result_str.ptr, out_str.c_str(), result_str.len);
+  T result = src->samples[src->num_samples / 2].GetValue(ctx);
   ctx->Free(src_val.ptr);
-  return result_str;
+  return result;
 }
 
 void AggregateFunctions::HllInit(FunctionContext* ctx, StringVal* dst) {
@@ -1032,37 +1099,49 @@ void AggregateFunctions::HllMerge(FunctionContext* ctx, const StringVal& src,
   }
 }
 
-BigIntVal AggregateFunctions::HllFinalize(FunctionContext* ctx, const StringVal& src) {
-  DCHECK(!src.is_null);
-  DCHECK_EQ(src.len, HLL_LEN);
+uint64_t AggregateFunctions::HllFinalEstimate(const uint8_t* buckets,
+    int32_t num_buckets) {
+  DCHECK(buckets != NULL);
+  DCHECK_EQ(num_buckets, HLL_LEN);
 
-  const int num_streams = HLL_LEN;
   // Empirical constants for the algorithm.
   float alpha = 0;
-  if (num_streams == 16) {
+  if (HLL_LEN == 16) {
     alpha = 0.673f;
-  } else if (num_streams == 32) {
+  } else if (HLL_LEN == 32) {
     alpha = 0.697f;
-  } else if (num_streams == 64) {
+  } else if (HLL_LEN == 64) {
     alpha = 0.709f;
   } else {
-    alpha = 0.7213f / (1 + 1.079f / num_streams);
+    alpha = 0.7213f / (1 + 1.079f / HLL_LEN);
   }
 
   float harmonic_mean = 0;
   int num_zero_registers = 0;
-  for (int i = 0; i < src.len; ++i) {
-    harmonic_mean += powf(2.0f, -src.ptr[i]);
-    if (src.ptr[i] == 0) ++num_zero_registers;
+  // TODO: Consider improving this loop (e.g. replacing 'if' with arithmetic op).
+  for (int i = 0; i < num_buckets; ++i) {
+    harmonic_mean += powf(2.0f, -buckets[i]);
+    if (buckets[i] == 0) ++num_zero_registers;
   }
   harmonic_mean = 1.0f / harmonic_mean;
-  int64_t estimate = alpha * num_streams * num_streams * harmonic_mean;
-
-  if (num_zero_registers != 0) {
-    // Estimated cardinality is too low. Hll is too inaccurate here, instead use
-    // linear counting.
-    estimate = num_streams * log(static_cast<float>(num_streams) / num_zero_registers);
+  int64_t estimate = alpha * HLL_LEN * HLL_LEN * harmonic_mean;
+  // Adjust for Hll bias based on Hll++ algorithm
+  if (estimate <= 5 * HLL_LEN) {
+    estimate -= HllEstimateBias(estimate);
   }
+
+  if (num_zero_registers == 0) return estimate;
+
+  // Estimated cardinality is too low. Hll is too inaccurate here, instead use
+  // linear counting.
+  int64_t h = HLL_LEN * log(static_cast<float>(HLL_LEN) / num_zero_registers);
+
+  return (h <= HllThreshold(HLL_PRECISION)) ? h : estimate;
+}
+
+BigIntVal AggregateFunctions::HllFinalize(FunctionContext* ctx, const StringVal& src) {
+  DCHECK(!src.is_null);
+  uint64_t estimate = HllFinalEstimate(src.ptr, src.len);
   ctx->Free(src.ptr);
   return estimate;
 }
@@ -1247,6 +1326,20 @@ void AggregateFunctions::LastValUpdate(FunctionContext* ctx, const StringVal& sr
 }
 
 template <typename T>
+void AggregateFunctions::LastValRemove(FunctionContext* ctx, const T& src, T* dst) {
+  if (ctx->impl()->num_removes() >= ctx->impl()->num_updates()) *dst = T::null();
+}
+
+template <>
+void AggregateFunctions::LastValRemove(FunctionContext* ctx, const StringVal& src,
+    StringVal* dst) {
+  if (ctx->impl()->num_removes() >= ctx->impl()->num_updates()) {
+    if (!dst->is_null) ctx->Free(dst->ptr);
+    *dst = StringVal::null();
+  }
+}
+
+template <typename T>
 void AggregateFunctions::FirstValUpdate(FunctionContext* ctx, const T& src, T* dst) {
   // The first call to FirstValUpdate sets the value of dst.
   if (ctx->impl()->num_updates() > 1) return;
@@ -1268,7 +1361,13 @@ void AggregateFunctions::FirstValUpdate(FunctionContext* ctx, const StringVal& s
     return;
   }
   *dst = StringVal(ctx->Allocate(src.len), src.len);
-  memcpy(dst->ptr, src.ptr, src.len);
+  if (!dst->is_null) memcpy(dst->ptr, src.ptr, src.len);
+}
+
+template <typename T>
+void AggregateFunctions::FirstValRewriteUpdate(FunctionContext* ctx, const T& src,
+    const BigIntVal&, T* dst) {
+  LastValUpdate<T>(ctx, src, dst);
 }
 
 template <typename T>
@@ -1530,25 +1629,25 @@ template StringVal AggregateFunctions::HistogramFinalize<TimestampVal>(
 template StringVal AggregateFunctions::HistogramFinalize<DecimalVal>(
     FunctionContext*, const StringVal&);
 
-template StringVal AggregateFunctions::AppxMedianFinalize<BooleanVal>(
+template BooleanVal AggregateFunctions::AppxMedianFinalize<BooleanVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<TinyIntVal>(
+template TinyIntVal AggregateFunctions::AppxMedianFinalize<TinyIntVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<SmallIntVal>(
+template SmallIntVal AggregateFunctions::AppxMedianFinalize<SmallIntVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<IntVal>(
+template IntVal AggregateFunctions::AppxMedianFinalize<IntVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<BigIntVal>(
+template BigIntVal AggregateFunctions::AppxMedianFinalize<BigIntVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<FloatVal>(
+template FloatVal AggregateFunctions::AppxMedianFinalize<FloatVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<DoubleVal>(
+template DoubleVal AggregateFunctions::AppxMedianFinalize<DoubleVal>(
     FunctionContext*, const StringVal&);
 template StringVal AggregateFunctions::AppxMedianFinalize<StringVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<TimestampVal>(
+template TimestampVal AggregateFunctions::AppxMedianFinalize<TimestampVal>(
     FunctionContext*, const StringVal&);
-template StringVal AggregateFunctions::AppxMedianFinalize<DecimalVal>(
+template DecimalVal AggregateFunctions::AppxMedianFinalize<DecimalVal>(
     FunctionContext*, const StringVal&);
 
 template void AggregateFunctions::HllUpdate(
@@ -1606,6 +1705,27 @@ template void AggregateFunctions::LastValUpdate<TimestampVal>(
 template void AggregateFunctions::LastValUpdate<DecimalVal>(
     FunctionContext*, const DecimalVal& src, DecimalVal* dst);
 
+template void AggregateFunctions::LastValRemove<BooleanVal>(
+    FunctionContext*, const BooleanVal& src, BooleanVal* dst);
+template void AggregateFunctions::LastValRemove<TinyIntVal>(
+    FunctionContext*, const TinyIntVal& src, TinyIntVal* dst);
+template void AggregateFunctions::LastValRemove<SmallIntVal>(
+    FunctionContext*, const SmallIntVal& src, SmallIntVal* dst);
+template void AggregateFunctions::LastValRemove<IntVal>(
+    FunctionContext*, const IntVal& src, IntVal* dst);
+template void AggregateFunctions::LastValRemove<BigIntVal>(
+    FunctionContext*, const BigIntVal& src, BigIntVal* dst);
+template void AggregateFunctions::LastValRemove<FloatVal>(
+    FunctionContext*, const FloatVal& src, FloatVal* dst);
+template void AggregateFunctions::LastValRemove<DoubleVal>(
+    FunctionContext*, const DoubleVal& src, DoubleVal* dst);
+template void AggregateFunctions::LastValRemove<StringVal>(
+    FunctionContext*, const StringVal& src, StringVal* dst);
+template void AggregateFunctions::LastValRemove<TimestampVal>(
+    FunctionContext*, const TimestampVal& src, TimestampVal* dst);
+template void AggregateFunctions::LastValRemove<DecimalVal>(
+    FunctionContext*, const DecimalVal& src, DecimalVal* dst);
+
 template void AggregateFunctions::FirstValUpdate<BooleanVal>(
     FunctionContext*, const BooleanVal& src, BooleanVal* dst);
 template void AggregateFunctions::FirstValUpdate<TinyIntVal>(
@@ -1626,6 +1746,27 @@ template void AggregateFunctions::FirstValUpdate<TimestampVal>(
     FunctionContext*, const TimestampVal& src, TimestampVal* dst);
 template void AggregateFunctions::FirstValUpdate<DecimalVal>(
     FunctionContext*, const DecimalVal& src, DecimalVal* dst);
+
+template void AggregateFunctions::FirstValRewriteUpdate<BooleanVal>(
+    FunctionContext*, const BooleanVal& src, const BigIntVal&, BooleanVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<TinyIntVal>(
+    FunctionContext*, const TinyIntVal& src, const BigIntVal&, TinyIntVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<SmallIntVal>(
+    FunctionContext*, const SmallIntVal& src, const BigIntVal&, SmallIntVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<IntVal>(
+    FunctionContext*, const IntVal& src, const BigIntVal&, IntVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<BigIntVal>(
+    FunctionContext*, const BigIntVal& src, const BigIntVal&, BigIntVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<FloatVal>(
+    FunctionContext*, const FloatVal& src, const BigIntVal&, FloatVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<DoubleVal>(
+    FunctionContext*, const DoubleVal& src, const BigIntVal&, DoubleVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<StringVal>(
+    FunctionContext*, const StringVal& src, const BigIntVal&, StringVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<TimestampVal>(
+    FunctionContext*, const TimestampVal& src, const BigIntVal&, TimestampVal* dst);
+template void AggregateFunctions::FirstValRewriteUpdate<DecimalVal>(
+    FunctionContext*, const DecimalVal& src, const BigIntVal&, DecimalVal* dst);
 
 template void AggregateFunctions::OffsetFnInit<BooleanVal>(
     FunctionContext*, BooleanVal*);

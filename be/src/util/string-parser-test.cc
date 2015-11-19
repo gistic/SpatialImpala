@@ -21,8 +21,10 @@
 #include <boost/lexical_cast.hpp>
 #include "util/string-parser.h"
 
-using namespace std;
-using namespace boost;
+#include "common/names.h"
+
+using std::min;
+using std::numeric_limits;
 
 namespace impala {
 
@@ -382,6 +384,32 @@ TEST(StringToFloat, Basic) {
   TestFloatValue<double>(double_max + "11111", StringParser::PARSE_OVERFLOW);
   TestFloatValue<float>("-" + float_max + "11111", StringParser::PARSE_OVERFLOW);
   TestFloatValue<double>("-" + double_max + "11111", StringParser::PARSE_OVERFLOW);
+
+  // Precision limits
+  // Regression test for IMPALA-1622 (make sure we get correct result with many digits
+  // after decimal)
+  TestAllFloatVariants("1.12345678912345678912", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("1.1234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("1.01234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("1.01111111111111111111111", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("0.1234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("0.01234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants(".1234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("0.01234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants(
+      "12345678901234567890.1234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants(
+      "12345678901234567890.01234567890123456789012", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("0.000000000000000000001234", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("1.000000000000000000001234", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants(".000000000000000000001234", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("0.000000000000000000001234e10", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants(
+      "00000000000000000000.000000000000000000000", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants(
+      "00000000000000000000.000000000000000000001", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("12345678901234567890123456", StringParser::PARSE_SUCCESS);
+  TestAllFloatVariants("12345678901234567890123456e10", StringParser::PARSE_SUCCESS);
 
   // Invalid floats.
   TestAllFloatVariants("x456.789e10", StringParser::PARSE_FAILURE);

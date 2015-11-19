@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # Copyright (c) 2012 Cloudera, Inc. All rights reserved.
 # Validates limit on scan nodes
 #
@@ -55,7 +54,7 @@ class TestLimit(ImpalaTestSuite):
                                 table_format=vector.get_value('table_format'))
     assert(len(result.data) == expected_num_rows)
 
-# Base class for TestLimit
+
 class TestLimitBase(ImpalaTestSuite):
   def exec_query_validate(self, query, exec_options, should_succeed, expected_rows,
                           expected_error):

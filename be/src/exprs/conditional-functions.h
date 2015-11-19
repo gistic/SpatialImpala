@@ -27,7 +27,7 @@ namespace impala {
 
 class TupleRow;
 
-// Conditional functions that can be expressed as UDFs
+/// Conditional functions that can be expressed as UDFs
 class ConditionalFunctions {
  public:
   static TinyIntVal NullIfZero(FunctionContext* context, const TinyIntVal& val);
@@ -45,10 +45,17 @@ class ConditionalFunctions {
   static FloatVal ZeroIfNull(FunctionContext* context, const FloatVal& val);
   static DoubleVal ZeroIfNull(FunctionContext* context, const DoubleVal& val);
   static DecimalVal ZeroIfNull(FunctionContext* context, const DecimalVal& val);
+
+  /// Functions IsFalse and IsTrue return false when the input is NULL.
+  /// Functions IsNotFalse and IsNotTrue return true when the input is NULL.
+  static BooleanVal IsFalse(FunctionContext* ctx, const BooleanVal& val);
+  static BooleanVal IsNotFalse(FunctionContext* ctx, const BooleanVal& val);
+  static BooleanVal IsTrue(FunctionContext* ctx, const BooleanVal& val);
+  static BooleanVal IsNotTrue(FunctionContext* ctx, const BooleanVal& val);
 };
 
-// The following conditional functions require separate Expr classes to take advantage of
-// short circuiting
+/// The following conditional functions require separate Expr classes to take advantage of
+/// short circuiting
 
 class IsNullExpr : public Expr {
  public:

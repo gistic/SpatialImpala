@@ -22,6 +22,7 @@ There are {{num_sessions}} active sessions.
   <tr>
     <th>Session Type</th>
     <th>Open Queries</th>
+    <th>Total Queries</th>
     <th>User</th>
     <th>Delegated User</th>
     <th>Session ID</th>
@@ -29,23 +30,28 @@ There are {{num_sessions}} active sessions.
     <th>Default Database</th>
     <th>Start Time</th>
     <th>Last Accessed</th>
+    <th>Idle Timeout (s)</th>
     <th>Expired</th>
     <th>Closed</th>
     <th>Ref count</th>
   </tr>
 {{#sessions}}
-  <td>{{type}}</td>
-  <td>{{num_queries}}</td>
-  <td>{{user}}</td>
-  <td>{{delegated_user}}</td>
-  <td>{{session_id}}</td>
-  <td>{{network_address}}</td>
-  <td>{{default_database}}</td>
-  <td>{{start_time}}</td>
-  <td>{{last_accessed}}</td>
-  <td>{{expired}}</td>
-  <td>{{closed}}</td>
-  <td>{{ref_count}}</td>
+  <tr>
+    <td>{{type}}</td>
+    <td>{{inflight_queries}}</td>
+    <td>{{total_queries}}</td>
+    <td>{{user}}</td>
+    <td>{{delegated_user}}</td>
+    <td>{{session_id}}</td>
+    <td>{{network_address}}</td>
+    <td>{{default_database}}</td>
+    <td>{{start_time}}</td>
+    <td>{{last_accessed}}</td>
+    <td>{{session_timeout}}</td>
+    <td>{{expired}}</td>
+    <td>{{closed}}</td>
+    <td>{{ref_count}}</td>
+  </tr>
 {{/sessions}}
 </table>
 

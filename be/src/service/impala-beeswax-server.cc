@@ -45,6 +45,7 @@
 #include "runtime/raw-value.h"
 #include "runtime/timestamp-value.h"
 #include "service/query-exec-state.h"
+#include "service/query-options.h"
 #include "statestore/simple-scheduler.h"
 #include "util/container-util.h"
 #include "util/debug-util.h"
@@ -63,9 +64,10 @@
 #include "gen-cpp/ImpalaInternalService.h"
 #include "gen-cpp/Frontend_types.h"
 
-using namespace std;
-using namespace boost;
-using namespace boost::algorithm;
+#include "common/names.h"
+
+using boost::adopt_lock_t;
+using boost::algorithm::join;
 using namespace apache::thrift;
 using namespace apache::hive::service::cli::thrift;
 using namespace beeswax;
@@ -74,7 +76,7 @@ using namespace beeswax;
   do {                                                          \
     Status __status__ = (stmt);                                 \
     if (UNLIKELY(!__status__.ok())) {                           \
-      RaiseBeeswaxException(__status__.GetErrorMsg(), ex_type); \
+      RaiseBeeswaxException(__status__.GetDetail(), ex_type);   \
     }                                                           \
   } while (false)
 
@@ -110,11 +112,11 @@ class ImpalaServer::AsciiQueryResultSet : public ImpalaServer::QueryResultSet {
       out_stream << (i > 0 ? "\t" : "");
       DCHECK_EQ(1, metadata_.columns[i].columnType.types.size());
       RawValue::PrintValue(col_values[i],
-          ColumnType(metadata_.columns[i].columnType),
+          ColumnType::FromThrift(metadata_.columns[i].columnType),
           scales[i], &out_stream);
     }
     result_set_->push_back(out_stream.str());
-    return Status::OK;
+    return Status::OK();
   }
 
   // Convert TResultRow to ASCII using "\t" as column delimiter and store it in this
@@ -130,7 +132,7 @@ class ImpalaServer::AsciiQueryResultSet : public ImpalaServer::QueryResultSet {
       out_stream << row.colVals[i];
     }
     result_set_->push_back(out_stream.str());
-    return Status::OK;
+    return Status::OK();
   }
 
   virtual int AddRows(const QueryResultSet* other, int start_idx, int num_rows) {
@@ -192,7 +194,7 @@ void ImpalaServer::query(QueryHandle& query_handle, const Query& query) {
   Status status = SetQueryInflight(session, exec_state);
   if (!status.ok()) {
     UnregisterQuery(exec_state->query_id(), false, &status);
-    RaiseBeeswaxException(status.GetErrorMsg(), SQLSTATE_GENERAL_ERROR);
+    RaiseBeeswaxException(status.GetDetail(), SQLSTATE_GENERAL_ERROR);
   }
   TUniqueIdToQueryHandle(exec_state->query_id(), &query_handle);
 }
@@ -230,14 +232,14 @@ void ImpalaServer::executeAndWait(QueryHandle& query_handle, const Query& query,
   Status status = SetQueryInflight(session, exec_state);
   if (!status.ok()) {
     UnregisterQuery(exec_state->query_id(), false, &status);
-    RaiseBeeswaxException(status.GetErrorMsg(), SQLSTATE_GENERAL_ERROR);
+    RaiseBeeswaxException(status.GetDetail(), SQLSTATE_GENERAL_ERROR);
   }
   // block until results are ready
   exec_state->Wait();
   status = exec_state->query_status();
   if (!status.ok()) {
     UnregisterQuery(exec_state->query_id(), false, &status);
-    RaiseBeeswaxException(status.GetErrorMsg(), SQLSTATE_GENERAL_ERROR);
+    RaiseBeeswaxException(status.GetDetail(), SQLSTATE_GENERAL_ERROR);
   }
 
   exec_state->UpdateQueryState(QueryState::FINISHED);
@@ -288,7 +290,7 @@ void ImpalaServer::fetch(Results& query_results, const QueryHandle& query_handle
            << " has_more=" << (query_results.has_more ? "true" : "false");
   if (!status.ok()) {
     UnregisterQuery(query_id, false, &status);
-    RaiseBeeswaxException(status.GetErrorMsg(), SQLSTATE_GENERAL_ERROR);
+    RaiseBeeswaxException(status.GetDetail(), SQLSTATE_GENERAL_ERROR);
   }
 }
 
@@ -400,7 +402,7 @@ void ImpalaServer::get_log(string& log, const LogContextId& context) {
   stringstream error_log_ss;
   // If the query status is !ok, include the status error message at the top of the log.
   if (!exec_state->query_status().ok()) {
-    error_log_ss << exec_state->query_status().GetErrorMsg() << "\n";
+    error_log_ss << exec_state->query_status().GetDetail() << "\n";
   }
 
   // Add warnings from analysis
@@ -439,7 +441,7 @@ void ImpalaServer::Cancel(impala::TStatus& tstatus,
   TUniqueId query_id;
   QueryHandleToTUniqueId(query_handle, &query_id);
   RAISE_IF_ERROR(CancelInternal(query_id, true), SQLSTATE_GENERAL_ERROR);
-  tstatus.status_code = TStatusCode::OK;
+  tstatus.status_code = TErrorCode::OK;
 }
 
 void ImpalaServer::CloseInsert(TInsertResult& insert_result,
@@ -453,7 +455,7 @@ void ImpalaServer::CloseInsert(TInsertResult& insert_result,
 
   Status status = CloseInsertInternal(query_id, &insert_result);
   if (!status.ok()) {
-    RaiseBeeswaxException(status.GetErrorMsg(), SQLSTATE_GENERAL_ERROR);
+    RaiseBeeswaxException(status.GetDetail(), SQLSTATE_GENERAL_ERROR);
   }
 }
 
@@ -471,7 +473,7 @@ void ImpalaServer::GetRuntimeProfile(string& profile_output, const QueryHandle& 
   stringstream ss;
   Status status = GetRuntimeProfileStr(query_id, false, &ss);
   if (!status.ok()) {
-    ss << "GetRuntimeProfile error: " << status.GetErrorMsg();
+    ss << "GetRuntimeProfile error: " << status.GetDetail();
     RaiseBeeswaxException(ss.str(), SQLSTATE_GENERAL_ERROR);
   }
   profile_output = ss.str();
@@ -486,7 +488,7 @@ void ImpalaServer::GetExecSummary(impala::TExecSummary& result,
   QueryHandleToTUniqueId(handle, &query_id);
   VLOG_RPC << "GetExecSummary(): query_id=" << PrintId(query_id);
   Status status = GetExecSummary(query_id, &result);
-  if (!status.ok()) RaiseBeeswaxException(status.GetErrorMsg(), SQLSTATE_GENERAL_ERROR);
+  if (!status.ok()) RaiseBeeswaxException(status.GetDetail(), SQLSTATE_GENERAL_ERROR);
 }
 
 void ImpalaServer::PingImpalaService(TPingImpalaServiceResp& return_val) {
@@ -516,14 +518,15 @@ Status ImpalaServer::QueryToTQueryContext(const Query& query,
     const TUniqueId& session_id = ThriftServer::GetThreadConnectionId();
     RETURN_IF_ERROR(GetSessionState(session_id, &session));
     DCHECK(session != NULL);
+    {
+      // The session is created when the client connects. Depending on the underlying
+      // transport, the username may be known at that time. If the username hasn't been
+      // set yet, set it now.
+      lock_guard<mutex> l(session->lock);
+      if (session->connected_user.empty()) session->connected_user = query.hadoop_user;
+      query_ctx->request.query_options = session->default_query_options;
+    }
     session->ToThrift(session_id, &query_ctx->session);
-    // The session is created when the client connects. Depending on the underlying
-    // transport, the username may be known at that time. If the username hasn't been set
-    // yet, set it now.
-    lock_guard<mutex> l(session->lock);
-    if (session->connected_user.empty()) session->connected_user = query.hadoop_user;
-    query_ctx->session.connected_user = session->connected_user;
-    query_ctx->request.query_options = session->default_query_options;
   }
 
   // Override default query options with Query.Configuration
@@ -535,7 +538,7 @@ Status ImpalaServer::QueryToTQueryContext(const Query& query,
                << ThriftDebugString(query_ctx->request.query_options);
   }
 
-  return Status::OK;
+  return Status::OK();
 }
 
 inline void ImpalaServer::TUniqueIdToQueryHandle(const TUniqueId& query_id,
@@ -572,6 +575,7 @@ Status ImpalaServer::FetchInternal(const TUniqueId& query_id,
 
   if (exec_state->num_rows_fetched() == 0) {
     exec_state->query_events()->MarkEvent("First row fetched");
+    exec_state->set_fetched_rows();
   }
 
   // Check for cancellation or an error.
