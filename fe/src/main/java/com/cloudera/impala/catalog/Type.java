@@ -832,6 +832,26 @@ public abstract class Type {
     compatibilityMatrix[VARCHAR.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[VARCHAR.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
 
+    compatibilityMatrix[RECTANGLE.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[RECTANGLE.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[RECTANGLE.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[RECTANGLE.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[RECTANGLE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
+
+    compatibilityMatrix[POINT.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[POINT.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[POINT.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[POINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
+
+    compatibilityMatrix[LINE.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[LINE.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[LINE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;    
+
+    compatibilityMatrix[POLYGON.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[POLYGON.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
+
+    compatibilityMatrix[LINESTRING.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
+
     // Check all of the necessary entries that should be filled.
     for (int i = 0; i < PrimitiveType.values().length; ++i) {
       for (int j = i; j < PrimitiveType.values().length; ++j) {

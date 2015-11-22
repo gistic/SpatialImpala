@@ -41,9 +41,9 @@ public enum PrimitiveType {
   VARCHAR("VARCHAR", 16, TPrimitiveType.VARCHAR),
 
   //Spatial types
-  LINE("LINE", 48, TPrimitiveType.LINE),
-  POINT("POINT", 32, TPrimitiveType.POINT),
   RECTANGLE("RECTANGLE", 48, TPrimitiveType.RECTANGLE),
+  POINT("POINT", 32, TPrimitiveType.POINT),
+  LINE("LINE", 48, TPrimitiveType.LINE),
   //8-byte pointer and 4-byte length indicator (12 bytes total).
   // Aligning to 8 bytes so 16 total.
   POLYGON("POLYGON", 16, TPrimitiveType.POLYGON),
