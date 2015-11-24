@@ -44,6 +44,9 @@ public abstract class Type {
   // nested types) at a nesting depth between 200 and 300 (200 worked, 300 crashed).
   public static int MAX_NESTING_DEPTH = 100;
 
+  // Static Constant for Saving Shape Types
+  public static String SHAPE_TYPE_KEY = "shapeType";
+
   // Static constant types for scalar types that don't require additional information.
   public static final ScalarType INVALID = new ScalarType(PrimitiveType.INVALID_TYPE);
   public static final ScalarType NULL = new ScalarType(PrimitiveType.NULL_TYPE);
@@ -203,6 +206,11 @@ public abstract class Type {
   public boolean isMapType() { return this instanceof MapType; }
   public boolean isArrayType() { return this instanceof ArrayType; }
   public boolean isStructType() { return this instanceof StructType; }
+
+  public boolean isShapeType() {
+    return isScalarType(PrimitiveType.RECTANGLE) || isScalarType(PrimitiveType.POINT)
+      || isScalarType(PrimitiveType.LINE) || isScalarType(PrimitiveType.POLYGON) || isScalarType(PrimitiveType.LINESTRING);
+  }
 
   /**
    * Returns true if Impala supports this type in the metdata. It does not mean we

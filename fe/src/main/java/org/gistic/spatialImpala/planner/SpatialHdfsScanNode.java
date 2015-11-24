@@ -117,11 +117,11 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     markSlotsMaterialized(analyzer, conjuncts_);
     computeMemLayout(analyzer);
 
-    // do this at the end so it can take all conjuncts into account
-    computeStats(analyzer);
-
     // compute scan range locations
     computeScanRangeLocations(analyzer);
+
+    // do this at the end so it can take all conjuncts into account
+    computeStats(analyzer);
 
     // TODO: do we need this?
     assignedConjuncts_ = analyzer.getAssignedConjuncts();

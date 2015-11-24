@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Hashtable;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -592,6 +593,16 @@ public class HdfsTable extends Table {
    */
   private void addColumnsFromFieldSchemas(List<FieldSchema> fieldSchemas)
       throws TableLoadingException {
+
+    Hashtable<String, String> shapeType = new Hashtable<>();
+    if (msTable_.getParameters() != null && msTable_.getParameters().containsKey(Type.SHAPE_TYPE_KEY)) {
+      String[] shapeList = msTable_.getParameters().get(Type.SHAPE_TYPE_KEY).split(",");
+      for (String shape : shapeList) {
+        String[] shapeTypeStrings = shape.split("=");
+        shapeType.put(shapeTypeStrings[0], shapeTypeStrings[1]);
+      }
+    }
+
     int pos = colsByPos_.size();
     for (FieldSchema s: fieldSchemas) {
       Type type = parseColumnType(s);
@@ -602,7 +613,9 @@ public class HdfsTable extends Table {
                 "unsupported partition-column type '%s' in partition column '%s'",
                 getFullName(), type.toString(), s.getName()));
       }
-
+      
+      String transformedType = shapeType.get(s.getName());
+      type = (transformedType == null) ? type : Type.parseColumnType(transformedType);
       Column col = new Column(s.getName(), type, s.getComment(), pos);
       addColumn(col);
       ++pos;

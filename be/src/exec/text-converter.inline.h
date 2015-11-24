@@ -130,7 +130,6 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
     case TYPE_POINT: {
       string point_str(data, len);
       boost::algorithm::to_lower(point_str);
-      
       std::size_t startingField = point_str.find("point (");
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the point";
@@ -140,7 +139,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       std::size_t startingData = startingField + 7;
       std::string delimiter = " ";
       std::string Xtoken = point_str.substr(startingData, point_str.find(delimiter, startingData) - startingData);
-      std::string Ytoken = point_str.substr(startingData + Xtoken.size() + 1, point_str.find(")", startingData) - startingData);
+      std::string Ytoken = point_str.substr(startingData + Xtoken.size() + 1, point_str.find(")", startingData) - startingData - Xtoken.size() - 1);
       double x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
       double y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
       
@@ -153,21 +152,21 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       string line_str(data, len);
       boost::algorithm::to_lower(line_str);
       
-      std::size_t startingField = line_str.find("line(");
+      std::size_t startingField = line_str.find("line (");
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the line";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
       }
-      std::size_t prefix = startingField + 5;
+      std::size_t prefix = startingField + 6;
       std::string delimiter = " ";
-      std::string X1token = line_str.substr(prefix, line_str.find(delimiter, prefix));
+      std::string X1token = line_str.substr(prefix, line_str.find(delimiter, prefix) - prefix);
       prefix += X1token.size() + 1;
-      std::string Y1token = line_str.substr(prefix, line_str.find(delimiter, prefix));
+      std::string Y1token = line_str.substr(prefix, line_str.find(delimiter, prefix) - prefix);
       prefix += Y1token.size() + 1;
-      std::string X2token = line_str.substr(prefix, line_str.find(delimiter, prefix));
+      std::string X2token = line_str.substr(prefix, line_str.find(delimiter, prefix) - prefix);
       prefix += X2token.size() + 1;
-      std::string Y2token = line_str.substr(prefix, line_str.find(")", prefix));
+      std::string Y2token = line_str.substr(prefix, line_str.find(")", prefix) - prefix);
       double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(), &parse_result);
       double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(), &parse_result);
       double x2 = StringParser::StringToFloat<double>(X2token.c_str(), X2token.size(), &parse_result);
@@ -182,21 +181,21 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       string rect_str(data, len);
       boost::algorithm::to_lower(rect_str);
       
-      std::size_t startingField = rect_str.find("rectangle(");
+      std::size_t startingField = rect_str.find("rectangle (");
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the rectangle";
         tuple->SetNull(slot_desc->null_indicator_offset());
         return true;
       }
-      std::size_t prefix = startingField + 10;
+      std::size_t prefix = startingField + 11;
       std::string delimiter = " ";
-      std::string X1token = rect_str.substr(prefix, rect_str.find(delimiter, prefix));
+      std::string X1token = rect_str.substr(prefix, rect_str.find(delimiter, prefix) - prefix);
       prefix += X1token.size() + 1;
-      std::string Y1token = rect_str.substr(prefix, rect_str.find(delimiter, prefix));
+      std::string Y1token = rect_str.substr(prefix, rect_str.find(delimiter, prefix) - prefix);
       prefix += Y1token.size() + 1;
-      std::string X2token = rect_str.substr(prefix, rect_str.find(delimiter, prefix));
+      std::string X2token = rect_str.substr(prefix, rect_str.find(delimiter, prefix) - prefix);
       prefix += X2token.size() + 1;
-      std::string Y2token = rect_str.substr(prefix, rect_str.find(")", prefix));
+      std::string Y2token = rect_str.substr(prefix, rect_str.find(")", prefix) - prefix);
       
       double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(), &parse_result);
       double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(), &parse_result);

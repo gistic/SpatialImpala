@@ -27,6 +27,7 @@ import com.cloudera.impala.authorization.Privilege;
 import com.cloudera.impala.catalog.HdfsStorageDescriptor;
 import com.cloudera.impala.catalog.RowFormat;
 import com.cloudera.impala.catalog.TableLoadingException;
+import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.common.FileSystemUtil;
 import com.cloudera.impala.thrift.TAccessEvent;
@@ -223,6 +224,26 @@ public class CreateTableStmt extends StatementBase {
         String indexedColumns = tblProperties_.get(GlobalIndex.INDEXED_ON_KEYWORD);
         if (indexedColumns == null) {
         	throw new AnalysisException("The columns, on which the table is indexed, should be given");
+        }
+
+        StringBuilder shapeColsList = new StringBuilder();
+        List<ColumnDef> newColumnDefs = Lists.newArrayList();
+        for (ColumnDef colDef: columnDefs_) {
+           if (colDef.getTypeDef().getType().isShapeType()) {
+             shapeColsList.append(colDef.getColName());
+             shapeColsList.append('=');
+             shapeColsList.append(colDef.getTypeDef().getType());
+             shapeColsList.append(',');
+             newColumnDefs.add(new ColumnDef(colDef.getColName(), new TypeDef(Type.STRING), ""));
+           } else {
+             newColumnDefs.add(colDef);
+           }
+        }
+
+        if (shapeColsList.length() > 0) {
+          shapeColsList.setLength(shapeColsList.length() - 1);
+          tblProperties_.put(Type.SHAPE_TYPE_KEY, shapeColsList.toString());
+          columnDefs_ = newColumnDefs;
         }
       }
     }
