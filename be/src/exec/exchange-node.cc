@@ -121,8 +121,9 @@ Status ExchangeNode::GetNext(RuntimeState* state, RowBatch* output_batch, bool* 
   } else {
     *eos = false;
   }
-  
+
   if (is_merging_) return GetNextMerging(state, output_batch, eos);
+
   while (true) {
     {
       SCOPED_TIMER(convert_row_batch_timer_);
@@ -145,7 +146,6 @@ Status ExchangeNode::GetNext(RuntimeState* state, RowBatch* output_batch, bool* 
         ++num_rows_returned_;
       }
       COUNTER_SET(rows_returned_counter_, num_rows_returned_);
-
 
       if (ReachedLimit()) {
         stream_recvr_->TransferAllResources(output_batch);

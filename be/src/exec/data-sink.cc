@@ -46,14 +46,12 @@ Status DataSink::CreateDataSink(ObjectPool* pool,
 
       // TODO: figure out good buffer size based on size of output row
       if (thrift_sink.stream_sink.output_partition.isSpatial) {
-        tmp_sink = new SpatialDataStreamSender(pool,
-            params.sender_id, row_desc, thrift_sink.stream_sink,
-            params.destinations, 16 * 1024);
+        tmp_sink = new SpatialDataStreamSender(pool, params.sender_id, row_desc,
+            thrift_sink.stream_sink, params.destinations, 16 * 1024);
       }
       else {
-        tmp_sink = new DataStreamSender(pool,
-            params.sender_id, row_desc, thrift_sink.stream_sink,
-            params.destinations, 16 * 1024);
+        tmp_sink = new DataStreamSender(pool, params.sender_id, row_desc,
+            thrift_sink.stream_sink, params.destinations, 16 * 1024);
       }
       sink->reset(tmp_sink);
       break;

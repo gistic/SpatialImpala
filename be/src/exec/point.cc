@@ -25,7 +25,7 @@ bool Point::Intersects(Shape* other) {
   switch (other_type) {
     case TShapeType::RECTANGLE:
       return false;
-    case TShapeType::LINE:      
+    case TShapeType::LINE:
       return other->Contains(this);
     case TShapeType::POINT:
       return false;

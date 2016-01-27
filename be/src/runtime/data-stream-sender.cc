@@ -172,9 +172,6 @@ Status Channel::SendCurrentBatch() {
 Status Channel::GetSendStatus() {
   WaitForRpc();
   if (!rpc_status_.ok()) {
-    LOG(INFO) << "GetSendStatus is not ok instance_id=" << fragment_instance_id_
-           << " dest_node=" << dest_node_id_
-           << " #rows= " << batch_->num_rows();
     LOG(ERROR) << "channel send status: " << rpc_status_.GetErrorMsg();
   }
   return rpc_status_;

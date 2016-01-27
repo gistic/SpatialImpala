@@ -87,7 +87,8 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
   Status ProcessRange(int* num_tuples, bool past_scan_range);
 
   // Returns the number of bytes of the structure of the r-tree.
-  int ReadRTreeBytes(char* offset_array, int prev_read_size_offset, int* height, int* degree, int* tree_size);
+  int ReadRTreeBytes(char* offset_array, int prev_read_size_offset, int* height,
+                     int* degree, int* tree_size);
 
   // Skips the header of the current file.
   Status SkipHeader(bool* tuple_found);
@@ -182,7 +183,7 @@ class HdfsRTreeSpatialScanner : public HdfsScanner {
   Rectangle* range_;
 
   // Indicator that the scanner is scanning the header.
-  bool only_parsing_header;
+  bool only_parsing_header_;
 };
 
 }

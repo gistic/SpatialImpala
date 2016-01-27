@@ -153,7 +153,8 @@ struct ColumnType {
     node.__set_scalar_type(TScalarType());
     TScalarType& scalar_type = node.scalar_type;
     scalar_type.__set_type(impala::ToThrift(type));
-    if (type == TYPE_CHAR || type == TYPE_VARCHAR || type == TYPE_POLYGON || type == TYPE_LINESTRING) {
+    if (type == TYPE_CHAR || type == TYPE_VARCHAR
+        || type == TYPE_POLYGON || type == TYPE_LINESTRING) {
       DCHECK_NE(len, -1);
       scalar_type.__set_len(len);
     } else if (type == TYPE_DECIMAL) {
@@ -166,12 +167,14 @@ struct ColumnType {
   }
 
   inline bool IsStringType() const {
-    return type == TYPE_STRING || type == TYPE_VARCHAR || type == TYPE_CHAR || type == TYPE_POLYGON || type == TYPE_LINESTRING;
+    return type == TYPE_STRING || type == TYPE_VARCHAR || type == TYPE_CHAR
+        || type == TYPE_POLYGON || type == TYPE_LINESTRING;
   }
 
   inline bool IsVarLen() const {
-    return type == TYPE_STRING || type == TYPE_VARCHAR || type == TYPE_POLYGON || type == TYPE_LINESTRING ||
-        (type == TYPE_CHAR && len > MAX_CHAR_INLINE_LENGTH);
+    return type == TYPE_STRING || type == TYPE_VARCHAR ||
+        (type == TYPE_CHAR && len > MAX_CHAR_INLINE_LENGTH)
+        || type == TYPE_POLYGON || type == TYPE_LINESTRING;
   }
 
   // Returns the byte size of this type.  Returns 0 for variable length types.

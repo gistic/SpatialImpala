@@ -331,12 +331,13 @@ inline void RawValue::PrintValue(const void* value, const ColumnType& type, int 
         string_val = reinterpret_cast<const StringValue*>(value);
         Polygon tempPol(string_val->ptr, string_val->len);
         (*stream) << tempPol;
-      } 																			    break;
+      }
+      break;
     case TYPE_LINESTRING: {
         string_val = reinterpret_cast<const StringValue*>(value);
         LineString tempLine(string_val->ptr, string_val->len);
-        (*stream) << tempLine;     
-      }                                                                                                                              
+        (*stream) << tempLine;
+      }                                                                                   
       break;
     default:
       DCHECK(false);

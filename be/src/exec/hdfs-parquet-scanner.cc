@@ -489,14 +489,14 @@ HdfsParquetScanner::BaseColumnReader* HdfsParquetScanner::CreateReader(
       }
       break;
     case TYPE_RECTANGLE:
-        reader = new ColumnReader<Rectangle>(this, desc, file_idx);
-        break;
+      reader = new ColumnReader<Rectangle>(this, desc, file_idx);
+      break;
     case TYPE_POINT:
-        reader = new ColumnReader<Point>(this, desc, file_idx);
-        break;
+      reader = new ColumnReader<Point>(this, desc, file_idx);
+      break;
     case TYPE_LINE:
-        reader = new ColumnReader<Line>(this, desc, file_idx);
-        break;
+      reader = new ColumnReader<Line>(this, desc, file_idx);
+      break;
     default:
       DCHECK(false);
   }

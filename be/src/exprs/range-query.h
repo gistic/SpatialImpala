@@ -12,15 +12,15 @@ namespace spatialimpala {
 
 class RangeQuery: public Expr {
   public:
-    RangeQuery(const TExprNode& node);
-    virtual ~RangeQuery();
+   RangeQuery(const TExprNode& node);
+   virtual ~RangeQuery();
 
-    virtual Status GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn);
+   virtual Status GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn);
 
-    virtual BooleanVal GetBooleanVal(ExprContext* context, TupleRow* row);
+   virtual BooleanVal GetBooleanVal(ExprContext* context, TupleRow* row);
 
   protected:
-    Rectangle* range_;
+   Rectangle* range_;
 };
 
 }

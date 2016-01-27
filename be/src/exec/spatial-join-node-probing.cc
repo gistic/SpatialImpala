@@ -14,13 +14,11 @@ double GET_X1(TupleRow* tupleRow, ExprContext* expr_ctx) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().x1);
-  }
-  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+  } else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().x1);
-  }
-  else {
+  } else {
     return expr_ctx->GetRectangleVal(tupleRow).x1;
   }
 }
@@ -30,13 +28,11 @@ double GET_Y1(TupleRow* tupleRow, ExprContext* expr_ctx) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().y1);
-  }
-  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+  } else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().y1);
-  }
-  else {
+  } else {
     return expr_ctx->GetRectangleVal(tupleRow).y1;
   }
 }
@@ -46,13 +42,11 @@ double GET_X2(TupleRow* tupleRow, ExprContext* expr_ctx) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().x2);
-  }
-  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+  } else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().x2);
-  }
-  else {
+  } else {
     return expr_ctx->GetRectangleVal(tupleRow).x2;
   }
 }
@@ -62,33 +56,32 @@ double GET_Y2(TupleRow* tupleRow, ExprContext* expr_ctx) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().y2);
-  }
-  else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
+  } else if(expr_ctx->root()->type().type == TYPE_LINESTRING) {
     StringVal strval = expr_ctx->GetStringVal(tupleRow);
     LineStringVal poly = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
     return (poly.GetMBR().y2);
-  }
-  else {
+  } else {
     return expr_ctx->GetRectangleVal(tupleRow).y2;
   }
 }
 
-bool IsIntersected(TupleRow* row1, TupleRow* row2, ExprContext* build, ExprContext* probe) {
-  if(build->root()->type().type == TYPE_POLYGON && probe->root()->type().type == TYPE_POLYGON) {
+bool IsIntersected(TupleRow* row1, TupleRow* row2, ExprContext* build,
+    ExprContext* probe) {
+  if(build->root()->type().type == TYPE_POLYGON
+      && probe->root()->type().type == TYPE_POLYGON) {
     StringVal strval1 = build->GetStringVal(row1);
     StringVal strval2 = probe->GetStringVal(row2);
     PolygonVal poly1 = PolygonVal(reinterpret_cast<char*>(strval1.ptr), strval1.len);
     PolygonVal poly2 = PolygonVal(reinterpret_cast<char*>(strval2.ptr), strval2.len);
     return poly1.GetMBR().isOverlappedWith(poly2.GetMBR());
-  }
-  else if(build->root()->type().type == TYPE_LINESTRING && probe->root()->type().type == TYPE_LINESTRING) {
+  } else if(build->root()->type().type == TYPE_LINESTRING
+      && probe->root()->type().type == TYPE_LINESTRING) {
     StringVal strval1 = build->GetStringVal(row1);
     StringVal strval2 = probe->GetStringVal(row2);
     LineStringVal line1 = LineStringVal(reinterpret_cast<char*>(strval1.ptr), strval1.len);
     LineStringVal line2 = LineStringVal(reinterpret_cast<char*>(strval2.ptr), strval2.len);
     return line1.GetMBR().isOverlappedWith(line2.GetMBR());
-  }
-  else {
+  } else {
     RectangleVal rect1 = build->GetRectangleVal(row1);
     RectangleVal rect2 = probe->GetRectangleVal(row2);
     return rect1.isOverlappedWith(rect2);
@@ -108,7 +101,8 @@ struct RowsX1Comparator {
 };
 
 void SpatialJoinNode::AddOutputRow
-  (RowBatch* out_batch, int* rows_added, uint8_t** out_row_mem, TupleRow* build, TupleRow* probe, int max_added_rows) {
+  (RowBatch* out_batch, int* rows_added, uint8_t** out_row_mem, TupleRow* build,
+    TupleRow* probe, int max_added_rows) {
 
   ExprContext* const* other_conjunct_ctxs = &other_join_conjunct_ctxs_[0];
   int num_other_conjunct_ctxs = other_join_conjunct_ctxs_.size();
@@ -130,7 +124,7 @@ void SpatialJoinNode::AddOutputRow
   }
 }
 
-void SpatialJoinNode::ProcessBuildBatch(RowBatchList* build_batch) {  
+void SpatialJoinNode::ProcessBuildBatch(RowBatchList* build_batch) {
   int built_rows_count = build_batch->total_num_rows();
   RowBatchList::TupleRowIterator iterator = build_batch->Iterator();
 
@@ -145,7 +139,8 @@ void SpatialJoinNode::ProcessBuildBatch(RowBatchList* build_batch) {
   std::sort(build_rows.begin(), build_rows.end(), rowsX1Comparator);
 }
 
-int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batch, int max_added_rows) {
+int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batch,
+    int max_added_rows) {
   std::vector<TupleRow*> probe_sorted_list;
 
   // ensure that we can add enough the required rows
@@ -154,24 +149,22 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
   uint8_t* out_row_mem = reinterpret_cast<uint8_t*>(out_batch->GetRow(row_idx));
 
   // First time to enter for this probe patch, prepare the lists, and sort the probe batch
-  if(probe_batch_pos_ == 0){
-
-    for(int i = 0; i < probe_batch->num_rows() ; i++){
+  if(probe_batch_pos_ == 0) {
+    for(int i = 0; i < probe_batch->num_rows() ; i++) {
       probe_sorted_list.push_back(probe_batch->GetRow(i));
-    }         
+    }
 
     // Sort the rows on the X Axis value
     RowsX1Comparator rowsX1Comparator(probe_expr_ctx_);
-    std::sort(probe_sorted_list.begin(), probe_sorted_list.end(), rowsX1Comparator);    
+    std::sort(probe_sorted_list.begin(), probe_sorted_list.end(), rowsX1Comparator);
 
     build_batch_pos_ = 0;
   } else {
     probe_sorted_list = lastest_probe_batch;
   }
 
-  // Probing the build batch    
-  int rows_added = 0;   
-
+  // Probing the build batch
+  int rows_added = 0;
   int i = build_batch_pos_;
   int j = probe_batch_pos_;
 
@@ -182,15 +175,16 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
   int S_length = S->size();
 
   // Plane Sweep Alg.
-  while(i < R_length && j < S_length && rows_added < max_added_rows) {     
+  while(i < R_length && j < S_length && rows_added < max_added_rows) {
     TupleRow* r;
     TupleRow* s;
     if (GET_X1(R->at(i), build_expr_ctx_) < GET_X1(S->at(j), probe_expr_ctx_)) {
       r = R->at(i);
       int jj = (last_jj_ > 0) ? last_jj_ : j;
-      last_jj_ = -1; 
+      last_jj_ = -1;
 
-      while ((jj < S_length) && (GET_X1((s = S->at(jj)), probe_expr_ctx_) <= GET_X2(r, build_expr_ctx_))) {
+      while ((jj < S_length) && (GET_X1((s = S->at(jj)), probe_expr_ctx_) <=
+          GET_X2(r, build_expr_ctx_))) {
         if (IsIntersected(r, s, build_expr_ctx_, probe_expr_ctx_)) {
           AddOutputRow(out_batch, &rows_added, &out_row_mem, r, s, max_added_rows);
         }
@@ -209,17 +203,17 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
       } else if(rows_added < max_added_rows) {
         i++;
       }
-
     } else {
       s = S->at(j);
       int ii = (last_ii_ > 0) ? last_ii_ : i;
       last_ii_ = -1;
 
-      while ((ii < R_length) && (GET_X1((r = R->at(ii) ), build_expr_ctx_) <= GET_X2(s, probe_expr_ctx_))) {
+      while ((ii < R_length) && (GET_X1((r = R->at(ii) ), build_expr_ctx_) <=
+          GET_X2(s, probe_expr_ctx_))) {
         if (IsIntersected(r, s, build_expr_ctx_, probe_expr_ctx_)) {
           AddOutputRow(out_batch, &rows_added, &out_row_mem, r, s, max_added_rows);
         }
-        ii++;         
+        ii++;
 
         if(rows_added == max_added_rows) {
           last_ii_ = ii;
@@ -230,8 +224,7 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
       if(ii == R_length && j == S_length - 1) {
         i = ii;
         j++;
-      }
-      else if(rows_added < max_added_rows) {
+      } else if(rows_added < max_added_rows) {
         j++;
       }
     }
@@ -246,15 +239,15 @@ int SpatialJoinNode::ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batc
   probe_batch_pos_ = j;
 
   // Free the memory if not needed anymore
-  if(probe_batch_pos_ == probe_batch->num_rows()){
+  if(probe_batch_pos_ == probe_batch->num_rows()) {
     lastest_probe_batch.clear();
   }
 
-  if(lastest_probe_batch != probe_sorted_list ){      
+  if(lastest_probe_batch != probe_sorted_list ) {
     lastest_probe_batch = probe_sorted_list;
-  } 
+  }
 
   out_batch->CommitRows(rows_added);
 
-  return rows_added;  
+  return rows_added;
 }

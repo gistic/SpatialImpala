@@ -25,7 +25,8 @@ const char* SpatialJoinNode::LLVM_CLASS_NAME = "class.impala::SpatialJoinNode";
 
 SpatialJoinNode::SpatialJoinNode(
     ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs)
-  : BlockingJoinNode("SpatialJoinNode", tnode.spatial_join_node.join_op, pool, tnode, descs) {
+    : BlockingJoinNode("SpatialJoinNode", tnode.spatial_join_node.join_op, pool, tnode,
+    descs) {
 
   // The spatial join node does not support cross or anti joins
   DCHECK_NE(join_op_, TJoinOp::CROSS_JOIN);
@@ -44,19 +45,16 @@ Status SpatialJoinNode::Init(const TPlanNode& tnode) {
   RETURN_IF_ERROR(BlockingJoinNode::Init(tnode));
   DCHECK(tnode.__isset.spatial_join_node);
 
-  RETURN_IF_ERROR(
-      Expr::CreateExprTree(pool_, tnode.spatial_join_node.spatial_join_expr,
-                            &spatial_join_conjunct_ctx_));
-  RETURN_IF_ERROR(
-      Expr::CreateExprTree(pool_, tnode.spatial_join_node.probe_expr, &probe_expr_ctx_));
-  RETURN_IF_ERROR(
-      Expr::CreateExprTree(pool_, tnode.spatial_join_node.build_expr, &build_expr_ctx_));
-  RETURN_IF_ERROR(
-      Expr::CreateExprTrees(pool_, tnode.spatial_join_node.other_join_conjuncts,
-                            &other_join_conjunct_ctxs_));
+  RETURN_IF_ERROR(Expr::CreateExprTree(pool_, tnode.spatial_join_node.spatial_join_expr,
+      &spatial_join_conjunct_ctx_));
+  RETURN_IF_ERROR(Expr::CreateExprTree(pool_, tnode.spatial_join_node.probe_expr,
+      &probe_expr_ctx_));
+  RETURN_IF_ERROR(Expr::CreateExprTree(pool_, tnode.spatial_join_node.build_expr,
+      &build_expr_ctx_));
+  RETURN_IF_ERROR(Expr::CreateExprTrees(pool_,
+      tnode.spatial_join_node.other_join_conjuncts, &other_join_conjunct_ctxs_));
   return Status::OK;
 }
-
 
 Status SpatialJoinNode::Prepare(RuntimeState* state) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());
@@ -67,18 +65,18 @@ Status SpatialJoinNode::Prepare(RuntimeState* state) {
   RETURN_IF_ERROR(build_expr_ctx_->Prepare(state, child(1)->row_desc()));
   RETURN_IF_ERROR(probe_expr_ctx_->Prepare(state, child(0)->row_desc()));
 
-  // TODO: Use Spatial Join Conjuncts to apply the joining instead of the default OverlapJoin.
-  // spatial_join_conjunct_ctx_ are evaluated in the context of the rows produced by this
-  // node
+  // TODO: Use Spatial Join Conjuncts to apply the joining
+  // instead of the default OverlapJoin.
+  // spatial_join_conjunct_ctx_ are evaluated in the context 
+  // of the rows produced by this node.
   RETURN_IF_ERROR(spatial_join_conjunct_ctx_->Prepare(state, row_descriptor_));
 
-  // other_join_conjunct_ctxs_ are evaluated in the context of the rows produced by this
-  // node
+  // other_join_conjunct_ctxs_ are evaluated in the context 
+  // of the rows produced by this node.
   RETURN_IF_ERROR(Expr::Prepare(other_join_conjunct_ctxs_, state, row_descriptor_));
 
   return Status::OK;
 }
-
 
 Status SpatialJoinNode::Open(RuntimeState* state) {
   Status status = BlockingJoinNode::Open(state);
@@ -97,7 +95,6 @@ void SpatialJoinNode::Close(RuntimeState* state) {
   Expr::Close(other_join_conjunct_ctxs_, state);
   BlockingJoinNode::Close(state);
 }
-
 
 Status SpatialJoinNode::ConstructBuildSide(RuntimeState* state) {
   RETURN_IF_ERROR(build_expr_ctx_->Open(state));
@@ -133,7 +130,6 @@ Status SpatialJoinNode::InitGetNext(TupleRow* first_probe_row) {
   matched_probe_ = false;
   return Status::OK;
 }
-
 
 Status SpatialJoinNode::GetNext(RuntimeState* state, RowBatch* out_batch, bool* eos) {
   SCOPED_TIMER(runtime_profile_->total_time_counter());

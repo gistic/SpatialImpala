@@ -21,8 +21,10 @@ RangeQuery::~RangeQuery() {
 
 Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
   if (GetNumChildren() == 1 && (children()[0]->type().type == TYPE_POINT
-    || children()[0]->type().type == TYPE_LINE || children()[0]->type().type == TYPE_RECTANGLE 
-    || children()[0]->type().type == TYPE_POLYGON || children()[0]->type().type == TYPE_LINESTRING)) {
+      || children()[0]->type().type == TYPE_LINE
+      || children()[0]->type().type == TYPE_RECTANGLE
+      || children()[0]->type().type == TYPE_POLYGON
+      || children()[0]->type().type == TYPE_LINESTRING)) {
     *fn = NULL;
     return Status("Codegen for Shapes not supported.");
   }
@@ -40,7 +42,8 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
     return Status(ss.str());
   }
 
-  if (children()[0]->type().type != TYPE_DOUBLE || children()[1]->type().type != TYPE_DOUBLE) {
+  if (children()[0]->type().type != TYPE_DOUBLE
+      || children()[1]->type().type != TYPE_DOUBLE) {
     stringstream ss;
     ss << "Slots are not of TYPE_DOUBLE" << endl;
     ss << "First Slot is: " << children()[0]->type() << endl;
@@ -77,7 +80,7 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
 
   builder.CreateCondBr(cmp, null_block, not_null_block);
   builder.SetInsertPoint(null_block);
-  
+
   CodegenAnyVal ret_null(codegen, &builder, TYPE_BOOLEAN, NULL, "ret_null");
   ret_null.SetVal(codegen->false_value());
   builder.CreateRet(ret_null.value());
@@ -100,7 +103,7 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
   Value* boundary_y = builder.CreateAnd(boundary_y1, boundary_y2, "boundary_y");
 
   Value* boundary = builder.CreateAnd(boundary_x, boundary_y, "boundary");
-  
+
   CodegenAnyVal ret(codegen, &builder, TYPE_BOOLEAN, NULL, "ret");
   ret.SetVal(boundary);
   builder.CreateRet(ret.value());
@@ -112,7 +115,6 @@ Status RangeQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn
   return Status::OK;
 }
 
-
 BooleanVal RangeQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
   if (GetNumChildren() == 2) {
     if (! (children()[0]->is_slotref() && children()[1]->is_slotref()))
@@ -120,14 +122,13 @@ BooleanVal RangeQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
 
     DoubleVal x = children()[0]->GetDoubleVal(NULL, row);
     DoubleVal y = children()[1]->GetDoubleVal(NULL, row);
-  
+
     DoubleVal null_val = DoubleVal::null();
     if (x == null_val || y == null_val)
       return BooleanVal::null();
 
     return BooleanVal(range_->Contains(x.val, y.val));
-  }
-  else if (GetNumChildren() == 1) {
+  } else if (GetNumChildren() == 1) {
     if (! children()[0]->is_slotref())
       return BooleanVal::null();
 
@@ -138,30 +139,33 @@ BooleanVal RangeQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
       }
       case TYPE_LINE: {
         LineVal l_val = children()[0]->GetLineVal(NULL, row);
-        return BooleanVal(range_->Contains(new Line(l_val.x1, l_val.y1, l_val.x2, l_val.y2)));
+        return BooleanVal(range_->Contains(
+            new Line(l_val.x1, l_val.y1, l_val.x2, l_val.y2)));
       }
       case TYPE_RECTANGLE: {
         RectangleVal r_val = children()[0]->GetRectangleVal(NULL, row);
-        return BooleanVal(range_->Contains(new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
+        return BooleanVal(range_->Contains(
+            new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
       }
       case TYPE_POLYGON: {
         StringVal strval = children()[0]->GetStringVal(NULL, row);
         PolygonVal poly = PolygonVal(reinterpret_cast<char*>(strval.ptr), strval.len);
         RectangleVal r_val = poly.GetMBR();
-        return BooleanVal(range_->Contains(new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
+        return BooleanVal(range_->Contains(
+            new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
       }
       case TYPE_LINESTRING: {
         StringVal strval = children()[0]->GetStringVal(NULL, row);
-        LineStringVal line = LineStringVal(reinterpret_cast<char*>(strval.ptr), strval.len);
+        LineStringVal line = LineStringVal(reinterpret_cast<char*>(strval.ptr),
+            strval.len);
         RectangleVal r_val = line.GetMBR();
-        return BooleanVal(range_->Contains(new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
+        return BooleanVal(range_->Contains(
+            new Rectangle(r_val.x1, r_val.y1, r_val.x2, r_val.y2)));
       }
       default:
         return BooleanVal::null();
     }
-  }
-  else {
+  } else {
     return BooleanVal::null();
   }
 }
-

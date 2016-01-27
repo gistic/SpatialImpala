@@ -37,7 +37,6 @@ Status OverlapQuery::GetCodegendComputeFn(RuntimeState* state, llvm::Function** 
   return Status("Codegen for Overlap is not supported.");
 }
 
-
 BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
   DCHECK_EQ(GetNumChildren(), 2);
 
@@ -46,7 +45,7 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
 
   Shape* first_shape;
   Shape* second_shape;
-  
+
   switch (children()[0]->type().type) {
     case TYPE_POINT: {
       PointVal p_val = children()[0]->GetPointVal(NULL, row);
@@ -108,11 +107,10 @@ BooleanVal OverlapQuery::GetBooleanVal(ExprContext* context, TupleRow* row) {
       return BooleanVal::null();
     }
   }
-  
+
   bool result = first_shape->Intersects(second_shape);
   delete first_shape;
   delete second_shape;
 
   return BooleanVal(result);
 }
-

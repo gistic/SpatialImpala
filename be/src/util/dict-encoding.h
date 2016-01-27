@@ -215,7 +215,6 @@ inline int DictEncoder<StringValue>::AddToDict(const StringValue& value, int* in
   return bytes_added;
 }
 
-
 template<typename T>
 inline bool DictDecoder<T>::GetValue(T* value) {
   DCHECK(data_decoder_.get() != NULL);

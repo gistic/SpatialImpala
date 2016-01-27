@@ -19,8 +19,7 @@ Status SpatialSelectNode::Open(RuntimeState* state) {
 
   // If the underlying child is of type SpatialHdfsScanNode, assign the range query to it.
   SpatialHdfsScanNode* scan_node = dynamic_cast<SpatialHdfsScanNode*>(child(0));
-  if (scan_node != NULL)
-    scan_node->SetRangeQuery(range_);
+  if (scan_node != NULL) { scan_node->SetRangeQuery(range_); }
   return Status::OK;
 }
 
@@ -37,9 +36,7 @@ bool SpatialSelectNode::InsideRange(TupleRow* row) {
   DoubleVal y = y_->GetDoubleVal(NULL, row);
   
   DoubleVal null_val = DoubleVal::null();
-  if (x == null_val || y == null_val)
-    return false;
-
+  if (x == null_val || y == null_val) { return false; }
   return range_->Contains(x.val, y.val);
 }
 

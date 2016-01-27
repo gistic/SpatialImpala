@@ -38,16 +38,18 @@ bool Rectangle::Intersects(Shape* other) {
   switch (other_type) {
     case TShapeType::RECTANGLE: {
       Rectangle* other_rect = dynamic_cast<Rectangle*>(other);
-      if (other_rect != NULL)
+      if (other_rect != NULL) {
         return this->x2_ > other_rect->x1_ && other_rect->x2_ > this->x1_
-          && this->y2_ > other_rect->y1_ && other_rect->y2_ > this->y1_;
+            && this->y2_ > other_rect->y1_ && other_rect->y2_ > this->y1_;
+      }
       return false;
     }
-    case TShapeType::LINE: { 
+    case TShapeType::LINE: {
       Line* other_line = dynamic_cast<Line*>(other);
-      if (other_line != NULL)
+      if (other_line != NULL) {
         return this->Contains(other_line->x1_, other_line->y1_)
-          ^ this->Contains(other_line->x2_, other_line->y2_);
+            ^ this->Contains(other_line->x2_, other_line->y2_);
+      }
       return false;
     }
     case TShapeType::POINT:
@@ -63,23 +65,26 @@ bool Rectangle::Contains(Shape* other) {
   switch (other_type) {
     case TShapeType::RECTANGLE: {
       Rectangle* other_rect = dynamic_cast<Rectangle*>(other);
-      if (other_rect != NULL)
+      if (other_rect != NULL) {
         return this->x1_ <= other_rect->x1_ && this->x2_ > other_rect->x2_
-          && this->y1_ <= other_rect->y1_ && this->y2_ > other_rect->y2_;
+            && this->y1_ <= other_rect->y1_ && this->y2_ > other_rect->y2_;
+      }
       return false;
     }
-    case TShapeType::LINE: { 
+    case TShapeType::LINE: {
       Line* other_line = dynamic_cast<Line*>(other);
-      if (other_line != NULL)
+      if (other_line != NULL) {
         return this->Contains(other_line->x1_, other_line->y1_)
-          && this->Contains(other_line->x2_, other_line->y2_);
+            && this->Contains(other_line->x2_, other_line->y2_);
+      }
       return false;
     }
     case TShapeType::POINT: {
       Point* other_point = dynamic_cast<Point*>(other);
-      if (other_point != NULL)
+      if (other_point != NULL) {
         return this->x1_ <= other_point->x_ && this->x2_ > other_point->x_
-          && this->y1_ <= other_point->y_ && this->y2_ > other_point->y_;
+            && this->y1_ <= other_point->y_ && this->y2_ > other_point->y_;
+      }
       return false;
     }
     default:
@@ -88,8 +93,7 @@ bool Rectangle::Contains(Shape* other) {
 }
 
 bool Rectangle::Contains(double x, double y) {
-  return this->x1_ <= x && this->x2_ > x
-    && this->y1_ <= y && this->y2_ > y;
+  return this->x1_ <= x && this->x2_ > x && this->y1_ <= y && this->y2_ > y;
 }
 
 void Rectangle::GetMBR(Shape* mbr) {

@@ -36,12 +36,14 @@ using namespace spatialimpala;
 using namespace llvm;
 using namespace std;
 
-const char* HdfsRTreeSpatialScanner::LLVM_CLASS_NAME = "class.spatialimpala::HdfsRTreeSpatialScanner";
+const char* HdfsRTreeSpatialScanner::LLVM_CLASS_NAME =
+    "class.spatialimpala::HdfsRTreeSpatialScanner";
 
 // Suffix for lzo index file: hdfs-filename.index
 const string HdfsRTreeSpatialScanner::LZO_INDEX_SUFFIX = ".index";
 
-HdfsRTreeSpatialScanner::HdfsRTreeSpatialScanner(HdfsScanNode* scan_node, RuntimeState* state)
+HdfsRTreeSpatialScanner::HdfsRTreeSpatialScanner(HdfsScanNode* scan_node,
+    RuntimeState* state)
     : HdfsScanner(scan_node, state),
       byte_buffer_ptr_(NULL),
       byte_buffer_end_(NULL),
@@ -50,7 +52,7 @@ HdfsRTreeSpatialScanner::HdfsRTreeSpatialScanner(HdfsScanNode* scan_node, Runtim
       boundary_column_(data_buffer_pool_.get()),
       slot_idx_(0),
       error_in_row_(false) {
-  only_parsing_header= false;
+  only_parsing_header_= false;
   range_ = NULL;
   rtree_ = NULL;
 }
@@ -60,7 +62,6 @@ HdfsRTreeSpatialScanner::~HdfsRTreeSpatialScanner() {
 
 Status HdfsRTreeSpatialScanner::IssueInitialRanges(HdfsScanNode* scan_node,
     const vector<HdfsFileDesc*>& files) {
-  
   vector<DiskIoMgr::ScanRange*> header_ranges;
 
   // Issue only the header ranges for all files.
@@ -83,13 +84,13 @@ Status HdfsRTreeSpatialScanner::ProcessSplit() {
     range_ = spatial_scan_node->GetRangeQuery();
 
   // Getting RTree. If there is a range query assigned,
-  // this will be initialized after processing the header of the file. 
+  // this will be initialized after processing the header of the file.
   rtree_ = reinterpret_cast<RTree*>(scan_node_->GetFileMetadata(stream_->filename()));
 
   if (range_ != NULL) {
     if (rtree_ == NULL) {
       // Parsing the header only.
-      only_parsing_header = true;
+      only_parsing_header_ = true;
 
       // Read the RTree file header, and return if any error occurred.
       RETURN_IF_ERROR(ReadRTreeFileHeader());
@@ -105,11 +106,12 @@ Status HdfsRTreeSpatialScanner::ProcessSplit() {
       vector<DiskIoMgr::ScanRange*> new_scan_ranges;
       for (int i = 0; i < list_of_splits.size(); i++) {
         RTreeSplit split = list_of_splits[i];
-        ScanRangeMetadata* metadata =
-            reinterpret_cast<ScanRangeMetadata*>(file->splits[0]->meta_data());
+        ScanRangeMetadata* metadata = reinterpret_cast<ScanRangeMetadata*>(
+            file->splits[0]->meta_data());
         DiskIoMgr::ScanRange* file_range = scan_node_->AllocateScanRange(
-            file->filename.c_str(), split.end_offset - split.start_offset, split.start_offset,
-            metadata->partition_id, file->splits[0]->disk_id(), file->splits[0]->try_cache());
+            file->filename.c_str(), split.end_offset - split.start_offset,
+            split.start_offset, metadata->partition_id, file->splits[0]->disk_id(),
+            file->splits[0]->try_cache());
         new_scan_ranges.push_back(file_range);
       }
 
@@ -156,8 +158,9 @@ void HdfsRTreeSpatialScanner::Close() {
   }
   AttachPool(data_buffer_pool_.get(), false);
   AddFinalRowBatch();
-  if (!only_parsing_header)
-    scan_node_->RangeComplete(THdfsFileFormat::RTREE, stream_->file_desc()->file_compression);
+  if (!only_parsing_header_)
+    scan_node_->RangeComplete(THdfsFileFormat::RTREE,
+        stream_->file_desc()->file_compression);
   HdfsScanner::Close();
 }
 
@@ -543,7 +546,8 @@ Status HdfsRTreeSpatialScanner::ReadRTreeFileHeader() {
         int height = 0;
         int degree = 0;
         int tree_size = 0;
-        first_tuple_offset = ReadRTreeBytes(offset_array, prev_read_size_offset, &height, &degree, &tree_size);
+        first_tuple_offset = ReadRTreeBytes(offset_array, prev_read_size_offset, &height,
+            &degree, &tree_size);
         
         // Advancing byte_buffer_ptr to point at the start of the r-tree structure.
         byte_buffer_ptr_ += rtree_current_index;
@@ -594,7 +598,6 @@ Status HdfsRTreeSpatialScanner::ReadRTreeFileHeader() {
   return Status::OK;
 }
 
-
 Status HdfsRTreeSpatialScanner::SkipHeader(bool* tuple_found) {
   *tuple_found = false;
   char offset_array[HEADER_SIZE];
@@ -630,7 +633,8 @@ Status HdfsRTreeSpatialScanner::SkipHeader(bool* tuple_found) {
         int height = 0;
         int degree = 0;
         int tree_size = 0;
-        first_tuple_offset = ReadRTreeBytes(offset_array, prev_read_size_offset, &height, &degree, &tree_size);
+        first_tuple_offset = ReadRTreeBytes(offset_array, prev_read_size_offset, &height,
+            &degree, &tree_size);
 
         if (first_tuple_offset == -1) {
           // Couldn't parse file.

@@ -53,7 +53,7 @@ class SpatialJoinNode : public BlockingJoinNode {
   int build_batch_pos_;
 
   std::vector<TupleRow*> build_rows;
-  std::vector<TupleRow*> lastest_probe_batch;  
+  std::vector<TupleRow*> lastest_probe_batch;
 
   TupleRow** built_rows_;
   TupleRow** lastest_probe_batch_;
@@ -86,7 +86,7 @@ class SpatialJoinNode : public BlockingJoinNode {
   // return the number of rows added to out_batch
   int ProcessProbeBatch(RowBatch* out_batch, RowBatch* probe_batch, int max_added_rows);
   void AddOutputRow(RowBatch* out_batch, int* rows_added, uint8_t** out_row_mem,
-                    TupleRow* build, TupleRow* probe, int max_added_rows);
+      TupleRow* build, TupleRow* probe, int max_added_rows);
 };
 
 }
