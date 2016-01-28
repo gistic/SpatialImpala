@@ -313,7 +313,6 @@ inline int ParquetPlainEncoder::Encode(
 template<>
 inline int ParquetPlainEncoder::Encode(
     uint8_t* buffer, int fixed_len_size, const Rectangle& v) {
-
   memcpy(buffer, &v.x1_, 8);
   memcpy(buffer + 8, &v.y1_, 8);
   memcpy(buffer + 16, &v.x2_, 8);
@@ -324,8 +323,7 @@ inline int ParquetPlainEncoder::Encode(
 
 template<>
 inline int ParquetPlainEncoder::Decode(
-    uint8_t* buffer, int fixed_len_size, Rectangle* v) {
-  
+    uint8_t* buffer, int fixed_len_size, Rectangle* v) {  
   memcpy(&v->x1_, buffer, 8);
   memcpy(&v->y1_, buffer + 8, 8);
   memcpy(&v->x2_, buffer + 16, 8);
@@ -337,7 +335,6 @@ inline int ParquetPlainEncoder::Decode(
 template<>
 inline int ParquetPlainEncoder::Encode(
     uint8_t* buffer, int fixed_len_size, const Line& v) {
-
   memcpy(buffer, &v.x1_, 8);
   memcpy(buffer + 8, &v.y1_, 8);
   memcpy(buffer + 16, &v.x2_, 8);
@@ -349,7 +346,6 @@ inline int ParquetPlainEncoder::Encode(
 template<>
 inline int ParquetPlainEncoder::Decode(
     uint8_t* buffer, int fixed_len_size, Line* v) {
-  
   memcpy(&v->x1_, buffer, 8);
   memcpy(&v->y1_, buffer + 8, 8);
   memcpy(&v->x2_, buffer + 16, 8);
@@ -361,7 +357,6 @@ inline int ParquetPlainEncoder::Decode(
 template<>
 inline int ParquetPlainEncoder::Encode(
     uint8_t* buffer, int fixed_len_size, const Point& v) {
-
   memcpy(buffer, &v.x_, 8);
   memcpy(buffer + 8, &v.y_, 8);
   int bytesize = ByteSize(v);
@@ -371,13 +366,11 @@ inline int ParquetPlainEncoder::Encode(
 template<>
 inline int ParquetPlainEncoder::Decode(
     uint8_t* buffer, int fixed_len_size, Point* v) {
-  
   memcpy(&v->x_, buffer, 8);
   memcpy(&v->y_, buffer + 8, 8);
   int bytesize = ByteSize(*v);
   return bytesize;
 }
-
 
 template<>
 inline int ParquetPlainEncoder::Encode(
@@ -416,7 +409,6 @@ inline int ParquetPlainEncoder::Decode(
   int bytesize = ByteSize(*v);
   return bytesize;
 }
-
 
 template<>
 inline int ParquetPlainEncoder::Decode(

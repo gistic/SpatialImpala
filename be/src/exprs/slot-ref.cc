@@ -163,11 +163,13 @@ Status SlotRef::GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn) {
     *fn = NULL;
     return Status("Codegen for Char not supported.");
   }
-  if (type_.type == TYPE_POINT || type_.type == TYPE_LINE
-    || type_.type == TYPE_RECTANGLE || type_.type == TYPE_POLYGON || type_.type == TYPE_LINESTRING) {
+
+  if (type_.type == TYPE_POINT || type_.type == TYPE_LINE || type_.type == TYPE_RECTANGLE
+      || type_.type == TYPE_POLYGON || type_.type == TYPE_LINESTRING) {
     *fn = NULL;
     return Status("Codegen for Shapes not supported.");
   }
+
   if (ir_compute_fn_ != NULL) {
     *fn = ir_compute_fn_;
     return Status::OK();

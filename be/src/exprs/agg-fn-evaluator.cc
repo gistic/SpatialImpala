@@ -312,24 +312,24 @@ inline void AggFnEvaluator::SetDstSlot(FunctionContext* ctx, const AnyVal* src,
           break;
       }
     case TYPE_POINT:
-      *reinterpret_cast<Point*>(slot)
-         = Point::FromPointVal(*const_cast<PointVal*>(reinterpret_cast<const PointVal*>(src)));
+      *reinterpret_cast<Point*>(slot) = Point::FromPointVal(*const_cast<PointVal*>(
+          reinterpret_cast<const PointVal*>(src)));
       return;
     case TYPE_LINE:
-      *reinterpret_cast<Line*>(slot)
-         = Line::FromLineVal(*const_cast<LineVal*>(reinterpret_cast<const LineVal*>(src)));
+      *reinterpret_cast<Line*>(slot) = Line::FromLineVal(*const_cast<LineVal*>(
+          reinterpret_cast<const LineVal*>(src)));
       return;
     case TYPE_RECTANGLE:
-      *reinterpret_cast<Rectangle*>(slot)
-         = Rectangle::FromRectangleVal(*const_cast<RectangleVal*>(reinterpret_cast<const RectangleVal*>(src)));
+      *reinterpret_cast<Rectangle*>(slot) = Rectangle::FromRectangleVal(
+          *const_cast<RectangleVal*>(reinterpret_cast<const RectangleVal*>(src)));
       return;
     case TYPE_POLYGON:
-      *reinterpret_cast<Polygon*>(slot)
-         = Polygon::FromPolygonVal(*const_cast<PolygonVal*>(reinterpret_cast<const PolygonVal*>(src)));
+      *reinterpret_cast<Polygon*>(slot) = Polygon::FromPolygonVal(*const_cast<PolygonVal*>(
+          reinterpret_cast<const PolygonVal*>(src)));
       return;
     case TYPE_LINESTRING:
-      *reinterpret_cast<LineString*>(slot)
-         = LineString::FromLineStringVal(*const_cast<LineStringVal*>(reinterpret_cast<const LineStringVal*>(src)));
+      *reinterpret_cast<LineString*>(slot) = LineString::FromLineStringVal(
+          *const_cast<LineStringVal*>(reinterpret_cast<const LineStringVal*>(src)));
       return;
     default:
       DCHECK(false) << "NYI: " << dst_slot_desc->type();

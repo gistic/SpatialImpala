@@ -13,24 +13,23 @@ namespace spatialimpala {
 
 class SpatialSelectNode : public SelectNode {
   public:
-    SpatialSelectNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs);
-    virtual Status Open(RuntimeState* state);
-    virtual Status Prepare(RuntimeState* state);
+   SpatialSelectNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs);
+   virtual Status Open(RuntimeState* state);
+   virtual Status Prepare(RuntimeState* state);
 
   private:
-    bool InsideRange(TupleRow* row);
-    virtual bool CopyRows(RowBatch* output_batch);
+   bool InsideRange(TupleRow* row);
+   virtual bool CopyRows(RowBatch* output_batch);
 
-    RTree* rtree_;
-    Rectangle* range_;
-    
-    // Used to get values of the Spatial columns in a single row.
-    // TODO: Should be updated to a Spatial Column.
-    SlotRef* x_;
-    SlotRef* y_;
+   RTree* rtree_;
+   Rectangle* range_;
+
+   // Used to get values of the Spatial columns in a single row.
+   // TODO: Should be updated to a Spatial Column.
+   SlotRef* x_;
+   SlotRef* y_;
 };
 
 }
 
 #endif
-

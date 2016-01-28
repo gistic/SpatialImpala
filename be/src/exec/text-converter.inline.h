@@ -21,7 +21,6 @@
 #include <boost/algorithm/string.hpp>
 #include <limits>
 
-
 #include "runtime/runtime-state.h"
 #include "runtime/descriptors.h"
 #include "runtime/tuple.h"
@@ -130,6 +129,7 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
     case TYPE_POINT: {
       string point_str(data, len);
       boost::algorithm::to_lower(point_str);
+
       std::size_t startingField = point_str.find("point (");
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the point";
@@ -138,11 +138,15 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       }
       std::size_t startingData = startingField + 7;
       std::string delimiter = " ";
-      std::string Xtoken = point_str.substr(startingData, point_str.find(delimiter, startingData) - startingData);
-      std::string Ytoken = point_str.substr(startingData + Xtoken.size() + 1, point_str.find(")", startingData) - startingData - Xtoken.size() - 1);
-      double x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
-      double y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
-      
+      std::string Xtoken = point_str.substr(startingData,
+          point_str.find(delimiter, startingData) - startingData);
+      std::string Ytoken = point_str.substr(startingData + Xtoken.size() + 1,
+          point_str.find(")", startingData) - startingData - Xtoken.size() - 1);
+      double x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(),
+          &parse_result);
+      double y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(),
+          &parse_result);
+
       Point point_data(x, y);
       Point* point_slot = reinterpret_cast<Point*>(slot);
       *point_slot = point_data;
@@ -151,7 +155,6 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
     case TYPE_LINE: {
       string line_str(data, len);
       boost::algorithm::to_lower(line_str);
-      
       std::size_t startingField = line_str.find("line (");
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the line";
@@ -167,11 +170,14 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       std::string X2token = line_str.substr(prefix, line_str.find(delimiter, prefix) - prefix);
       prefix += X2token.size() + 1;
       std::string Y2token = line_str.substr(prefix, line_str.find(")", prefix) - prefix);
-      double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(), &parse_result);
-      double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(), &parse_result);
-      double x2 = StringParser::StringToFloat<double>(X2token.c_str(), X2token.size(), &parse_result);
-      double y2 = StringParser::StringToFloat<double>(Y2token.c_str(), Y2token.size(), &parse_result);
-
+      double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(),
+          &parse_result);
+      double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(),
+          &parse_result);
+      double x2 = StringParser::StringToFloat<double>(X2token.c_str(), X2token.size(),
+          &parse_result);
+      double y2 = StringParser::StringToFloat<double>(Y2token.c_str(), Y2token.size(),
+          &parse_result);
       Line line_data(x1, y1, x2, y2);
       Line* line_slot = reinterpret_cast<Line*>(slot);
       *line_slot = line_data;
@@ -180,7 +186,6 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
     case TYPE_RECTANGLE: {
       string rect_str(data, len);
       boost::algorithm::to_lower(rect_str);
-      
       std::size_t startingField = rect_str.find("rectangle (");
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the rectangle";
@@ -197,10 +202,14 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       prefix += X2token.size() + 1;
       std::string Y2token = rect_str.substr(prefix, rect_str.find(")", prefix) - prefix);
       
-      double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(), &parse_result);
-      double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(), &parse_result);
-      double x2 = StringParser::StringToFloat<double>(X2token.c_str(), X2token.size(), &parse_result);
-      double y2 = StringParser::StringToFloat<double>(Y2token.c_str(), Y2token.size(), &parse_result);
+      double x1 = StringParser::StringToFloat<double>(X1token.c_str(), X1token.size(),
+          &parse_result);
+      double y1 = StringParser::StringToFloat<double>(Y1token.c_str(), Y1token.size(),
+          &parse_result);
+      double x2 = StringParser::StringToFloat<double>(X2token.c_str(), X2token.size(),
+          &parse_result);
+      double y2 = StringParser::StringToFloat<double>(Y2token.c_str(), Y2token.size(),
+          &parse_result);
       
       Rectangle rect_data(x1, y1, x2, y2);
       Rectangle* rect_slot = reinterpret_cast<Rectangle*>(slot);
@@ -215,24 +224,26 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       int lineStringCount = 0;
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the polygon";
-      }
-      else {
+      } else {
         lineStringPrefix = startingField + 9;
-        lineStringCount = std::count(poly_str.begin() + lineStringPrefix, poly_str.end(), '(');
+        lineStringCount = std::count(poly_str.begin() + lineStringPrefix,
+            poly_str.end(), '(');
       }
-      
+
       std::string lineStringToken, Xtoken, Ytoken;
       double x, y;
       int memoryNeeded = 4 * sizeof(double) + sizeof(int32_t);
       for (int i = 0; i < lineStringCount; i++) {
         if (i > 0) {
-          lineStringPrefix +=2; //skip the ", " seperator between lineStrings
+          lineStringPrefix += 2; //skip the ", " seperator between lineStrings
         }
         memoryNeeded += sizeof(int32_t);
         lineStringPrefix++; //skip the '(' character
-        lineStringToken = poly_str.substr(lineStringPrefix, poly_str.find(")", lineStringPrefix) - lineStringPrefix);
+        lineStringToken = poly_str.substr(lineStringPrefix,
+            poly_str.find(")", lineStringPrefix) - lineStringPrefix);
         lineStringPrefix += lineStringToken.size() + 1;
-        int pointsCount = std::count(lineStringToken.begin(), lineStringToken.end(), ',') + 1;
+        int pointsCount = std::count(lineStringToken.begin(),
+            lineStringToken.end(), ',') + 1;
         memoryNeeded += pointsCount * 2 * sizeof(double);
       }
       Polygon poly_data;
@@ -242,18 +253,22 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       minX = minY = numeric_limits<double>::max();
       maxX = maxY = -1.0 * numeric_limits<double>::max();
       int serializedDataIndex = 4 * sizeof(double);
-      memcpy(poly_data.serializedData_ + serializedDataIndex, &lineStringCount, sizeof(int32_t));
+      memcpy(poly_data.serializedData_ + serializedDataIndex, &lineStringCount,
+          sizeof(int32_t));
       serializedDataIndex += sizeof(int32_t);
       lineStringPrefix = startingField + 9;
       for (int i = 0; i < lineStringCount; i++) {
         if (i > 0) {
-          lineStringPrefix +=2; //skip the ", " seperator between lineStrings
+          lineStringPrefix += 2; //skip the ", " seperator between lineStrings
         }
         lineStringPrefix++; //skip the '(' character
-        lineStringToken = poly_str.substr(lineStringPrefix, poly_str.find(")", lineStringPrefix) - lineStringPrefix);
+        lineStringToken = poly_str.substr(lineStringPrefix,
+            poly_str.find(")", lineStringPrefix) - lineStringPrefix);
         lineStringPrefix += lineStringToken.size() + 1;
-        int pointsCount = std::count(lineStringToken.begin(), lineStringToken.end(), ',') + 1;
-        memcpy(poly_data.serializedData_ + serializedDataIndex, &pointsCount, sizeof(int32_t));
+        int pointsCount = std::count(lineStringToken.begin(),
+            lineStringToken.end(), ',') + 1;
+        memcpy(poly_data.serializedData_ + serializedDataIndex, &pointsCount,
+            sizeof(int32_t));
         serializedDataIndex += sizeof(int32_t);
         std::size_t pointsPrefix = 0;
         for (int j = 0; j < pointsCount; j++) {
@@ -261,47 +276,48 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
           Xtoken = lineStringToken.substr(pointsPrefix, position - pointsPrefix);
           pointsPrefix += Xtoken.size() + 1;
           if (j == pointsCount - 1) {
-            Ytoken = lineStringToken.substr(pointsPrefix, lineStringToken.find(')', pointsPrefix) - pointsPrefix);
-          }
-          else {
+            Ytoken = lineStringToken.substr(pointsPrefix,
+                lineStringToken.find(')', pointsPrefix) - pointsPrefix);
+          } else {
             int position = lineStringToken.find(", ", pointsPrefix);
             Ytoken = lineStringToken.substr(pointsPrefix, position - pointsPrefix);
           }
           pointsPrefix += Ytoken.size() + 2;
-          x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
-          y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
+          x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(),
+              &parse_result);
+          y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(),
+              &parse_result);
           memcpy(poly_data.serializedData_ + serializedDataIndex, &x, sizeof(double));
           serializedDataIndex += sizeof(double);
           memcpy(poly_data.serializedData_ + serializedDataIndex, &y, sizeof(double));
           serializedDataIndex += sizeof(double);
-          
+
           if (x < minX) {
             minX = x;
-          }
-          else if (x > maxX) {
+          } else if (x > maxX) {
             maxX = x;
           }
+
           if (y < minY) {
             minY = y;
-          }
-          else if (y > maxY) {
+          } else if (y > maxY) {
             maxY = y;
           }
         }
       }
-      
+
       memcpy(poly_data.serializedData_, &minX, sizeof(double));
       memcpy(poly_data.serializedData_ + sizeof(double), &minY, sizeof(double));
       memcpy(poly_data.serializedData_ + 2 * sizeof(double), &maxX, sizeof(double));
       memcpy(poly_data.serializedData_ + 3 * sizeof(double), &maxY, sizeof(double));
-      
+
       StringValue str;
       str.len = poly_data.len_;
       str.ptr = poly_data.serializedData_;
       StringValue* str_slot = reinterpret_cast<StringValue*>(slot);
       *str_slot = str;
-      /*Polygon* poly_slot = reinterpret_cast<Polygon*>(slot);
-      *poly_slot = poly_data;*/
+      // Polygon* poly_slot = reinterpret_cast<Polygon*>(slot);
+      // poly_slot = poly_data;
       break;
     }
     case TYPE_LINESTRING: {
@@ -312,16 +328,17 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       int pointsCount = 0;
       if (startingField == std::string::npos) {
         VLOG_QUERY << "Error in the well know text format of the polygon";
-      }
-      else {
+      } else {
         lineStringPrefix = startingField + 12;
-        pointsCount = std::count(line_str.begin() + lineStringPrefix,line_str.end(), ',') + 1;
+        pointsCount = std::count(line_str.begin() + lineStringPrefix,
+            line_str.end(), ',') + 1;
       }
 
       std::string Xtoken, Ytoken;
       double x, y;
-      int memoryNeeded = 4 * sizeof(double) + sizeof(int32_t) + pointsCount * 2 * sizeof(double);
-      
+      int memoryNeeded = 4 * sizeof(double) + sizeof(int32_t)
+          + pointsCount * 2 * sizeof(double);
+
       LineString line_data;
       line_data.serializedData_ = reinterpret_cast<char*>(pool->Allocate(memoryNeeded));
       line_data.len_ = memoryNeeded;
@@ -329,7 +346,8 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
       minX = minY = numeric_limits<double>::max();
       maxX = maxY = -1.0 * numeric_limits<double>::max();
       int serializedDataIndex = 4 * sizeof(double);
-      memcpy(line_data.serializedData_ + serializedDataIndex, &pointsCount, sizeof(int32_t));
+      memcpy(line_data.serializedData_ + serializedDataIndex, &pointsCount,
+          sizeof(int32_t));
       serializedDataIndex += sizeof(int32_t);
       lineStringPrefix = startingField + 12;
       for (int i = 0; i < pointsCount; i++) {
@@ -337,15 +355,17 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
         Xtoken = line_str.substr(lineStringPrefix, position - lineStringPrefix);
         lineStringPrefix += Xtoken.size() + 1;
         if (i == pointsCount - 1) {
-          Ytoken = line_str.substr(lineStringPrefix, line_str.find(')', lineStringPrefix) - lineStringPrefix);
-        }
-        else {
+          Ytoken = line_str.substr(lineStringPrefix,
+              line_str.find(')', lineStringPrefix) - lineStringPrefix);
+        } else {
           int position = line_str.find(", ", lineStringPrefix);
           Ytoken = line_str.substr(lineStringPrefix, position - lineStringPrefix);
         }
         lineStringPrefix += Ytoken.size() + 2;
-        x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(), &parse_result);
-        y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(), &parse_result);
+        x = StringParser::StringToFloat<double>(Xtoken.c_str(), Xtoken.size(),
+            &parse_result);
+        y = StringParser::StringToFloat<double>(Ytoken.c_str(), Ytoken.size(),
+            &parse_result);
         memcpy(line_data.serializedData_ + serializedDataIndex, &x, sizeof(double));
         serializedDataIndex += sizeof(double);
         memcpy(line_data.serializedData_ + serializedDataIndex, &y, sizeof(double));
@@ -353,14 +373,13 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
 
         if (x < minX) {
           minX = x;
-        }
-        else if (x > maxX) {
+        } else if (x > maxX) {
           maxX = x;
         }
+
         if (y < minY) {
           minY = y;
-        }
-        else if (y > maxY) {
+        } else if (y > maxY) {
           maxY = y;
         }
       }

@@ -60,7 +60,7 @@ void RTree::AddNode(char* node_data) {
   this->tree_.push_back(node);
 }
 
-int RTree::GetFirstChildOfNode(int index){
+int RTree::GetFirstChildOfNode(int index) {
   return index * degree_ + 1;
 }
 
@@ -104,25 +104,27 @@ void RTree::CreateRTreeSplit(int node_index, vector<RTreeSplit>* list_of_splits)
   RTreeSplit split;
   split.start_offset = tree_[node_index]->offset_of_first_element_ + FILE_OFFSET;
   split.end_offset = (node_index == tree_.size() - 1) ?
-  tree_size_ : tree_[node_index + 1]-> offset_of_first_element_;
+      tree_size_ : tree_[node_index + 1]-> offset_of_first_element_;
   
-  VLOG_QUERY << "Current Split: [" << split.start_offset << ", " << split.end_offset << "]";
+  VLOG_QUERY << "Current Split: [" << split.start_offset
+      << ", " << split.end_offset << "]";
+
   // The node was the last node in the level
   if (split.end_offset <= split.start_offset)
     split.end_offset = tree_size_;
 
-    if (!list_of_splits->empty()) {
-      RTreeSplit old_split = list_of_splits->back();
-      VLOG_QUERY << "Old Split: [" << old_split.start_offset << ", " << old_split.end_offset << "]"; 
+  if (!list_of_splits->empty()) {
+    RTreeSplit old_split = list_of_splits->back();
+    VLOG_QUERY << "Old Split: [" << old_split.start_offset 
+        << ", " << old_split.end_offset << "]"; 
 
-      // The 2 Splits should be merged into one.
-      if (old_split.end_offset >= split.start_offset
+    // The 2 Splits should be merged into one.
+    if (old_split.end_offset >= split.start_offset
         && split.end_offset >= old_split.start_offset) {
-
-        split.start_offset = min(old_split.start_offset, split.start_offset);
-        split.end_offset = max(old_split.end_offset, split.end_offset);
-        list_of_splits->pop_back();
-      }
+      split.start_offset = min(old_split.start_offset, split.start_offset);
+      split.end_offset = max(old_split.end_offset, split.end_offset);
+      list_of_splits->pop_back();
+    }
   }
 
   list_of_splits->push_back(split);
@@ -133,5 +135,5 @@ RTreeNode::RTreeNode(int offset_of_first_element, Rectangle mbr) {
   this->mbr_ = mbr;
 }
 
-RTreeNode::~RTreeNode(){
+RTreeNode::~RTreeNode() {
 }

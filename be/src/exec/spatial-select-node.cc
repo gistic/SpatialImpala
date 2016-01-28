@@ -37,9 +37,7 @@ bool SpatialSelectNode::InsideRange(TupleRow* row) {
   DoubleVal y = y_->GetDoubleVal(NULL, row);
   
   DoubleVal null_val = DoubleVal::null();
-  if (x == null_val || y == null_val)
-    return false;
-
+  if (x == null_val || y == null_val) { return false; }
   return range_->Contains(x.val, y.val);
 }
 

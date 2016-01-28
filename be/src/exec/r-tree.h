@@ -27,37 +27,37 @@ struct RTreeSplit {
 // Rtree-Node implementation that represents a node with its minimum bounding rectangle.
 class RTreeNode {
   public:
-    RTreeNode(int offset_of_first_element, Rectangle mbr);
-    virtual ~RTreeNode();
+   RTreeNode(int offset_of_first_element, Rectangle mbr);
+   virtual ~RTreeNode();
     
-    int offset_of_first_element_;
-    Rectangle mbr_;
+   int offset_of_first_element_;
+   Rectangle mbr_;
 };
 
 // Rtree implementation that represents rtree records.
 class RTree {
   public:
-    RTree(int degree, int height, int tree_size);
-    virtual ~RTree();
+   RTree(int degree, int height, int tree_size);
+   virtual ~RTree();
 
-    Rectangle GetMBR();
-    void AddNode(char* node_data);
-    int GetFirstChildOfNode(int index);
-    int GetDegree();
+   Rectangle GetMBR();
+   void AddNode(char* node_data);
+   int GetFirstChildOfNode(int index);
+   int GetDegree();
 
-    void ApplyRangeQuery(Rectangle* range_query, vector<RTreeSplit>* list_of_splits);
+   void ApplyRangeQuery(Rectangle* range_query, vector<RTreeSplit>* list_of_splits);
 
-    vector<RTreeNode*> tree_;
+   vector<RTreeNode*> tree_;
 
-    int degree_;
-    int height_;
-    int tree_size_;
-    int node_count_;
-    int leaf_node_count_;
-    int non_leaf_node_count_;
+   int degree_;
+   int height_;
+   int tree_size_;
+   int node_count_;
+   int leaf_node_count_;
+   int non_leaf_node_count_;
 
   private:
-    void CreateRTreeSplit(int node_index, vector<RTreeSplit>* list_of_splits);
+   void CreateRTreeSplit(int node_index, vector<RTreeSplit>* list_of_splits);
 };
 
 }

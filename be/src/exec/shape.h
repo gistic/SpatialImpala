@@ -11,20 +11,20 @@ namespace spatialimpala {
 
 class Shape {
   public:
-    Shape();
-    Shape(TShape& shape);
-    virtual ~Shape();
+   Shape();
+   Shape(TShape& shape);
+   virtual ~Shape();
     
-    virtual bool Intersects(Shape* other) = 0;
-    virtual bool Contains(Shape* other) = 0;
-    virtual void GetMBR(Shape* mbr) = 0;
+   virtual bool Intersects(Shape* other) = 0;
+   virtual bool Contains(Shape* other) = 0;
+   virtual void GetMBR(Shape* mbr) = 0;
 
-    TShapeType::type GetType();
+   TShapeType::type GetType();
 
-    static double ConvertToDouble(const char* data);
+   static double ConvertToDouble(const char* data);
 
   protected:
-    TShapeType::type type_;
+   TShapeType::type type_;
 };
 
 }

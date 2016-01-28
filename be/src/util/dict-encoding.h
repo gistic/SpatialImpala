@@ -265,7 +265,6 @@ inline int DictEncoder<StringValue>::AddToTable(const StringValue& value,
   return bytes_added;
 }
 
-
 template<typename T>
 inline bool DictDecoder<T>::GetValue(T* value) {
   int index = -1; // Initialize to avoid compiler warning.

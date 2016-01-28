@@ -11,12 +11,12 @@ namespace spatialimpala {
 
 class OverlapQuery: public Expr {
   public:
-    OverlapQuery(const TExprNode& node);
-    virtual ~OverlapQuery();
+   OverlapQuery(const TExprNode& node);
+   virtual ~OverlapQuery();
 
-    virtual Status GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn);
+   virtual Status GetCodegendComputeFn(RuntimeState* state, llvm::Function** fn);
 
-    virtual BooleanVal GetBooleanVal(ExprContext* context, TupleRow* row);
+   virtual BooleanVal GetBooleanVal(ExprContext* context, TupleRow* row);
 };
 
 }

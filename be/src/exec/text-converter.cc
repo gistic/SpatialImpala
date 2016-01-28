@@ -102,9 +102,8 @@ Function* TextConverter::CodegenWriteSlot(LlvmCodeGen* codegen,
   if (slot_desc->type().type == TYPE_CHAR) {
     LOG(INFO) << "Char isn't supported for CodegenWriteSlot";
     return NULL;
-  }
-  else if (slot_desc->type().type == TYPE_POINT ||
-    slot_desc->type().type == TYPE_LINE || slot_desc->type().type == TYPE_RECTANGLE) {
+  } else if (slot_desc->type().type == TYPE_POINT || slot_desc->type().type == TYPE_LINE
+      || slot_desc->type().type == TYPE_RECTANGLE) {
     LOG(INFO) << "Shape isn't supported for CodegenWriteSlot";
     return NULL;
   }

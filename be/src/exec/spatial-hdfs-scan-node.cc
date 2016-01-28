@@ -7,7 +7,7 @@
 using namespace spatialimpala;
 
 SpatialHdfsScanNode::SpatialHdfsScanNode(ObjectPool* pool, const TPlanNode& tnode,
-                           const DescriptorTbl& descs)
+    const DescriptorTbl& descs)
     : HdfsScanNode(pool, tnode, descs) {
   TSpatialHdfsScanNode spatial_hdfs_scan_node = tnode.spatial_hdfs_scan_node;
   if (spatial_hdfs_scan_node.has_range)
@@ -32,7 +32,8 @@ Rectangle* SpatialHdfsScanNode::GetRangeQuery() {
 }
 
 void SpatialHdfsScanNode::UpdateScanRanges(const THdfsFileFormat::type& file_type,
-  const THdfsCompression::type& compression_type, int num_of_splits, int new_num_of_splits) {
+    const THdfsCompression::type& compression_type,
+    int num_of_splits, int new_num_of_splits) {
   // handles updating progress_updater_ either by creating a new one,
   // or by updating the number of completed (splits/scan ranges).
   if (num_of_splits >= new_num_of_splits) {
@@ -44,7 +45,7 @@ void SpatialHdfsScanNode::UpdateScanRanges(const THdfsFileFormat::type& file_typ
       file_type_counts_[make_pair(file_type, compression_type)] += scan_ranges_to_complete;
     }
   }
-  else  {
+  else {
     int scan_ranges_to_add = new_num_of_splits - num_of_splits;
     stringstream ss;
     ss << "Splits complete (node=" << id() << "):";

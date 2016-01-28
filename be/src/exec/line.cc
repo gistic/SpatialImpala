@@ -33,15 +33,14 @@ bool Line::Intersects(Shape* other) {
   switch (other_type) {
     case TShapeType::RECTANGLE:
       return other->Intersects(this);
-    case TShapeType::LINE: {   
+    case TShapeType::LINE: {
       Line* other_line = dynamic_cast<Line*>(other);
       if (other_line != NULL) {
         double denominator = (this->x1_ - this->x2_) * (other_line->y1_ - other_line->y2_)
           - (this->y1_ - this->y2_) * (other_line->x1_ - other_line->x2_);
 
         // Parallel lines.
-        if (fabs(denominator) < numeric_limits<double>::epsilon())
-          return false;
+        if (fabs(denominator) < numeric_limits<double>::epsilon()) { return false; }
 
         double nominator_x = ((this->x1_ * this->y2_ - this->y1_ * this->x2_)
           * (other_line->x1_ - other_line->x2_)) - ((this->x1_ - this->x2_)
@@ -74,7 +73,7 @@ bool Line::Contains(Shape* other) {
       if (other_line != NULL) {
         Point first_end(other_line->x1_, other_line->y1_);
         Point second_end(other_line->x2_, other_line->y2_);
-        return this->Contains(&first_end) && this->Contains(&second_end);  
+        return this->Contains(&first_end) && this->Contains(&second_end);
       }
       return false;
     }
@@ -84,10 +83,11 @@ bool Line::Contains(Shape* other) {
         Rectangle* mbr = new Rectangle();
         this->GetMBR(mbr);
         
-        if (! mbr->Contains(other_point)) return false;
+        if (!mbr->Contains(other_point)) { return false; }
         
         double first_slope = (this->y2_ - this->y1_) / (this->x2_ - this->x1_);
-        double second_slope = (this->y2_ - other_point->y_) / (this->x2_ - other_point->x_);
+        double second_slope = (this->y2_ - other_point->y_)
+            / (this->x2_ - other_point->x_);
         return fabs(first_slope - second_slope) < numeric_limits<double>::epsilon();
       }
       return false;

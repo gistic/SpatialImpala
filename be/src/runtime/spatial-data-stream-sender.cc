@@ -75,8 +75,8 @@ Status SpatialDataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool 
       for (int i = 0; i < partition_expr_ctxs_.size(); ++i) {
         ExprContext* ctx = partition_expr_ctxs_[i];
         string partition_val(reinterpret_cast<char*>(ctx->GetStringVal(row).ptr));
-        std::map<string, std::vector<std::string> >::iterator it
-            = partitions_.find(partition_val);
+        std::map<string, std::vector<std::string> >::iterator it =
+            partitions_.find(partition_val);
         if (it == partitions_.end()) break;
         std::vector<std::string> partitions_values = it->second;
         std::set<int> channel_values_set;
@@ -85,14 +85,15 @@ Status SpatialDataStreamSender::Send(RuntimeState* state, RowBatch* batch, bool 
           StringValue v(const_cast<char*>(partitions_values[j].c_str()),
               partitions_values[j].size());
           // We can't use the crc hash function here because it does not result
-          // in uncorrelated hashes with different seeds.  Instead we must use
+          // in uncorrelated hashes with different seeds. Instead we must use
           // fnv hash.
           // TODO: fix crc hash/GetHashValue()
           uint32_t hash_val = RawValue::GetHashValueFnv(&v, ctx->root()->type(), HashUtil::FNV_SEED);
           channel_values_set.insert(hash_val % num_channels);
         }
 
-        for (set_it = channel_values_set.begin(); set_it != channel_values_set.end(); set_it++) {
+        for (set_it = channel_values_set.begin(); set_it != channel_values_set.end();
+            set_it++) {
           RETURN_IF_ERROR(channels_[*set_it]->AddRow(row));
         }
         channel_values_set.clear();
