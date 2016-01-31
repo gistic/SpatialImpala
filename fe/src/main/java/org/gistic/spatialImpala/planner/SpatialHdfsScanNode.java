@@ -60,7 +60,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
-
 /**
  * Scan of a single single table. Currently limited to full-table scans.
  * TODO: pass in range restrictions.
@@ -73,15 +72,16 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
   /**
    * Constructs node to scan given data files of table 'tbl_'.
    */
-  public SpatialHdfsScanNode(PlanNodeId id, TupleDescriptor desc, HdfsTable tbl, List<GlobalIndexRecord> GIs) {
+  public SpatialHdfsScanNode(PlanNodeId id, TupleDescriptor desc, HdfsTable tbl,
+      List<GlobalIndexRecord> GIs) {
     super(id, desc, tbl);
     GIsForPartitions = GIs;
     displayName_ = "Spatial Scan Hdfs";
   }
-  
+
   public SpatialHdfsScanNode(PlanNodeId id, TupleDescriptor desc, HdfsTable tbl) {
-	super(id, desc, tbl);
-	displayName_ = "Spatial Scan Hdfs";
+    super(id, desc, tbl);
+    displayName_ = "Spatial Scan Hdfs";
   }
 
   /**
@@ -94,21 +94,22 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
 
     // also add remaining unassigned conjuncts
     assignConjuncts(analyzer);
-
     analyzer.createEquivConjuncts(tupleIds_.get(0), conjuncts_);
     Predicate predicate;
     for (int i = 0 ; i < conjuncts_.size(); i++) {
       predicate = (Predicate)conjuncts_.get(i);
       if (predicate instanceof RangeQueryPredicate) {
-        GIsForPartitions = ((RangeQueryPredicate)predicate).getGIs();
-        if (((RangeQueryPredicate)predicate).isPrunedDataRatioIsAccepted() && ((RangeQueryPredicate)predicate).getRangeQueryColsAreIndexed()) {
-    		rect_ = ((RangeQueryPredicate)predicate).getRectangle();
-    		LOG.info("Pruning ratio is accepted for spatial query. An r-tree will be constructed");
+        GIsForPartitions = ((RangeQueryPredicate) predicate).getGIs();
+        if (((RangeQueryPredicate) predicate).isPrunedDataRatioIsAccepted()
+            && ((RangeQueryPredicate) predicate).getRangeQueryColsAreIndexed()) {
+          rect_ = ((RangeQueryPredicate) predicate).getRectangle();
+          LOG.info(
+              "Pruning ratio is accepted for spatial query. An r-tree will be constructed");
         }
         break;
       }
     }
-        
+
     // do partition pruning before deciding which slots to materialize,
     // we might end up removing some predicates
     computeSpatialPartitions(analyzer);
@@ -127,7 +128,6 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     assignedConjuncts_ = analyzer.getAssignedConjuncts();
   }
 
-  
   /**
    * Populate partitions_ based on the list of the global indexes
    */
@@ -139,8 +139,6 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
       Preconditions.checkNotNull(partition);
       if (!partition.hasFileDescriptors())
         continue;
-
-      //LOG.info("Partition Info::(Name: " + partition.getPartitionName() + " Id: " + partition.getId() + ")");
 
       if (GIsForPartitions == null) {
         partitions_.add(partition);
@@ -156,7 +154,6 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
         boolean found = false;
         StringLiteral string_value = (StringLiteral) value;
         for (GlobalIndexRecord record: GIsForPartitions) {
-          //LOG.info("Literal: " + string_value.getValue() + " Record name: " + record.getTag());
           if (string_value.getValue().equals(record.getTag())) {
             LOG.info("Partition to process::(Name: " + record.getTag() + ")");
             partitions_.add(partition);
@@ -172,7 +169,6 @@ public class SpatialHdfsScanNode extends HdfsScanNode {
     }
   }
 
-  
   @Override
   protected void toThrift(TPlanNode msg) {
     msg.hdfs_scan_node = new THdfsScanNode(desc_.getId().asInt());

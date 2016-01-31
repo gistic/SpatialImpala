@@ -663,11 +663,13 @@ public abstract class Type {
     compatibilityMatrix[BOOLEAN.ordinal()][VARCHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BOOLEAN.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[BOOLEAN.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[BOOLEAN.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BOOLEAN.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BOOLEAN.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BOOLEAN.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[BOOLEAN.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[BOOLEAN.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[TINYINT.ordinal()][SMALLINT.ordinal()] = PrimitiveType.SMALLINT;
     compatibilityMatrix[TINYINT.ordinal()][INT.ordinal()] = PrimitiveType.INT;
@@ -685,11 +687,13 @@ public abstract class Type {
     compatibilityMatrix[TINYINT.ordinal()][VARCHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TINYINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[TINYINT.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[TINYINT.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TINYINT.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TINYINT.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TINYINT.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[TINYINT.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[TINYINT.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     
     compatibilityMatrix[SMALLINT.ordinal()][SMALLINT.ordinal()] = PrimitiveType.SMALLINT;
 
@@ -708,11 +712,14 @@ public abstract class Type {
     compatibilityMatrix[SMALLINT.ordinal()][VARCHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[SMALLINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[SMALLINT.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[SMALLINT.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[SMALLINT.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[SMALLINT.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[SMALLINT.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[SMALLINT.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[SMALLINT.ordinal()][POLYGON.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[SMALLINT.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[INT.ordinal()][BIGINT.ordinal()] = PrimitiveType.BIGINT;
     // 32 bit integer fits only mantissa of double.
@@ -750,11 +757,13 @@ public abstract class Type {
     compatibilityMatrix[BIGINT.ordinal()][STRING.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BIGINT.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BIGINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[BIGINT.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[BIGINT.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BIGINT.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BIGINT.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[BIGINT.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[BIGINT.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[BIGINT.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[FLOAT.ordinal()][DOUBLE.ordinal()] = PrimitiveType.DOUBLE;
     compatibilityMatrix[FLOAT.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
@@ -768,7 +777,8 @@ public abstract class Type {
     compatibilityMatrix[FLOAT.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[FLOAT.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[FLOAT.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[FLOAT.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[FLOAT.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[DOUBLE.ordinal()][DATE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][DATETIME.ordinal()] =
@@ -778,11 +788,13 @@ public abstract class Type {
     compatibilityMatrix[DOUBLE.ordinal()][STRING.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][VARCHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[DOUBLE.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[DOUBLE.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DOUBLE.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[DOUBLE.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[DOUBLE.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[DATE.ordinal()][DATETIME.ordinal()] = PrimitiveType.DATETIME;
     compatibilityMatrix[DATE.ordinal()][TIMESTAMP.ordinal()] = PrimitiveType.TIMESTAMP;
@@ -803,11 +815,14 @@ public abstract class Type {
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DATETIME.ordinal()][VARCHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[DATETIME.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[DATETIME.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DATETIME.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DATETIME.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[DATETIME.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[DATETIME.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[DATETIME.ordinal()][POLYGON.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[DATETIME.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[DATETIME.ordinal()][CHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
 
@@ -819,41 +834,52 @@ public abstract class Type {
     compatibilityMatrix[TIMESTAMP.ordinal()][VARCHAR.ordinal()] =
         PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TIMESTAMP.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[TIMESTAMP.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[TIMESTAMP.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TIMESTAMP.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TIMESTAMP.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[TIMESTAMP.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[TIMESTAMP.ordinal()][POLYGON.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[TIMESTAMP.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[TIMESTAMP.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[STRING.ordinal()][VARCHAR.ordinal()] = PrimitiveType.STRING;
     compatibilityMatrix[STRING.ordinal()][CHAR.ordinal()] = PrimitiveType.STRING;
-    compatibilityMatrix[STRING.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[STRING.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[STRING.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[STRING.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[STRING.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[STRING.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[STRING.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[VARCHAR.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[VARCHAR.ordinal()][RECTANGLE.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[VARCHAR.ordinal()][RECTANGLE.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[VARCHAR.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[VARCHAR.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[VARCHAR.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[VARCHAR.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[VARCHAR.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[RECTANGLE.ordinal()][POINT.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[RECTANGLE.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[RECTANGLE.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[RECTANGLE.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[RECTANGLE.ordinal()][POLYGON.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[RECTANGLE.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[RECTANGLE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[POINT.ordinal()][LINE.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[POINT.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[POINT.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
+    compatibilityMatrix[POINT.ordinal()][LINESTRING.ordinal()] =
+        PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[POINT.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[LINE.ordinal()][POLYGON.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[LINE.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
-    compatibilityMatrix[LINE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;    
+    compatibilityMatrix[LINE.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;
 
     compatibilityMatrix[POLYGON.ordinal()][LINESTRING.ordinal()] = PrimitiveType.INVALID_TYPE;
     compatibilityMatrix[POLYGON.ordinal()][CHAR.ordinal()] = PrimitiveType.INVALID_TYPE;

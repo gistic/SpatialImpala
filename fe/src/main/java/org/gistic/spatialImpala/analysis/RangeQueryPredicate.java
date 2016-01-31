@@ -43,19 +43,20 @@ import java.util.Iterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-
 public class RangeQueryPredicate extends Predicate {
   private final static Logger LOG = LoggerFactory.getLogger(RangeQueryPredicate.class);
   private Rectangle rect_;
-  private static final String TABLE_NOT_SPATIAL_ERROR_MSG = "Table is not a spatial table.";
+  private static final String TABLE_NOT_SPATIAL_ERROR_MSG =
+      "Table is not a spatial table.";
   private static final String TAG = "tag";
   private static final double ACCEPTED_DATA_RATIO = 0.06;
   private double prunedDataRatio;
   private SlotRef col1;
   private SlotRef col2;
   private boolean rangeQueryColsAreIndexed;
-  
-  //Global indexes of partitions which either full contained or intersect with the rectangle
+
+  // Global indexes of partitions which either full contained 
+  // or intersect with the rectangle.
   private List<GlobalIndexRecord> GIsIntersectAndFully;
 
   public RangeQueryPredicate(Rectangle rect, SlotRef col1, SlotRef col2) {
@@ -75,110 +76,105 @@ public class RangeQueryPredicate extends Predicate {
     prunedDataRatio = 1;
     this.GIsIntersectAndFully = new ArrayList<GlobalIndexRecord>();
   }
-  
+
   public Rectangle getRectangle() {
-	  return rect_;
+    return rect_;
   }
-	
-  public List<GlobalIndexRecord> getGIs () {
-	  return GIsIntersectAndFully;
+
+  public List<GlobalIndexRecord> getGIs() {
+    return GIsIntersectAndFully;
   }
-  
+
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
+
+    Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
+    Iterator itr = tupleDescs.iterator();
+    TableName tableName = null;
+    SpatialHdfsTable spatialTable = null;
+    GlobalIndex globalIndex = null;
 	
-	Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
-	Iterator itr = tupleDescs.iterator();
-	TableName tableName = null;
-	SpatialHdfsTable spatialTable = null;
-	GlobalIndex globalIndex = null;
-	
-	
-	children_.add(col1);
-	
-	if (col2 != null) {
-		children_.add(col2);
-	}
-	
-	
-    super.analyze(analyzer);
-    
-  //Make sure that the columns type is double in case of 2 columns and shape in case of 1 column
+    children_.add(col1);
+
     if (col2 != null) {
-    	if (children_.get(0).getType() != ScalarType.createType(PrimitiveType.DOUBLE) || children_.get(1).getType() != ScalarType.createType(PrimitiveType.DOUBLE))
-	    {
-	    	throw new AnalysisException("Error: Coulmns should be double data type");
-    	}
-	}
-    else {
-    	if (!((ScalarType)children_.get(0).getType()).isShapeType())
-    	{
-	    	throw new AnalysisException("Error: Coulmn should be from Shapes data type " + children_.get(0).getType().toString()+" found!!");
-	    }
+      children_.add(col2);
     }
-    
-    
+
+    super.analyze(analyzer);
+
+    // Make sure that the columns type is double in case of 2 columns
+    // and shape in case of 1 column.
+    if (col2 != null) {
+      if (children_.get(0).getType() != ScalarType.createType(PrimitiveType.DOUBLE)
+          || children_.get(1).getType() != ScalarType.createType(PrimitiveType.DOUBLE)) {
+        throw new AnalysisException("Error: Coulmns should be double data type");
+      }
+    } else {
+      if (!((ScalarType) children_.get(0).getType()).isShapeType()) {
+        throw new AnalysisException("Error: Coulmn should be from Shapes data type "
+          + children_.get(0).getType().toString() + " found!!");
+      }
+    }
+
     while (itr.hasNext()) {
-		TupleDescriptor desc = (TupleDescriptor) itr.next();
-		if (desc.getTable() instanceof SpatialHdfsTable) {
-			tableName = desc.getTableName();
-			spatialTable = (SpatialHdfsTable) desc.getTable(); 
-		}
-	}
-    
+      TupleDescriptor desc = (TupleDescriptor) itr.next();
+      if (desc.getTable() instanceof SpatialHdfsTable) {
+        tableName = desc.getTableName();
+        spatialTable = (SpatialHdfsTable) desc.getTable();
+      }
+    }
+
     if (spatialTable != null) {
-    	globalIndex = spatialTable.getGlobalIndexIfAny();
-    	LOG.info("Table is spatial");
-    	// Global index shouldn't be null
-    	if (globalIndex == null)
-			throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
-					+ " : Table doesn't have global indexes.");
-    	
-    	checkIfColumnsAreIndexed(globalIndex);
+      globalIndex = spatialTable.getGlobalIndexIfAny();
+      LOG.info("Table is spatial");
+      // Global index shouldn't be null
+      if (globalIndex == null)
+        throw new AnalysisException(TABLE_NOT_SPATIAL_ERROR_MSG
+            + " : Table doesn't have global indexes.");
+
+      checkIfColumnsAreIndexed(globalIndex);
     }
-    
-    if(rangeQueryColsAreIndexed && spatialTable != null) {
-	    
-    	LOG.info("The query is on the indexed columns");
-		//Now fill the GIsIntersect and GIsFullyContained vectors 
-		HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
-		
-		for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
-			if (rect_.intersects(gIRecord.getMBR())) {
-				GIsIntersectAndFully.add(gIRecord);
-	                       LOG.info("GI is Intersected: " + gIRecord.getTag());
-			}
-		}
-		prunedDataRatio = GIsIntersectAndFully.size() * 1.0 /  globalIndexMap.size();
-		LOG.info("Pruned data ratio is : " + Double.toString(prunedDataRatio));
-    }
-    else {
-    	LOG.info("The query is on non-indexed column");
+
+    if (rangeQueryColsAreIndexed && spatialTable != null) {
+      LOG.info("The query is on the indexed columns");
+      // Now fill the GIsIntersect and GIsFullyContained vectors.
+      HashMap<String, GlobalIndexRecord> globalIndexMap = globalIndex.getGlobalIndexMap();
+
+      for (GlobalIndexRecord gIRecord : globalIndexMap.values()) {
+        if (rect_.intersects(gIRecord.getMBR())) {
+          GIsIntersectAndFully.add(gIRecord);
+          LOG.info("GI is Intersected: " + gIRecord.getTag());
+        }
+      }
+
+      prunedDataRatio = GIsIntersectAndFully.size() * 1.0 /  globalIndexMap.size();
+      LOG.info("Pruned data ratio is : " + Double.toString(prunedDataRatio));
+    } else {
+      LOG.info("The query is on non-indexed column");
     }
   }
-  
+
   public boolean getRangeQueryColsAreIndexed() {
-	  return rangeQueryColsAreIndexed;
+    return rangeQueryColsAreIndexed;
   }
-  
+
   public boolean isPrunedDataRatioIsAccepted () {
-	  if (prunedDataRatio > ACCEPTED_DATA_RATIO) {
-		  return false;
-	  }
-	  return true;
+    if (prunedDataRatio > ACCEPTED_DATA_RATIO) {
+      return false;
+    }
+    return true;
   }
 
   public void checkIfColumnsAreIndexed (GlobalIndex globalIndex) {
-	  if(col2 == null) {
-		  if (globalIndex.isOneOfIndexedCol(col1))
-				  rangeQueryColsAreIndexed = true;
-	  }
-	  else {
-		  if (globalIndex.isOneOfIndexedCol(col1) && globalIndex.isOneOfIndexedCol(col2)) 
-				  rangeQueryColsAreIndexed = true;
-	  }
+    if (col2 == null) {
+      if (globalIndex.isOneOfIndexedCol(col1))
+        rangeQueryColsAreIndexed = true;
+    } else {
+      if (globalIndex.isOneOfIndexedCol(col1) && globalIndex.isOneOfIndexedCol(col2))
+        rangeQueryColsAreIndexed = true;
+    }
   }
-  
+
   @Override
   protected void toThrift(TExprNode msg) {
     msg.range_query = new TRangeQuery(rect_.toThrift());
@@ -194,7 +190,8 @@ public class RangeQueryPredicate extends Predicate {
     strBuilder.append(")");
     return strBuilder.toString();
   }
-  
+
   @Override
   public Expr clone() { return new RangeQueryPredicate(this.rect_, this.col1, this.col2); }
+
 }

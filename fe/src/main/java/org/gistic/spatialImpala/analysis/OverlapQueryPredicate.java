@@ -58,10 +58,11 @@ public class OverlapQueryPredicate extends Predicate {
     this.col2 = col2;
     globalIndexSlotRef = new ArrayList<Expr>();
   }
+
   private HashMap<String, List<String>> intersectedPartitions_;
-  
-  
-  private OverlapQueryPredicate(OverlapQueryPredicate overlapPreicate, SlotRef col1, SlotRef col2) {
+
+  private OverlapQueryPredicate(OverlapQueryPredicate overlapPreicate, SlotRef col1,
+      SlotRef col2) {
     super(overlapPreicate);
     this.col1 = col1;
     this.col2 = col2;
@@ -69,99 +70,110 @@ public class OverlapQueryPredicate extends Predicate {
   }
   
   public Expr getLeftHandSidePartitionCol() {
-	  return globalIndexSlotRef.get(0);
+    return globalIndexSlotRef.get(0);
   }
   
   public Expr getRightHandSidePartitionCol() {
-	  return globalIndexSlotRef.get(1);
+    return globalIndexSlotRef.get(1);
   }
-  
+
   public HashMap<String, List<String>> getIntersectedPartitions() {
-	  return intersectedPartitions_;
+    return intersectedPartitions_;
   }
     
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
-	
     LOG.info("Analysis of the overlapqurypredicate");
     Collection<TupleDescriptor> tupleDescs = analyzer.getTubleDescriptors();
     Iterator itr = tupleDescs.iterator();
     children_.clear();
     children_.add(col1);
     children_.add(col2);
-	
+
     intersectedPartitions_ = new HashMap<String, List<String>>();
-	
-    SpatialHdfsTable spatialTable1, spatialTable2;
-	
+    SpatialHdfsTable spatialTable1, spatialTable2;	
     super.analyze(analyzer);
+
     //Make sure that the columns type is shape
-    if (!((ScalarType)children_.get(0).getType()).isShapeType() || !((ScalarType)children_.get(1).getType()).isShapeType())
-    {
-	   	throw new AnalysisException("Error: Overlaps predicate shoud take 2 columns from shapes data type ");
-    }
-    spatialTable1 = spatialTable2 = null;
-    
-    
-    if(((SlotRef)children_.get(0)).getDesc().getParent().getTable() instanceof SpatialHdfsTable) {
-    	spatialTable1 = (SpatialHdfsTable) ((SlotRef)children_.get(0)).getDesc().getParent().getTable(); 
-    }
-    if(((SlotRef)children_.get(1)).getDesc().getParent().getTable() instanceof SpatialHdfsTable) {
-    	spatialTable2 = (SpatialHdfsTable) ((SlotRef)children_.get(1)).getDesc().getParent().getTable(); 
-    }
-    
-    if ((spatialTable1 == null) || (spatialTable2 == null))
-    {
-                throw new AnalysisException("Overlap predicate should only be used with spatial tables");
+    if (!((ScalarType) children_.get(0).getType()).isShapeType()
+        || !((ScalarType) children_.get(1).getType()).isShapeType()) {
+      throw new AnalysisException(
+        "Error: Overlaps predicate shoud take 2 columns from shapes data type ");
     }
 
-    if (spatialTable2.getGlobalIndexIfAny().getGlobalIndexMap().size() > spatialTable1.getGlobalIndexIfAny().getGlobalIndexMap().size()) {
+    spatialTable1 = spatialTable2 = null;    
+
+    if(((SlotRef)children_.get(0)).getDesc().getParent().getTable()
+        instanceof SpatialHdfsTable) {
+      spatialTable1 = (SpatialHdfsTable) ((SlotRef) children_.get(0)).getDesc()
+          .getParent().getTable();
+    }
+
+    if(((SlotRef)children_.get(1)).getDesc().getParent().getTable()
+        instanceof SpatialHdfsTable) {
+    spatialTable2 = (SpatialHdfsTable) ((SlotRef) children_.get(1)).getDesc()
+        .getParent().getTable();
+    }
+
+    if ((spatialTable1 == null) || (spatialTable2 == null)) {
+      throw new AnalysisException(
+          "Overlap predicate should only be used with spatial tables");
+    }
+
+    if (spatialTable2.getGlobalIndexIfAny().getGlobalIndexMap().size()
+        > spatialTable1.getGlobalIndexIfAny().getGlobalIndexMap().size()) {
       Collections.swap(children_, 0, 1);
-      spatialTable1 = (SpatialHdfsTable) ((SlotRef)children_.get(0)).getDesc().getParent().getTable();
-      spatialTable2 = (SpatialHdfsTable) ((SlotRef)children_.get(1)).getDesc().getParent().getTable();
-    } 
-    SlotRef leftSlotRef = new SlotRef(Path.createRawPath(((SlotRef)children_.get(0)).getTableName().toString(), "tag"));
-    SlotRef rightSlotRef = new SlotRef(Path.createRawPath(((SlotRef)children_.get(1)).getTableName().toString(), "tag"));
+      spatialTable1 = (SpatialHdfsTable) ((SlotRef) children_.get(0)).getDesc()
+          .getParent().getTable();
+      spatialTable2 = (SpatialHdfsTable) ((SlotRef) children_.get(1)).getDesc()
+          .getParent().getTable();
+    }
+
+    SlotRef leftSlotRef = new SlotRef(Path.createRawPath(((SlotRef) children_.get(0))
+        .getTableName().toString(), "tag"));
+    SlotRef rightSlotRef = new SlotRef(Path.createRawPath(((SlotRef)children_.get(1))
+        .getTableName().toString(), "tag"));
     
     leftSlotRef.analyze(analyzer);
     rightSlotRef.analyze(analyzer);
     globalIndexSlotRef.add(0, leftSlotRef);
     globalIndexSlotRef.add(1, rightSlotRef);
     analyzer.materializeSlots(globalIndexSlotRef);
-    
-    
-    GlobalIndex globalIndexLeft, globalIndexRight;
-    
-    LOG.info("Before checking if spatialtabl1 and spatialTable2 are same");
-    
-    if (spatialTable1 != spatialTable2) {
-    	globalIndexLeft = spatialTable1.getGlobalIndexIfAny();
-    	globalIndexRight = spatialTable2.getGlobalIndexIfAny();
 
-    	HashMap<String, GlobalIndexRecord> globalIndexMapLeft = globalIndexLeft.getGlobalIndexMap();
-    	HashMap<String, GlobalIndexRecord> globalIndexMapRight = globalIndexRight.getGlobalIndexMap();
-		
-    	int index;
-		for (GlobalIndexRecord gIRecordRight : globalIndexMapRight.values()) {
-			index = 0;
-			List<String> tmpIntersected = new ArrayList<String>();
-			for (GlobalIndexRecord gIRecordLeft : globalIndexMapLeft.values()) {
-				if (gIRecordRight.getMBR().intersects(gIRecordLeft.getMBR())) {
-					tmpIntersected.add(gIRecordLeft.getTag());
-				}
-				index++;
-			}
-			if (tmpIntersected.size() > 0) {
-				LOG.info("Right hand side: "+gIRecordRight.getTag() + " intesect with the following partitions from left hand side:");
-				for (String str : tmpIntersected) {
-					LOG.info(str);
-				}
-				intersectedPartitions_.put(gIRecordRight.getTag(), tmpIntersected);
-			}
-		}
+    GlobalIndex globalIndexLeft, globalIndexRight;    
+    LOG.info("Before checking if spatialtabl1 and spatialTable2 are same");
+
+    if (spatialTable1 != spatialTable2) {
+      globalIndexLeft = spatialTable1.getGlobalIndexIfAny();
+      globalIndexRight = spatialTable2.getGlobalIndexIfAny();
+
+      HashMap<String, GlobalIndexRecord> globalIndexMapLeft =
+          globalIndexLeft.getGlobalIndexMap();
+      HashMap<String, GlobalIndexRecord> globalIndexMapRight =
+          globalIndexRight.getGlobalIndexMap();
+	
+      int index;
+      for (GlobalIndexRecord gIRecordRight : globalIndexMapRight.values()) {
+        index = 0;
+        List<String> tmpIntersected = new ArrayList<String>();
+        for (GlobalIndexRecord gIRecordLeft : globalIndexMapLeft.values()) {
+          if (gIRecordRight.getMBR().intersects(gIRecordLeft.getMBR())) {
+            tmpIntersected.add(gIRecordLeft.getTag());
+          }
+          index++;
+        }
+        if (tmpIntersected.size() > 0) {
+          LOG.info("Right hand side: " + gIRecordRight.getTag()
+              + " intesect with the following partitions from left hand side:");
+          for (String str : tmpIntersected) {
+            LOG.info(str);
+          }
+          intersectedPartitions_.put(gIRecordRight.getTag(), tmpIntersected);
+        }
+      }
     }
   }
-  
+
   @Override
   protected void toThrift(TExprNode msg) {
     msg.node_type = TExprNodeType.OVERLAP_QUERY;
@@ -178,7 +190,7 @@ public class OverlapQueryPredicate extends Predicate {
     strBuilder.append(")");
     return strBuilder.toString();
   }
-  
+
   @Override
   public Expr clone() { return new OverlapQueryPredicate(this, this.col1, this.col2); }
 }

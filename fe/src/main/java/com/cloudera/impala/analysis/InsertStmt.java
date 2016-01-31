@@ -431,7 +431,7 @@ public class InsertStmt extends StatementBase {
       if (!missingColumnNames.isEmpty()) {
         throw new AnalysisException(
             "Not enough partition columns mentioned in query. Missing columns are: " +
-            Joiner.on(", ").join(missingColumnNames) + "Number of numClusteringCols = " + numClusteringCols);
+            Joiner.on(", ").join(missingColumnNames));
       }
     }
 

@@ -506,11 +506,10 @@ public class DistributedPlanner {
     }
   }
 
-  private PlanFragment createSpatialJoinFragment(
-	      SpatialJoinNode node, PlanFragment rightChildFragment,
-	      PlanFragment leftChildFragment, long perNodeMemLimit,
-	      ArrayList<PlanFragment> fragments)
-	      throws InternalException {
+  private PlanFragment createSpatialJoinFragment(SpatialJoinNode node,
+      PlanFragment rightChildFragment,
+      PlanFragment leftChildFragment, long perNodeMemLimit,
+      ArrayList<PlanFragment> fragments) throws InternalException {
     Analyzer analyzer = ctx_.getRootAnalyzer();
     // broadcast: send the rightChildFragment's output to each node executing
     // the leftChildFragment; the cost across all nodes is proportional to the
@@ -526,18 +525,21 @@ public class DistributedPlanner {
     // left- and rightChildFragments, which now partition their output
     // on their respective join exprs.
     // The new fragment is spatial-partitioned on the lhs input join exprs.
-    
+
     OverlapQueryPredicate overlapPredicate = node.getOverlapPredicate();
-    
-    ArrayList<Expr> lhExpr = new ArrayList<Expr>(Arrays.asList(overlapPredicate.getLeftHandSidePartitionCol()));
-    ArrayList<Expr> rhExpr = new ArrayList<Expr>(Arrays.asList(overlapPredicate.getRightHandSidePartitionCol()));
-    
+
+    ArrayList<Expr> lhExpr = new ArrayList<Expr>(Arrays.asList(
+        overlapPredicate.getLeftHandSidePartitionCol()));
+    ArrayList<Expr> rhExpr = new ArrayList<Expr>(Arrays.asList(
+        overlapPredicate.getRightHandSidePartitionCol()));
+
     DataPartition lhsJoinPartition = new DataPartition(
-            TPartitionType.HASH_PARTITIONED, lhExpr);
-    
+        TPartitionType.HASH_PARTITIONED, lhExpr);
+
     DataPartition rhsJoinPartition = new SpatialDataPartition(
-            TPartitionType.HASH_PARTITIONED, rhExpr, overlapPredicate.getIntersectedPartitions());
-    
+        TPartitionType.HASH_PARTITIONED,
+        rhExpr, overlapPredicate.getIntersectedPartitions());
+
     ExchangeNode lhsExchange = new ExchangeNode(ctx_.getNextNodeId());
     lhsExchange.addChild(leftChildFragment.getPlanRoot(), false);
     lhsExchange.computeStats(null);
@@ -547,17 +549,17 @@ public class DistributedPlanner {
     rhsExchange.computeStats(null);
     node.setChild(1, rhsExchange);
 
-  // Connect the child fragments in a new fragment, and set the data partition
-  // of the new fragment and its child fragments.
-  PlanFragment joinFragment =
-      new PlanFragment(ctx_.getNextFragmentId(), node, lhsJoinPartition);
-  leftChildFragment.setDestination(lhsExchange);
-  leftChildFragment.setOutputPartition(lhsJoinPartition);
-  rightChildFragment.setDestination(rhsExchange);
-  rightChildFragment.setOutputPartition(rhsJoinPartition);
+    // Connect the child fragments in a new fragment, and set the data partition
+    // of the new fragment and its child fragments.
+    PlanFragment joinFragment =
+        new PlanFragment(ctx_.getNextFragmentId(), node, lhsJoinPartition);
+    leftChildFragment.setDestination(lhsExchange);
+    leftChildFragment.setOutputPartition(lhsJoinPartition);
+    rightChildFragment.setDestination(rhsExchange);
+    rightChildFragment.setOutputPartition(rhsJoinPartition);
 
-  return joinFragment;
-}
+    return joinFragment;
+  }
 
   /**
    * Returns true if the lhs and rhs partitions are physically compatible for executing

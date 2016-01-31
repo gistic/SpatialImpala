@@ -214,30 +214,32 @@ public class CreateTableStmt extends StatementBase {
     }
 
     if (location_ != null) location_.analyze(analyzer, Privilege.ALL);
-    
-    // If the table is Spatial, ensure that the global index path exists
-    // and is valid.
+
+    // If the table is Spatial, ensure that the global index path exists and is valid.
     if (tblProperties_ != null) {
-      String globalIndexPathIfAny = tblProperties_.get(GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
+      String globalIndexPathIfAny = tblProperties_.get(
+          GlobalIndex.GLOBAL_INDEX_TABLE_PARAM);
       if (globalIndexPathIfAny != null) {
         (new HdfsUri(globalIndexPathIfAny)).analyze(analyzer, Privilege.ALL);
         String indexedColumns = tblProperties_.get(GlobalIndex.INDEXED_ON_KEYWORD);
         if (indexedColumns == null) {
-        	throw new AnalysisException("The columns, on which the table is indexed, should be given");
+          throw new AnalysisException(
+              "The columns, on which the table is indexed, should be given");
         }
 
         StringBuilder shapeColsList = new StringBuilder();
         List<ColumnDef> newColumnDefs = Lists.newArrayList();
         for (ColumnDef colDef: columnDefs_) {
-           if (colDef.getTypeDef().getType().isShapeType()) {
-             shapeColsList.append(colDef.getColName());
-             shapeColsList.append('=');
-             shapeColsList.append(colDef.getTypeDef().getType());
-             shapeColsList.append(',');
-             newColumnDefs.add(new ColumnDef(colDef.getColName(), new TypeDef(Type.STRING), ""));
-           } else {
-             newColumnDefs.add(colDef);
-           }
+          if (colDef.getTypeDef().getType().isShapeType()) {
+            shapeColsList.append(colDef.getColName());
+            shapeColsList.append('=');
+            shapeColsList.append(colDef.getTypeDef().getType());
+            shapeColsList.append(',');
+            newColumnDefs.add(new ColumnDef(colDef.getColName(),
+                new TypeDef(Type.STRING), ""));
+          } else {
+            newColumnDefs.add(colDef);
+          }
         }
 
         if (shapeColsList.length() > 0) {
@@ -247,7 +249,7 @@ public class CreateTableStmt extends StatementBase {
         }
       }
     }
-    
+
     if (location_ != null) {
       location_.analyze(analyzer, Privilege.ALL, FsAction.READ_WRITE);
     }

@@ -82,7 +82,8 @@ public abstract class QueryStmt extends StatementBase {
   /////////////////////////////////////////
   // END: Members that need to be reset()
 
-  protected QueryStmt(ArrayList<OrderByElement> orderByElements, LimitElement limitElement) {
+  protected QueryStmt(ArrayList<OrderByElement> orderByElements,
+                      LimitElement limitElement) {
     orderByElements_ = orderByElements;
     sortInfo_ = null;
     limitElement_ = limitElement == null ? new LimitElement(null, null) : limitElement;

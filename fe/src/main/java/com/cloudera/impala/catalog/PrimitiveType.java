@@ -47,7 +47,7 @@ public enum PrimitiveType {
   //8-byte pointer and 4-byte length indicator (12 bytes total).
   // Aligning to 8 bytes so 16 total.
   POLYGON("POLYGON", 16, TPrimitiveType.POLYGON),
-  LINESTRING("LINESTRING", 16, TPrimitiveType.LINESTRING), 
+  LINESTRING("LINESTRING", 16, TPrimitiveType.LINESTRING),
   // Unsupported scalar type.
   BINARY("BINARY", -1, TPrimitiveType.BINARY),
 

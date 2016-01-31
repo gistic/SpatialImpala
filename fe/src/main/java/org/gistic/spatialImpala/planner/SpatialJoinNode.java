@@ -66,10 +66,10 @@ public class SpatialJoinNode extends PlanNode {
     public String toString() { return description; }
   }
   
-//join conjuncts_ from the JOIN clause that aren't equi-join predicates
- private List<Expr> otherJoinConjuncts_;
+  // join conjuncts_ from the JOIN clause that aren't equi-join predicates
+  private List<Expr> otherJoinConjuncts_;
 
- private DistributionMode distrMode_;
+  private DistributionMode distrMode_;
 
   // overlap conjunct
   private OverlapQueryPredicate overlapPredicate_;
@@ -128,8 +128,8 @@ public class SpatialJoinNode extends PlanNode {
     assignedConjuncts_ = analyzer.getAssignedConjuncts();
     
     ExprSubstitutionMap combinedChildSmap = getCombinedChildSmap();
-    otherJoinConjuncts_ =
-            Expr.substituteList(otherJoinConjuncts_, combinedChildSmap, analyzer, false);
+    otherJoinConjuncts_ = Expr.substituteList(otherJoinConjuncts_, combinedChildSmap,
+        analyzer, false);
   }
 
   @Override
@@ -159,35 +159,35 @@ public class SpatialJoinNode extends PlanNode {
     // - the output cardinality of the join would be F.cardinality * 0.2
 
     long maxNumDistinct = 0;
-    if (overlapPredicate_.getChild(0).unwrapSlotRef(false) != null){
-	    SlotRef rhsSlotRef = overlapPredicate_.getChild(1).unwrapSlotRef(false);
-	    if (rhsSlotRef != null){
-		    SlotDescriptor slotDesc = rhsSlotRef.getDesc();
-		    if (slotDesc != null){
-			    ColumnStats stats = slotDesc.getStats();
-			    if (stats.hasNumDistinctValues()){
-				    long numDistinct = stats.getNumDistinctValues();
-				    Table rhsTbl = slotDesc.getParent().getTable();
-				    if (rhsTbl != null && rhsTbl.getNumRows() != -1) {
-				      // we can't have more distinct values than rows in the table, even though
-				      // the metastore stats may think so
-				      LOG.debug("#distinct=" + numDistinct + " #rows="
-				          + Long.toString(rhsTbl.getNumRows()));
-				      numDistinct = Math.min(numDistinct, rhsTbl.getNumRows());
-				    }
-				    if (getChild(1).getCardinality() != -1 && numDistinct != -1) {
-				      // The number of distinct values of a slot cannot exceed the cardinality_
-				      // of the plan node the slot is coming from.
-				      numDistinct = Math.min(numDistinct, getChild(1).getCardinality());
-				    }
-				    maxNumDistinct = Math.max(maxNumDistinct, numDistinct);
-				    LOG.debug("min slotref=" + rhsSlotRef.toSql() + " #distinct="
-				          + Long.toString(numDistinct));
-			    }
-		    }
-	    }
+    if (overlapPredicate_.getChild(0).unwrapSlotRef(false) != null) {
+      SlotRef rhsSlotRef = overlapPredicate_.getChild(1).unwrapSlotRef(false);
+      if (rhsSlotRef != null) {
+        SlotDescriptor slotDesc = rhsSlotRef.getDesc();
+        if (slotDesc != null) {
+          ColumnStats stats = slotDesc.getStats();
+          if (stats.hasNumDistinctValues()) {
+            long numDistinct = stats.getNumDistinctValues();
+            Table rhsTbl = slotDesc.getParent().getTable();
+            if (rhsTbl != null && rhsTbl.getNumRows() != -1) {
+              // we can't have more distinct values than rows in the table, even though
+              // the metastore stats may think so
+              LOG.debug("#distinct=" + numDistinct + " #rows="
+                  + Long.toString(rhsTbl.getNumRows()));
+              numDistinct = Math.min(numDistinct, rhsTbl.getNumRows());
+            }
+            if (getChild(1).getCardinality() != -1 && numDistinct != -1) {
+              // The number of distinct values of a slot cannot exceed the cardinality_
+              // of the plan node the slot is coming from.
+              numDistinct = Math.min(numDistinct, getChild(1).getCardinality());
+            }
+            maxNumDistinct = Math.max(maxNumDistinct, numDistinct);
+            LOG.debug("min slotref=" + rhsSlotRef.toSql() + " #distinct="
+                + Long.toString(numDistinct));
+          }
+        }
+      }
     }
-    
+
     if (maxNumDistinct == 0) {
       // if we didn't find any suitable join predicates or don't have stats
       // on the relevant columns, we very optimistically assume we're doing an
@@ -280,20 +280,17 @@ public class SpatialJoinNode extends PlanNode {
     msg.node_type = TPlanNodeType.SPATIAL_JOIN_NODE;
     msg.spatial_join_node = new TSpatialJoinNode();
     msg.spatial_join_node.join_op = joinOp_.toThrift();
-    
-	TExpr spatialJoinCond = overlapPredicate_.treeToThrift();
+    TExpr spatialJoinCond = overlapPredicate_.treeToThrift();
     msg.spatial_join_node.spatial_join_expr = spatialJoinCond;
-    
     TExpr exprBuild = overlapPredicate_.getChild(1).treeToThrift();
-	TExpr exprProbe = overlapPredicate_.getChild(0).treeToThrift();
-	msg.spatial_join_node.build_expr = exprBuild; 
-	msg.spatial_join_node.probe_expr = exprProbe;
-	
-	for (Expr e: otherJoinConjuncts_) {
+    TExpr exprProbe = overlapPredicate_.getChild(0).treeToThrift();
+    msg.spatial_join_node.build_expr = exprBuild; 
+    msg.spatial_join_node.probe_expr = exprProbe;
+    for (Expr e: otherJoinConjuncts_) {
       msg.spatial_join_node.addToOther_join_conjuncts(e.treeToThrift());
     }
-	
-	msg.spatial_join_node.setAdd_probe_filters(addProbeFilters_);
+
+    msg.spatial_join_node.setAdd_probe_filters(addProbeFilters_);
   }
 
   @Override
@@ -312,7 +309,6 @@ public class SpatialJoinNode extends PlanNode {
 
     if (detailLevel.ordinal() > TExplainLevel.MINIMAL.ordinal()) {
       output.append(detailPrefix + "overlap predicate: ");
-      
       output.append(overlapPredicate_.toSql());
     }
     output.append("\n");

@@ -220,11 +220,11 @@ public abstract class Table implements CatalogObject {
       // data source.
       table = new DataSourceTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
     } else if (HdfsFileFormat.isHdfsInputFormatClass(msTbl.getSd().getInputFormat())) {
-    	// Checking if the table is Spatial or not.
-    	if (SpatialHdfsTable.isSpatial(msTbl))
-    		table = new SpatialHdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
-    	else
-    		table = new HdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
+    // Checking if the table is Spatial or not.
+      if (SpatialHdfsTable.isSpatial(msTbl))
+        table = new SpatialHdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
+      else
+        table = new HdfsTable(id, msTbl, db, msTbl.getTableName(), msTbl.getOwner());
     }
     return table;
   }

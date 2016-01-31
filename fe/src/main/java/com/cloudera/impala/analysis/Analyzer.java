@@ -14,7 +14,6 @@
 
 package com.cloudera.impala.analysis;
 
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -296,7 +295,7 @@ public class Analyzer {
   private final GlobalState globalState_;
   
   public Collection<TupleDescriptor> getTubleDescriptors() {
-	  return this.globalState_.descTbl.getTupleDescs();
+    return this.globalState_.descTbl.getTupleDescs();
   }
 
   public boolean containsSubquery() { return globalState_.containsSubquery; }
@@ -1010,28 +1009,29 @@ public class Analyzer {
         + " " + e.toSql() + " " + e.debugString());
 
     if (e instanceof OverlapQueryPredicate) {
-	    if (tupleIds.size() < 2) return;
-	   
-	    OverlapQueryPredicate ovelapBredicate = (OverlapQueryPredicate)e;
-	
-	    // examine children and update eqJoinConjuncts
-	    for (int i = 0; i < 2; ++i) {
-	      tupleIds = Lists.newArrayList();
-	      ovelapBredicate.getChild(i).getIds(tupleIds, null);
-	      if (tupleIds.size() == 1) {
-	        if (!globalState_.eqJoinConjuncts.containsKey(tupleIds.get(0))) {
-	          List<ExprId> conjunctIds = Lists.newArrayList();
-	          conjunctIds.add(e.getId());
-	          globalState_.eqJoinConjuncts.put(tupleIds.get(0), conjunctIds);
-	        } else {
-	          globalState_.eqJoinConjuncts.get(tupleIds.get(0)).add(e.getId());
-	        }
-	        ovelapBredicate.setIsEqJoinConjunct(true);
-	        LOG.trace("register eqJoinConjunct: " + Integer.toString(e.getId().asInt()));
-	      }
-	    }
+      if (tupleIds.size() < 2) return;
+
+      OverlapQueryPredicate ovelapBredicate = (OverlapQueryPredicate) e;
+
+      // examine children and update eqJoinConjuncts
+      for (int i = 0; i < 2; ++i) {
+        tupleIds = Lists.newArrayList();
+        ovelapBredicate.getChild(i).getIds(tupleIds, null);
+        if (tupleIds.size() == 1) {
+          if (!globalState_.eqJoinConjuncts.containsKey(tupleIds.get(0))) {
+            List<ExprId> conjunctIds = Lists.newArrayList();
+            conjunctIds.add(e.getId());
+            globalState_.eqJoinConjuncts.put(tupleIds.get(0), conjunctIds);
+          } else {
+            globalState_.eqJoinConjuncts.get(tupleIds.get(0)).add(e.getId());
+          }
+
+          ovelapBredicate.setIsEqJoinConjunct(true);
+          LOG.trace("register eqJoinConjunct: " + Integer.toString(e.getId().asInt()));
+        }
+      }
     }
-    
+
     if (!(e instanceof BinaryPredicate)) return;
     BinaryPredicate binaryPred = (BinaryPredicate) e;
 

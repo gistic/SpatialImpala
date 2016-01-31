@@ -76,10 +76,10 @@ public class SelectStmt extends QueryStmt {
   /////////////////////////////////////////
 
   public SelectStmt(SelectList selectList,
-             List<TableRef> tableRefList,
-             Expr wherePredicate, ArrayList<Expr> groupingExprs,
-             Expr havingPredicate, ArrayList<OrderByElement> orderByElements,
-             LimitElement limitElement) {
+                    List<TableRef> tableRefList,
+                    Expr wherePredicate, ArrayList<Expr> groupingExprs,
+                    Expr havingPredicate, ArrayList<OrderByElement> orderByElements,
+                    LimitElement limitElement) {
     super(orderByElements, limitElement);
     selectList_ = selectList;
     if (tableRefList == null) {

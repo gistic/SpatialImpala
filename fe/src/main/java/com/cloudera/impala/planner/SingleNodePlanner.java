@@ -384,31 +384,33 @@ public class SingleNodePlanner {
 
     PlanNode result;
     for (Pair<TableRef, Long> candidate: candidates) {
-    	List<Expr> conjs = null;
-        if (candidate.first.getJoinOp().isOuterJoin()) {
-        	conjs = analyzer.getEqJoinConjuncts(Lists.newArrayList(candidate.first.getId()), Lists.newArrayList(candidate.first.getId()));
-    	} else {
-    		conjs = analyzer.getEqJoinConjuncts(Lists.newArrayList(candidate.first.getId()), new ArrayList<TupleId>());
-    	}
-        
-        Predicate predicate;
-        OverlapQueryPredicate overlapPredicate = null;
-        if (conjs != null) {
-	        for (int i = 0 ; i < conjs.size(); i++) {
-	          predicate = (Predicate)conjs.get(i);
-	          if (predicate instanceof OverlapQueryPredicate) {
-	        	  overlapPredicate = (OverlapQueryPredicate)predicate; 
-	          }
-	        }
+      List<Expr> conjs = null;
+      if (candidate.first.getJoinOp().isOuterJoin()) {
+        conjs = analyzer.getEqJoinConjuncts(Lists.newArrayList(candidate.first.getId()),
+            Lists.newArrayList(candidate.first.getId()));
+      } else {
+        conjs = analyzer.getEqJoinConjuncts(Lists.newArrayList(candidate.first.getId()), new ArrayList<TupleId>());
+      }
+
+      Predicate predicate;
+      OverlapQueryPredicate overlapPredicate = null;
+      if (conjs != null) {
+        for (int i = 0 ; i < conjs.size(); i++) {
+          predicate = (Predicate)conjs.get(i);
+          if (predicate instanceof OverlapQueryPredicate) {
+            overlapPredicate = (OverlapQueryPredicate) predicate;
+          }
         }
-        if (overlapPredicate != null){
-    	  LOG.info("Creating spatial join plan");
-    	  result = createSpatialJoinPlan(analyzer, candidate.first, parentRefPlans, subplanRefs);
-        }
-        else {
-          result = createJoinPlan(analyzer, candidate.first, parentRefPlans, subplanRefs);
-          if (result != null) return result;
-        }
+      }
+
+      if (overlapPredicate != null) {
+        LOG.info("Creating spatial join plan");
+        result = createSpatialJoinPlan(analyzer, candidate.first, parentRefPlans,
+            subplanRefs);
+      } else {
+        result = createJoinPlan(analyzer, candidate.first, parentRefPlans, subplanRefs);
+        if (result != null) return result;
+      }
     }
     return null;
   }
@@ -671,10 +673,12 @@ public class SingleNodePlanner {
 
         PlanNode rhsPlan = entry.second;
         boolean invertJoin = false;
-        SpatialHdfsTable rightTable = (SpatialHdfsTable)((SpatialHdfsScanNode)rhsPlan).getTupleDesc().getTable();
-        SpatialHdfsTable leftTable = (SpatialHdfsTable)((SpatialHdfsScanNode)root).getTupleDesc().getTable();
-        if(rightTable.getGlobalIndexIfAny().getGlobalIndexMap().size() > 
-           leftTable.getGlobalIndexIfAny().getGlobalIndexMap().size()) {
+        SpatialHdfsTable rightTable = (SpatialHdfsTable)((SpatialHdfsScanNode)rhsPlan)
+            .getTupleDesc().getTable();
+        SpatialHdfsTable leftTable = (SpatialHdfsTable)((SpatialHdfsScanNode)root)
+            .getTupleDesc().getTable();
+        if (rightTable.getGlobalIndexIfAny().getGlobalIndexMap().size() >
+            leftTable.getGlobalIndexIfAny().getGlobalIndexMap().size()) {
           invertJoin = true;
         }
         // Always place singular row src nodes on the build side, unless we need a
@@ -706,7 +710,7 @@ public class SingleNodePlanner {
         // infrastructure.
         if (newRoot == null
             || (candidate.getClass().equals(newRoot.getClass())
-                && candidate.getCardinality() < newRoot.getCardinality())
+            && candidate.getCardinality() < newRoot.getCardinality())
             || (candidate instanceof HashJoinNode
                 && newRoot instanceof NestedLoopJoinNode)) {
           newRoot = candidate;
@@ -1417,11 +1421,12 @@ public class SingleNodePlanner {
     ScanNode scanNode = null;
     if (tblRef.getTable() instanceof HdfsTable) {
       if (tblRef.getTable() instanceof SpatialHdfsTable) {
-        scanNode = new SpatialHdfsScanNode(ctx_.getNextNodeId(), tblRef.getDesc(), (SpatialHdfsTable) tblRef.getTable());
+        scanNode = new SpatialHdfsScanNode(ctx_.getNextNodeId(), tblRef.getDesc(),
+            (SpatialHdfsTable) tblRef.getTable());
       }
       else {
         scanNode = new HdfsScanNode(ctx_.getNextNodeId(), tblRef.getDesc(),
-          (HdfsTable)tblRef.getTable());
+            (HdfsTable)tblRef.getTable());
       }
       scanNode.init(analyzer);
       return scanNode;
@@ -1734,10 +1739,10 @@ public class SingleNodePlanner {
     for (int i = 0 ; i < candidates.size(); i++) {
       predicate = (Predicate)candidates.get(i);
       if (predicate instanceof OverlapQueryPredicate) {
-    	  overlapPredicate = (OverlapQueryPredicate)predicate; 
+    	  overlapPredicate = (OverlapQueryPredicate) predicate;
       }
     }
-    if (overlapPredicate == null){
+    if (overlapPredicate == null) {
     	throw new NotImplementedException(
           "No overlapPredicate was found in the spatial join statement");
     }
@@ -1881,19 +1886,22 @@ public class SingleNodePlanner {
   /**
    * Create a plan tree for the given SpatialPointInclusionStmt.
    */
-  private UnionNode createSpatialPointInclusionPlan(SpatialPointInclusionStmt spatialPointInclusionStmt,
-      Analyzer analyzer)
+  private UnionNode createSpatialPointInclusionPlan(SpatialPointInclusionStmt
+      spatialPointInclusionStmt, Analyzer analyzer)
       throws ImpalaException {
     UnionNode unionNode =
         new UnionNode(ctx_.getNextNodeId(), spatialPointInclusionStmt.getTupleId());
     
     if (!spatialPointInclusionStmt.getFullyContainedGIs().isEmpty()) {
-      PlanNode opPlan = createSpatialScanNode(analyzer, spatialPointInclusionStmt.getTableRefs().get(0), spatialPointInclusionStmt.getFullyContainedGIs());
+      PlanNode opPlan = createSpatialScanNode(
+          analyzer, spatialPointInclusionStmt.getTableRefs().get(0),
+          spatialPointInclusionStmt.getFullyContainedGIs());
       unionNode.addChild(opPlan, spatialPointInclusionStmt.getBaseTblResultExprs());
     }
     
     if (!spatialPointInclusionStmt.getIntersectedGIs().isEmpty()) {
-      PlanNode opPlan = createSpatialSelectPlan(spatialPointInclusionStmt, analyzer, spatialPointInclusionStmt.getIntersectedGIs());
+      PlanNode opPlan = createSpatialSelectPlan(spatialPointInclusionStmt, analyzer,
+          spatialPointInclusionStmt.getIntersectedGIs());
       unionNode.addChild(opPlan, spatialPointInclusionStmt.getBaseTblResultExprs());
     }
     
@@ -1901,66 +1909,68 @@ public class SingleNodePlanner {
     return unionNode;
   }
   
-  private PlanNode createSpatialSelectPlan(SpatialPointInclusionStmt spatialPointInclusionStmt, Analyzer analyzer, List<GlobalIndexRecord> GIsIntersect)
-    throws ImpalaException {
-	// no from clause -> materialize the select's exprs with a UnionNode
-	if (spatialPointInclusionStmt.getTableRefs().isEmpty()) {
-	  LOG.error("No tables found in the spatial point inclusion query");
-	  }
+  private PlanNode createSpatialSelectPlan(SpatialPointInclusionStmt
+      spatialPointInclusionStmt, Analyzer analyzer, List<GlobalIndexRecord> GIsIntersect)
+      throws ImpalaException {
+    // no from clause -> materialize the select's exprs with a UnionNode
+    if (spatialPointInclusionStmt.getTableRefs().isEmpty()) {
+      LOG.error("No tables found in the spatial point inclusion query");
+    }
 
-	  // collect output tuples of subtrees
-	  ArrayList<TupleId> rowTuples = Lists.newArrayList();
-	  for (TableRef tblRef: spatialPointInclusionStmt.getTableRefs()) {
-	    rowTuples.addAll(tblRef.getMaterializedTupleIds());
-	  }
-	    
-	  spatialPointInclusionStmt.materializeRequiredSlots(analyzer);
+    // collect output tuples of subtrees
+    ArrayList<TupleId> rowTuples = Lists.newArrayList();
+    for (TableRef tblRef: spatialPointInclusionStmt.getTableRefs()) {
+      rowTuples.addAll(tblRef.getMaterializedTupleIds());
+    }
 
+    spatialPointInclusionStmt.materializeRequiredSlots(analyzer);
 
-	  // create plans for our table refs; use a list here instead of a map to
-	  // maintain a deterministic order of traversing the TableRefs during join
-	  // plan generation (helps with tests)
-	  List<Pair<TableRef, PlanNode>> refPlans = Lists.newArrayList();
-	  for (TableRef ref: spatialPointInclusionStmt.getTableRefs()) {
-	    PlanNode plan = createSpatialScanNode(analyzer, ref, GIsIntersect);
-	    Preconditions.checkState(plan != null);
-	    refPlans.add(new Pair(ref, plan));
-	  }
-	  // save state of conjunct assignment; needed for join plan generation
-	  for (Pair<TableRef, PlanNode> entry: refPlans) {
-	    entry.second.setAssignedConjuncts(analyzer.getAssignedConjuncts());
-	  }
+    // create plans for our table refs; use a list here instead of a map to
+    // maintain a deterministic order of traversing the TableRefs during join
+    // plan generation (helps with tests)
+    List<Pair<TableRef, PlanNode>> refPlans = Lists.newArrayList();
+    for (TableRef ref: spatialPointInclusionStmt.getTableRefs()) {
+      PlanNode plan = createSpatialScanNode(analyzer, ref, GIsIntersect);
+      Preconditions.checkState(plan != null);
+      refPlans.add(new Pair(ref, plan));
+    }
+    // save state of conjunct assignment; needed for join plan generation
+    for (Pair<TableRef, PlanNode> entry: refPlans) {
+      entry.second.setAssignedConjuncts(analyzer.getAssignedConjuncts());
+    }
 
-	  PlanNode root = null;
-	  root = createCheapestJoinPlan(analyzer, refPlans, new ArrayList<SubplanRef>());
-	  
-	  root = new SpatialSelectNode (ctx_.getNextNodeId(), refPlans.get(0).second, spatialPointInclusionStmt.getRectangle(), spatialPointInclusionStmt.getXSlotRef(), spatialPointInclusionStmt.getYSlotRef());
-          root.init(analyzer);
+    PlanNode root = null;
+    root = createCheapestJoinPlan(analyzer, refPlans, new ArrayList<SubplanRef>());
 
-	  if (root != null) {
-	    // add unassigned conjuncts_ before aggregation
-	    // (scenario: agg input comes from an inline view which wasn't able to
-	    // evaluate all Where clause conjuncts_ from this scope)
-	    root = addUnassignedConjuncts(analyzer, root.getTupleIds(), root);
-	  }
+    root = new SpatialSelectNode (ctx_.getNextNodeId(), refPlans.get(0).second,
+        spatialPointInclusionStmt.getRectangle(), spatialPointInclusionStmt.getXSlotRef(),
+        spatialPointInclusionStmt.getYSlotRef());
+    root.init(analyzer);
 
-	  // All the conjuncts_ should be assigned at this point.
-	  // TODO: Re-enable this check here and/or elswehere.
-	  //Preconditions.checkState(!analyzer.hasUnassignedConjuncts());
-	  return root;
+    if (root != null) {
+      // add unassigned conjuncts_ before aggregation
+      // (scenario: agg input comes from an inline view which wasn't able to
+      // evaluate all Where clause conjuncts_ from this scope)
+      root = addUnassignedConjuncts(analyzer, root.getTupleIds(), root);
+    }
+
+    // All the conjuncts_ should be assigned at this point.
+    // TODO: Re-enable this check here and/or elswehere.
+    // Preconditions.checkState(!analyzer.hasUnassignedConjuncts());
+    return root;
   }
   
-  private PlanNode createSpatialScanNode(Analyzer analyzer, TableRef tblRef, List<GlobalIndexRecord> GIs)
-	      throws ImpalaException, InternalException {
-	    ScanNode scanNode = null;
-	    if (tblRef.getTable() instanceof HdfsTable) {
-	      scanNode = new SpatialHdfsScanNode(ctx_.getNextNodeId(), tblRef.getDesc(),
-	          (HdfsTable)tblRef.getTable(), GIs);
-	      scanNode.init(analyzer);
-	      return scanNode;
-	    } 
-	    else {
-	      throw new InternalException("Invalid table ref class: " + tblRef.getClass());
-	    }
-	  }
+  private PlanNode createSpatialScanNode(Analyzer analyzer, TableRef tblRef,
+      List<GlobalIndexRecord> GIs)
+      throws ImpalaException, InternalException {
+    ScanNode scanNode = null;
+    if (tblRef.getTable() instanceof HdfsTable) {
+      scanNode = new SpatialHdfsScanNode(ctx_.getNextNodeId(), tblRef.getDesc(),
+          (HdfsTable)tblRef.getTable(), GIs);
+      scanNode.init(analyzer);
+      return scanNode;
+    } else {
+      throw new InternalException("Invalid table ref class: " + tblRef.getClass());
+    }
+  }
 }

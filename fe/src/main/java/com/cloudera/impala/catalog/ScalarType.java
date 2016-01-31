@@ -354,11 +354,12 @@ public class ScalarType extends Type {
   }
   
   public boolean isShapeType() {
-	   if (type_ == PrimitiveType.RECTANGLE || type_ == PrimitiveType.POINT 
-            || type_ == PrimitiveType.LINE || type_ == PrimitiveType.POLYGON || type_ == PrimitiveType.LINESTRING) {
-		  return true;
-	  }
-	  return false;
+    if (type_ == PrimitiveType.RECTANGLE || type_ == PrimitiveType.POINT
+        || type_ == PrimitiveType.LINE || type_ == PrimitiveType.POLYGON
+        || type_ == PrimitiveType.LINESTRING) {
+      return true;
+    }
+    return false;
   }
 
   public ScalarType getNextResolutionType() {

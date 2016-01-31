@@ -72,9 +72,9 @@ public class AnalysisContext {
     public boolean isComputeStatsStmt() { return stmt_ instanceof ComputeStatsStmt; }
     public boolean isQueryStmt() {
       return (stmt_ instanceof QueryStmt
-        || stmt_ instanceof SpatialPointInclusionStmt
-        || stmt_ instanceof SpatialKnnStmt
-        || stmt_ instanceof SpatialJoinStmt);
+          || stmt_ instanceof SpatialPointInclusionStmt
+          || stmt_ instanceof SpatialKnnStmt
+          || stmt_ instanceof SpatialJoinStmt);
     }
     public boolean isInsertStmt() { return stmt_ instanceof InsertStmt; }
     public boolean isDropDbStmt() { return stmt_ instanceof DropDbStmt; }
@@ -237,9 +237,9 @@ public class AnalysisContext {
     public QueryStmt getQueryStmt() {
       Preconditions.checkState(isQueryStmt());
       if (stmt_ instanceof QueryStmt)
-    	  return (QueryStmt) stmt_;
+        return (QueryStmt) stmt_;
       else
-    	  return null;
+        return null;
     }
 
     public InsertStmt getInsertStmt() {

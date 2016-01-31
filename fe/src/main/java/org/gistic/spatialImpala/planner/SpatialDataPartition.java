@@ -26,26 +26,27 @@ import com.cloudera.impala.thrift.TDataPartition;
  * TODO: pass in range restrictions.
  */
 public class SpatialDataPartition extends DataPartition {
-	
-  public SpatialDataPartition(TPartitionType type, List<Expr> exprs, HashMap<String, List<String>> intersectedPartitions) {
-	  super (type, exprs);
-	  intersectedPartitions_ = intersectedPartitions;
+
+  public SpatialDataPartition(TPartitionType type, List<Expr> exprs, HashMap<String,
+      List<String>> intersectedPartitions) {
+    super (type, exprs);
+    intersectedPartitions_ = intersectedPartitions;
   }
-  
+
   private HashMap<String, List<String>> intersectedPartitions_;
 
   @Override
   public TDataPartition toThrift() {
-	LOG.debug("Creating spatial TDataPartition");
+    LOG.debug("Creating spatial TDataPartition");
     TDataPartition result = new TDataPartition(type_, true);
     if (partitionExprs_ != null) {
       result.setPartition_exprs(Expr.treesToThrift(partitionExprs_));
     }
-    
+
     if (intersectedPartitions_ != null) {
-    	result.setIntersected_partitions(intersectedPartitions_);
+      result.setIntersected_partitions(intersectedPartitions_);
     }
-    
+
     return result;
   }
 }
