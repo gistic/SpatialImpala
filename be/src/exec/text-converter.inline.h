@@ -294,13 +294,17 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
 
           if (x < minX) {
             minX = x;
-          } else if (x > maxX) {
+          }
+ 
+	  if (x > maxX) {
             maxX = x;
           }
 
           if (y < minY) {
             minY = y;
-          } else if (y > maxY) {
+          }
+ 
+	  if (y > maxY) {
             maxY = y;
           }
         }
@@ -373,13 +377,17 @@ inline bool TextConverter::WriteSlot(const SlotDescriptor* slot_desc, Tuple* tup
 
         if (x < minX) {
           minX = x;
-        } else if (x > maxX) {
+        } 
+	
+	if (x > maxX) {
           maxX = x;
         }
 
         if (y < minY) {
           minY = y;
-        } else if (y > maxY) {
+        } 
+	
+	if (y > maxY) {
           maxY = y;
         }
       }
